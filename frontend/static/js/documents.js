@@ -34,6 +34,10 @@ document.addEventListener('DOMContentLoaded', async () => {
 async function loadTagFilter() {
     allTagsList = await apiGet('/api/tags');
     const select = document.getElementById('tag-filter');
+    const noTagOpt = document.createElement('option');
+    noTagOpt.value = '__none__';
+    noTagOpt.textContent = 'No tag';
+    select.appendChild(noTagOpt);
     allTagsList.forEach(tag => {
         const opt = document.createElement('option');
         opt.value = tag.name;

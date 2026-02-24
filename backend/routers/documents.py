@@ -29,7 +29,9 @@ def list_documents(
         )
     if extension:
         query = query.filter(File.extension == extension.lower().lstrip("."))
-    if tag:
+    if tag == "__none__":
+        query = query.filter(~File.tags.any())
+    elif tag:
         query = query.join(File.tags).join(FileTag.tag).filter(Tag.name == tag)
     if status:
         query = query.filter(File.scan_status == status)
