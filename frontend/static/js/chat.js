@@ -850,7 +850,7 @@ function appendSources(messageDiv, sources) {
         link.className = 'source-link';
         link.href = '#';
         const page = src.page ? ` (p.${src.page})` : '';
-        const score = src.score ? ` [${(src.score * 100).toFixed(0)}%]` : '';
+        const score = src.score ? ` [${(src.score * 100).toFixed(0)}% relevant]` : '';
         link.textContent = `[${idx + 1}] ${src.filename || src.file_path}${page}${score}`;
         link.addEventListener('click', (e) => {
             e.preventDefault();

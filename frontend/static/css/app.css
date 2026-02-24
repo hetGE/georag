@@ -921,6 +921,9 @@ body:has(.lp-panel.open) .lp-toggle {
 
 .lp-content {
     padding: 1.25rem;
+    display: flex;
+    flex-direction: column;
+    min-height: 100%;
 }
 
 .lp-header {
@@ -1169,6 +1172,57 @@ body:has(.lp-panel.open) .lp-toggle {
 }
 
 .permanent-delete-btn {
+    background: var(--pico-del-color) !important;
+    border-color: var(--pico-del-color) !important;
+}
+
+/* Reprocess All — pinned to bottom of panel */
+.lp-reprocess-footer {
+    margin-top: auto;
+    padding-top: 1rem;
+}
+
+.lp-reprocess-footer .lp-reprocess-btn {
+    width: 100%;
+    font-size: 0.75rem;
+    padding: 0.35rem 0.75rem;
+}
+
+.lp-reprocess-btn {
+    color: var(--pico-del-color) !important;
+    border-color: var(--pico-del-color) !important;
+}
+
+.lp-reprocess-btn:hover {
+    background: var(--pico-del-color) !important;
+    color: #fff !important;
+}
+
+/* Reprocess Confirmation Dialog */
+#reprocess-confirm-dialog article {
+    max-width: 420px;
+    margin: 0 auto;
+}
+
+#reprocess-confirm-dialog header {
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+#reprocess-confirm-dialog footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+#reprocess-confirm-dialog footer button {
+    margin-bottom: 0;
+    font-size: 0.85rem;
+    padding: 0.4rem 1rem;
+    width: auto;
+}
+
+.lp-reprocess-confirm-btn {
     background: var(--pico-del-color) !important;
     border-color: var(--pico-del-color) !important;
 }

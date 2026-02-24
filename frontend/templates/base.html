@@ -46,6 +46,19 @@
         </div>
     </aside>
 
+    <!-- Reprocess Confirmation Dialog -->
+    <dialog id="reprocess-confirm-dialog">
+        <article>
+            <header>Reprocess All Files?</header>
+            <p>This will <strong>re-extract, re-chunk, and re-embed every file</strong> in your library. It can take a long time depending on library size.</p>
+            <p>Your tags will be preserved. You can stop and resume at any time.</p>
+            <footer>
+                <button class="secondary outline dialog-cancel">Cancel</button>
+                <button class="dialog-confirm lp-reprocess-confirm-btn">Reprocess All</button>
+            </footer>
+        </article>
+    </dialog>
+
     <script src="/static/js/marked.min.js"></script>
     <script src="/static/js/utils.js"></script>
     <script src="/static/js/panel.js"></script>

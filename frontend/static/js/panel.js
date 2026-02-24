@@ -132,6 +132,14 @@ const LibraryPanel = (() => {
             html += renderActionButtons(status);
         }
 
+        // Reprocess All — always at the bottom (except initial state)
+        if (status.phase !== 'not_started') {
+            const rpDisabled = (status.phase === 'processing' || status.phase === 'stopping') ? ' disabled' : '';
+            html += `<div class="lp-reprocess-footer">
+                <button id="lp-action-reprocess" class="lp-reprocess-btn outline"${rpDisabled}>Reprocess All</button>
+            </div>`;
+        }
+
         contentEl.innerHTML = html;
         bindEvents(status);
     }
@@ -229,6 +237,8 @@ const LibraryPanel = (() => {
             ?.addEventListener('click', handleActionScan);
         document.getElementById('lp-action-process-new')
             ?.addEventListener('click', handleProcessNew);
+        document.getElementById('lp-action-reprocess')
+            ?.addEventListener('click', handleReprocessAll);
     }
 
     // --- Action Handlers ---
@@ -313,6 +323,34 @@ const LibraryPanel = (() => {
         window.syncChannel.postMessage({ type: 'processing-started', payload: {} });
     }
 
+    async function handleReprocessAll() {
+        if (window.chatIsStreaming?.()) return;
+        const dialog = document.getElementById('reprocess-confirm-dialog');
+        dialog.showModal();
+    }
+
+    async function confirmReprocessAll() {
+        const dialog = document.getElementById('reprocess-confirm-dialog');
+        dialog.close();
+        const btn = document.getElementById('lp-action-reprocess');
+        if (btn) {
+            btn.disabled = true;
+            btn.setAttribute('aria-busy', 'true');
+        }
+        const result = await apiPost('/api/processing/start', { reprocess: true });
+        if (result.error) {
+            alert(result.error);
+            if (btn) {
+                btn.disabled = false;
+                btn.setAttribute('aria-busy', 'false');
+            }
+            return;
+        }
+        lastStatusJSON = '';
+        await checkStatus();
+        window.syncChannel.postMessage({ type: 'processing-started', payload: {} });
+    }
+
     // --- Utility ---
 
     function formatExtSummary(byExt) {
@@ -325,9 +363,18 @@ const LibraryPanel = (() => {
         return ' (' + parts.join(', ') + ')';
     }
 
-    return { init, openPanel, closePanel, toggle, checkStatus };
+    return { init, openPanel, closePanel, toggle, checkStatus, confirmReprocessAll };
 })();
 
 document.addEventListener('DOMContentLoaded', () => {
     LibraryPanel.init();
+
+    // Reprocess confirmation dialog
+    const reprocessDialog = document.getElementById('reprocess-confirm-dialog');
+    if (reprocessDialog) {
+        reprocessDialog.querySelector('.dialog-cancel')
+            ?.addEventListener('click', () => reprocessDialog.close());
+        reprocessDialog.querySelector('.dialog-confirm')
+            ?.addEventListener('click', () => LibraryPanel.confirmReprocessAll());
+    }
 });

@@ -86,6 +86,12 @@ class DocumentProcessor:
             files = query.all()
             self.total_files = len(files)
 
+            # Reset statuses so progress starts from 0%
+            if reprocess and files:
+                for f in files:
+                    f.scan_status = "new"
+                db.commit()
+
             # Process files in batches of BATCH_SIZE
             for batch_start in range(0, len(files), BATCH_SIZE):
                 if self._stop_flag:
