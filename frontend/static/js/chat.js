@@ -8,6 +8,7 @@ let isStreaming = false;
 document.addEventListener('DOMContentLoaded', async () => {
     await loadTags();
     await loadConversations();
+    await checkOnboarding();
 
     document.getElementById('chat-form').addEventListener('submit', handleSubmit);
     document.getElementById('new-chat-btn').addEventListener('click', newChat);
@@ -262,4 +263,207 @@ function appendSources(messageDiv, sources) {
 function scrollToBottom() {
     const el = document.getElementById('chat-messages');
     el.scrollTop = el.scrollHeight;
+}
+
+// --- Onboarding Wizard ---
+
+let onboardingPollInterval = null;
+
+async function checkOnboarding() {
+    try {
+        const status = await apiGet('/api/processing/onboarding-status');
+        if (status.dismissed && status.phase !== 'processing') {
+            hideOnboarding();
+            return;
+        }
+        if (status.phase === 'complete') {
+            hideOnboarding();
+            return;
+        }
+        renderOnboardingStep(status);
+    } catch {
+        // API not available
+    }
+}
+
+function hideOnboarding() {
+    const el = document.getElementById('onboarding');
+    el.style.display = 'none';
+    stopOnboardingPolling();
+}
+
+function showOnboarding() {
+    document.getElementById('onboarding').style.display = 'block';
+}
+
+function renderOnboardingStep(status) {
+    const el = document.getElementById('onboarding');
+
+    if (status.phase === 'not_started') {
+        renderScanStep(el);
+    } else if (status.phase === 'scanned') {
+        renderProcessStep(el, status);
+    } else if (status.phase === 'processing') {
+        renderProgressStep(el, status);
+        startOnboardingPolling();
+    } else if (status.phase === 'complete') {
+        renderCompleteStep(el, status);
+    }
+
+    showOnboarding();
+}
+
+function renderScanStep(el) {
+    el.innerHTML = `
+        <h3 class="onboarding-title">Welcome to GeoRAG</h3>
+        <p class="onboarding-description">
+            Let's index your geotechnical document library. First, we'll scan your Engineering folder to discover all documents.
+        </p>
+        <div class="onboarding-actions">
+            <button id="onboarding-scan-btn">Scan Library</button>
+        </div>
+    `;
+    document.getElementById('onboarding-scan-btn').addEventListener('click', onboardingScan);
+}
+
+async function onboardingScan() {
+    const btn = document.getElementById('onboarding-scan-btn');
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+    btn.textContent = 'Scanning...';
+
+    try {
+        await apiPost('/api/processing/scan');
+        await checkOnboarding();
+    } catch {
+        btn.textContent = 'Scan Failed — Retry';
+        btn.disabled = false;
+        btn.setAttribute('aria-busy', 'false');
+    }
+}
+
+function renderProcessStep(el, status) {
+    const extSummary = formatExtensionSummary(status.by_extension || {});
+    const remaining = status.new_files;
+    const alreadyProcessed = status.processed_files;
+    const resumeLabel = alreadyProcessed > 0 ? 'Resume Processing' : 'Start Processing';
+
+    el.innerHTML = `
+        <h3 class="onboarding-title">Library Scanned</h3>
+        <p class="onboarding-description">
+            Found <strong>${status.total_files.toLocaleString()}</strong> files${extSummary}.
+        </p>
+        <p class="onboarding-description">
+            ${remaining.toLocaleString()} files to process.
+            We'll extract text, auto-tag by topic, and build the search index.
+            This may take a while — you can stop and resume anytime.
+        </p>
+        ${alreadyProcessed > 0 ? `<p class="onboarding-stats">${alreadyProcessed.toLocaleString()} files already processed.</p>` : ''}
+        <div class="onboarding-actions">
+            <button id="onboarding-process-btn">${resumeLabel}</button>
+            <button id="onboarding-skip-btn" class="outline secondary">Skip for Now</button>
+        </div>
+    `;
+    document.getElementById('onboarding-process-btn').addEventListener('click', onboardingProcess);
+    document.getElementById('onboarding-skip-btn').addEventListener('click', onboardingDismiss);
+}
+
+async function onboardingProcess() {
+    const btn = document.getElementById('onboarding-process-btn');
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+
+    const result = await apiPost('/api/processing/start', {});
+    if (result.error) {
+        alert(result.error);
+        btn.disabled = false;
+        btn.setAttribute('aria-busy', 'false');
+        return;
+    }
+    await checkOnboarding();
+}
+
+async function onboardingDismiss() {
+    await apiPost('/api/processing/onboarding-dismiss');
+    hideOnboarding();
+}
+
+function renderProgressStep(el, status) {
+    const total = status.total_files;
+    const processed = status.processed_files;
+    const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
+
+    el.innerHTML = `
+        <h3 class="onboarding-title">Processing Documents...</h3>
+        <div class="onboarding-progress">
+            <progress value="${pct}" max="100"></progress>
+            <span class="onboarding-progress-text">${processed.toLocaleString()} / ${total.toLocaleString()} files (${pct}%)</span>
+        </div>
+        ${status.failed_files > 0 ? `<p class="onboarding-stats">${status.failed_files} failed</p>` : ''}
+        <p class="onboarding-description" style="font-size:0.85rem;">You can close this and come back — progress is saved automatically.</p>
+        <div class="onboarding-actions">
+            <button id="onboarding-stop-btn" class="outline secondary">Stop</button>
+        </div>
+    `;
+    document.getElementById('onboarding-stop-btn').addEventListener('click', onboardingStop);
+}
+
+async function onboardingStop() {
+    await apiPost('/api/processing/stop');
+    stopOnboardingPolling();
+    // Wait a moment for processor to stop, then refresh
+    setTimeout(() => checkOnboarding(), 2000);
+}
+
+function renderCompleteStep(el, status) {
+    stopOnboardingPolling();
+    el.innerHTML = `
+        <h3 class="onboarding-title">Library Ready</h3>
+        <p class="onboarding-description">
+            ${status.processed_files.toLocaleString()} files processed${status.failed_files > 0 ? `, ${status.failed_files} failed` : ''}.
+            Your document library is ready for searching.
+        </p>
+        <div class="onboarding-actions">
+            <button id="onboarding-done-btn">Start Chatting</button>
+        </div>
+    `;
+    document.getElementById('onboarding-done-btn').addEventListener('click', async () => {
+        await apiPost('/api/processing/onboarding-dismiss');
+        hideOnboarding();
+        document.getElementById('chat-input').focus();
+    });
+}
+
+function startOnboardingPolling() {
+    if (onboardingPollInterval) return;
+    onboardingPollInterval = setInterval(async () => {
+        try {
+            const status = await apiGet('/api/processing/onboarding-status');
+            if (status.phase === 'processing') {
+                renderProgressStep(document.getElementById('onboarding'), status);
+            } else {
+                stopOnboardingPolling();
+                renderOnboardingStep(status);
+            }
+        } catch {
+            // ignore
+        }
+    }, 2000);
+}
+
+function stopOnboardingPolling() {
+    if (onboardingPollInterval) {
+        clearInterval(onboardingPollInterval);
+        onboardingPollInterval = null;
+    }
+}
+
+function formatExtensionSummary(byExt) {
+    const entries = Object.entries(byExt);
+    if (!entries.length) return '';
+    const parts = entries.slice(0, 5).map(([ext, count]) => {
+        const label = ext ? ext.toUpperCase() : 'other';
+        return `${count.toLocaleString()} ${label}`;
+    });
+    return ' (' + parts.join(', ') + ')';
 }

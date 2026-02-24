@@ -1,9 +1,12 @@
 """Start/stop/status of document processing pipeline."""
 import asyncio
+from pathlib import Path
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
 from backend.models.database import get_db
+from backend.models.schemas import File
 from backend.models.pydantic_models import ProcessingRequest, ProcessingStatus
 from backend.services.document_processor import DocumentProcessor
 
@@ -11,6 +14,8 @@ router = APIRouter(tags=["processing"])
 
 # Global processor instance
 _processor = DocumentProcessor()
+
+_ONBOARDING_DISMISSED_PATH = Path("data/onboarding_dismissed")
 
 
 @router.post("/processing/start")
@@ -50,3 +55,64 @@ async def scan_files():
     from backend.services.scanner import scan_engineering_directory
     count = scan_engineering_directory()
     return {"status": "complete", "files_found": count}
+
+
+@router.get("/processing/onboarding-status")
+def onboarding_status(db: Session = Depends(get_db)):
+    """Return current onboarding state for the wizard."""
+    total_files = db.query(File).count()
+    status_counts = dict(
+        db.query(File.scan_status, func.count(File.id))
+        .group_by(File.scan_status)
+        .all()
+    )
+    new_files = status_counts.get("new", 0) + status_counts.get("failed", 0)
+    processed_files = status_counts.get("processed", 0)
+    failed_files = status_counts.get("failed", 0)
+
+    # Extension breakdown for display
+    by_extension = dict(
+        db.query(File.extension, func.count(File.id))
+        .group_by(File.extension)
+        .order_by(func.count(File.id).desc())
+        .limit(10)
+        .all()
+    )
+
+    if total_files == 0:
+        phase = "not_started"
+    elif _processor.is_running:
+        phase = "processing"
+    elif new_files > 0:
+        phase = "scanned"
+    else:
+        phase = "complete"
+
+    dismissed = _ONBOARDING_DISMISSED_PATH.exists()
+
+    return {
+        "phase": phase,
+        "total_files": total_files,
+        "new_files": new_files,
+        "processed_files": processed_files,
+        "failed_files": failed_files,
+        "is_processing": _processor.is_running,
+        "dismissed": dismissed,
+        "by_extension": by_extension,
+    }
+
+
+@router.post("/processing/onboarding-dismiss")
+def dismiss_onboarding():
+    """Dismiss the onboarding wizard."""
+    _ONBOARDING_DISMISSED_PATH.parent.mkdir(parents=True, exist_ok=True)
+    _ONBOARDING_DISMISSED_PATH.touch()
+    return {"status": "dismissed"}
+
+
+@router.delete("/processing/onboarding-dismiss")
+def reset_onboarding():
+    """Reset the onboarding wizard (show it again)."""
+    if _ONBOARDING_DISMISSED_PATH.exists():
+        _ONBOARDING_DISMISSED_PATH.unlink()
+    return {"status": "reset"}
