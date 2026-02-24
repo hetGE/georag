@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}GeoRAG - Chat{% endblock %}
+
+{% block content %}
+<div class="chat-layout">
+    <!-- Sidebar: Conversations -->
+    <aside class="chat-sidebar">
+        <button id="new-chat-btn" class="outline" style="width:100%;margin-bottom:1rem;">+ New Chat</button>
+        <div id="conversation-list" class="conversation-list">
+            <p class="secondary">No conversations yet</p>
+        </div>
+    </aside>
+
+    <!-- Main Chat Area -->
+    <div class="chat-main">
+        <!-- Tag Selector -->
+        <div class="tag-selector" id="tag-selector">
+            <span class="tag-label">Search in:</span>
+            <div id="tag-badges" class="tag-badges">
+                <!-- Populated by JS -->
+            </div>
+        </div>
+
+        <!-- Messages -->
+        <div class="chat-messages" id="chat-messages">
+            <div class="chat-welcome">
+                <h2>GeoRAG</h2>
+                <p>Geotechnical Engineering RAG Assistant</p>
+                <p class="secondary">Select tags above to focus your search, then ask a question.</p>
+            </div>
+        </div>
+
+        <!-- Input -->
+        <div class="chat-input-area">
+            <form id="chat-form" class="chat-form">
+                <textarea id="chat-input" placeholder="Ask a geotechnical engineering question..." rows="2"></textarea>
+                <button type="submit" id="send-btn">Send</button>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/chat.js"></script>
+{% endblock %}

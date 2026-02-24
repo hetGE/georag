@@ -1,0 +1,96 @@
+{% extends "base.html" %}
+{% block title %}GeoRAG - Documents{% endblock %}
+
+{% block content %}
+<div class="documents-layout">
+    <!-- Stats Bar -->
+    <div class="stats-bar" id="stats-bar">
+        <span id="stats-total">-- files</span>
+        <span class="separator">|</span>
+        <span id="stats-status">Scanning...</span>
+    </div>
+
+    <!-- Controls -->
+    <div class="doc-controls">
+        <div class="search-row">
+            <input type="search" id="search-input" placeholder="Search files..." class="search-input">
+            <select id="ext-filter">
+                <option value="">All types</option>
+                <option value="pdf">PDF</option>
+                <option value="docx">Word</option>
+                <option value="xlsx">Excel</option>
+                <option value="pptx">PowerPoint</option>
+                <option value="png">PNG</option>
+                <option value="jpg">JPG</option>
+                <option value="dwg">CAD</option>
+                <option value="txt">Text</option>
+            </select>
+            <select id="tag-filter">
+                <option value="">All tags</option>
+            </select>
+            <select id="status-filter">
+                <option value="">All statuses</option>
+                <option value="new">New</option>
+                <option value="processed">Processed</option>
+                <option value="failed">Failed</option>
+                <option value="skipped">Skipped</option>
+            </select>
+        </div>
+        <div class="action-row">
+            <button id="scan-btn" class="outline">Scan Files</button>
+            <button id="process-btn" class="outline">Process Selected</button>
+            <button id="autotag-btn" class="outline">Auto-Tag Selected</button>
+            <span id="processing-status" class="processing-status"></span>
+        </div>
+    </div>
+
+    <!-- Processing Progress -->
+    <div id="progress-bar-container" class="progress-container" style="display:none;">
+        <progress id="progress-bar" value="0" max="100"></progress>
+        <span id="progress-text">0 / 0</span>
+        <button id="stop-processing-btn" class="outline secondary btn-sm">Stop</button>
+    </div>
+
+    <!-- File Table -->
+    <div class="file-table-wrapper">
+        <table class="file-table">
+            <thead>
+                <tr>
+                    <th><input type="checkbox" id="select-all"></th>
+                    <th>File</th>
+                    <th>Type</th>
+                    <th>Size</th>
+                    <th>Directory</th>
+                    <th>Status</th>
+                    <th>Tags</th>
+                    <th>Chunks</th>
+                </tr>
+            </thead>
+            <tbody id="file-list">
+                <tr><td colspan="8" class="center">Click "Scan Files" to discover documents</td></tr>
+            </tbody>
+        </table>
+    </div>
+
+    <!-- Pagination -->
+    <div class="pagination" id="pagination"></div>
+
+    <!-- Tag Management Modal -->
+    <dialog id="tag-modal">
+        <article>
+            <header>
+                <button aria-label="Close" rel="prev" class="close-modal"></button>
+                <h3>Manage Tags for <span id="tag-modal-filename"></span></h3>
+            </header>
+            <div id="tag-modal-content">
+                <!-- Populated by JS -->
+            </div>
+        </article>
+    </dialog>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/documents.js"></script>
+<script src="/static/js/processing.js"></script>
+{% endblock %}

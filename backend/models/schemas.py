@@ -1,0 +1,89 @@
+"""SQLAlchemy ORM models."""
+import datetime
+from sqlalchemy import (
+    Column, Integer, String, Float, DateTime, Text, ForeignKey, JSON, Index
+)
+from sqlalchemy.orm import relationship
+from backend.models.database import Base
+
+
+class File(Base):
+    __tablename__ = "files"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    relative_path = Column(String, unique=True, nullable=False, index=True)
+    filename = Column(String, nullable=False, index=True)
+    extension = Column(String, index=True)
+    size_bytes = Column(Integer)
+    modified_time = Column(Float)
+    parent_directory = Column(String, index=True)
+    content_hash = Column(String)
+    scan_status = Column(String, default="new", index=True)  # new/processed/failed/skipped
+    extracted_text_preview = Column(Text)
+    chunk_count = Column(Integer, default=0)
+    processed_at = Column(DateTime)
+    auto_tagged = Column(Integer, default=0)  # 0=no, 1=yes
+    auto_tag_confidence = Column(Float)
+
+    tags = relationship("FileTag", back_populates="file", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_files_status_ext", "scan_status", "extension"),
+    )
+
+
+class Tag(Base):
+    __tablename__ = "tags"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String, unique=True, nullable=False, index=True)
+    display_name = Column(String, nullable=False)
+    description = Column(Text)
+    color = Column(String, default="#6c757d")
+    file_count = Column(Integer, default=0)
+
+    files = relationship("FileTag", back_populates="tag", cascade="all, delete-orphan")
+
+
+class FileTag(Base):
+    __tablename__ = "file_tags"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    file_id = Column(Integer, ForeignKey("files.id", ondelete="CASCADE"), nullable=False)
+    tag_id = Column(Integer, ForeignKey("tags.id", ondelete="CASCADE"), nullable=False)
+    source = Column(String, default="manual")  # auto/manual/folder_hint
+    confidence = Column(Float)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    file = relationship("File", back_populates="tags")
+    tag = relationship("Tag", back_populates="files")
+
+    __table_args__ = (
+        Index("ix_file_tags_unique", "file_id", "tag_id", unique=True),
+    )
+
+
+class Conversation(Base):
+    __tablename__ = "conversations"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    title = Column(String, default="New Conversation")
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    selected_tags = Column(JSON, default=list)
+
+    messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan",
+                            order_by="Message.created_at")
+
+
+class Message(Base):
+    __tablename__ = "messages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    conversation_id = Column(Integer, ForeignKey("conversations.id", ondelete="CASCADE"), nullable=False)
+    role = Column(String, nullable=False)  # user/assistant/system
+    content = Column(Text, nullable=False)
+    sources = Column(JSON, default=list)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    conversation = relationship("Conversation", back_populates="messages")

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}GeoRAG{% endblock %}</title>
+    <link rel="stylesheet" href="/static/css/pico.min.css">
+    <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+    <nav class="container-fluid">
+        <ul>
+            <li><strong><a href="/" class="nav-brand">GeoRAG</a></strong></li>
+        </ul>
+        <ul>
+            <li><a href="/" class="{% if active_page == 'chat' %}active{% endif %}">Chat</a></li>
+            <li><a href="/documents" class="{% if active_page == 'documents' %}active{% endif %}">Documents</a></li>
+        </ul>
+    </nav>
+    <main class="container-fluid">
+        {% block content %}{% endblock %}
+    </main>
+    <script src="/static/js/marked.min.js"></script>
+    <script src="/static/js/utils.js"></script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>
