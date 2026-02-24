@@ -50,9 +50,9 @@ app.include_router(processing.router, prefix="/api")
 
 @app.get("/")
 async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request, "active_page": "chat"})
+    return templates.TemplateResponse("spa.html", {"request": request, "active_page": "chat"})
 
 
 @app.get("/documents")
 async def documents_page(request: Request):
-    return templates.TemplateResponse("documents.html", {"request": request, "active_page": "documents"})
+    return templates.TemplateResponse("spa.html", {"request": request, "active_page": "documents"})

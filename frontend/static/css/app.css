@@ -44,8 +44,35 @@ main.container-fluid {
     overflow: auto;
 }
 
-main.container-fluid:has(.chat-layout) {
+body[data-active-page="chat"] main.container-fluid {
     overflow: hidden;
+}
+
+.spa-page {
+    height: 100%;
+    min-height: 0;
+}
+
+.chat-sidebar.streaming-locked .conversation-item,
+.chat-sidebar.streaming-locked .conv-delete,
+.chat-sidebar.streaming-locked .trash-toggle-btn {
+    pointer-events: none;
+    opacity: 0.5;
+}
+
+body.chat-streaming .lp-actions button:not(#lp-stop-btn) {
+    pointer-events: none;
+    opacity: 0.5;
+}
+
+body.chat-streaming .lp-actions:not(:has(#lp-stop-btn))::after {
+    content: 'Unavailable while chat is responding';
+    display: block;
+    width: 100%;
+    font-size: 0.75rem;
+    color: var(--pico-muted-color);
+    text-align: center;
+    font-style: italic;
 }
 
 /* Navigation */

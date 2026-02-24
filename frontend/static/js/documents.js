@@ -5,8 +5,12 @@ let allTagsList = [];
 let selectedFileIds = new Set();
 let debounceTimer = null;
 let lastLoadedFiles = [];
+let documentsInitialized = false;
 
-document.addEventListener('DOMContentLoaded', async () => {
+async function initDocuments() {
+    if (documentsInitialized) return;
+    documentsInitialized = true;
+
     await loadTagFilter();
     await loadStats();
     loadDocuments();
@@ -32,6 +36,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.querySelector('.close-modal')?.addEventListener('click', () => {
         document.getElementById('tag-modal').close();
     });
+}
+
+// Init immediately if documents page is already active
+if (document.body.dataset.activePage === 'documents') {
+    document.addEventListener('DOMContentLoaded', initDocuments);
+}
+
+// Lazy-init when navigating to documents via SPA router
+document.addEventListener('spa:pageshow', (e) => {
+    if (e.detail.page === 'documents') initDocuments();
 });
 
 async function loadTagFilter() {
@@ -266,7 +280,7 @@ function renderTagModalContent(fileId, filename, file, currentTags, movedTag) {
             pill.title = tag.description || '';
             pill.style.backgroundColor = tag.color;
             pill.style.borderColor = tag.color;
-            pill.textContent = `✕ ${tag.display_name}`;
+            pill.textContent = `\u2715 ${tag.display_name}`;
             pill.addEventListener('click', () => {
                 currentTags.delete(tag.name);
                 renderTagModalContent(fileId, filename, file, currentTags, tag.name);
@@ -339,7 +353,7 @@ function renderMultiTagModalContent(fileIds, selectedFiles, currentTags, movedTa
             pill.title = tag.description || '';
             pill.style.backgroundColor = tag.color;
             pill.style.borderColor = tag.color;
-            pill.textContent = `✕ ${tag.display_name}`;
+            pill.textContent = `\u2715 ${tag.display_name}`;
             pill.addEventListener('click', () => {
                 currentTags.delete(tag.name);
                 renderMultiTagModalContent(fileIds, selectedFiles, currentTags, tag.name);

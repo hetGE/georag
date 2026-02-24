@@ -215,6 +215,7 @@ async function loadConversations() {
 }
 
 async function loadConversation(convId) {
+    if (isStreaming) return;
     currentConversationId = convId;
     const data = await apiGet(`/api/conversations/${convId}`);
     const messagesEl = document.getElementById('chat-messages');
@@ -238,6 +239,7 @@ async function loadConversation(convId) {
 // ─── Trash (Soft Delete) ───
 
 function promptTrashConversation(convId) {
+    if (isStreaming) return;
     pendingDeleteConvId = convId;
     document.getElementById('trash-confirm-dialog').showModal();
 }
@@ -340,6 +342,7 @@ async function updateTrashCount() {
 }
 
 function newChat() {
+    if (isStreaming) return;
     currentConversationId = null;
     document.getElementById('chat-messages').innerHTML = `
         <div class="chat-welcome" id="chat-welcome">
@@ -383,10 +386,13 @@ async function handleSubmit(e) {
 
     // Start streaming
     isStreaming = true;
+    document.body.classList.add('chat-streaming');
     const sendBtn = document.getElementById('send-btn');
     sendBtn.textContent = 'Stop';
     sendBtn.type = 'button';
     sendBtn.classList.add('stop-mode');
+    document.getElementById('new-chat-btn').disabled = true;
+    document.querySelector('.chat-sidebar').classList.add('streaming-locked');
     updateInputState();
 
     const controller = new AbortController();
@@ -465,6 +471,9 @@ async function handleSubmit(e) {
     sendBtn.type = 'submit';
     sendBtn.classList.remove('stop-mode');
     isStreaming = false;
+    document.body.classList.remove('chat-streaming');
+    document.getElementById('new-chat-btn').disabled = false;
+    document.querySelector('.chat-sidebar').classList.remove('streaming-locked');
     updateInputState();
     await loadConversations();
     scrollToBottom();

@@ -1,0 +1,173 @@
+{% extends "base.html" %}
+{% block title %}geoRAG{% endblock %}
+
+{% block content %}
+<!-- Chat Page -->
+<div id="page-chat" class="spa-page" style="display:none">
+    <div class="chat-layout">
+        <!-- Sidebar: Conversations -->
+        <aside class="chat-sidebar">
+            <button id="new-chat-btn" class="outline" style="width:100%;margin-bottom:1rem;">+ New Chat</button>
+            <div id="conversation-list" class="conversation-list">
+                <p class="secondary">No conversations yet</p>
+            </div>
+
+            <!-- Trash View (hidden by default) -->
+            <div id="trash-view" class="trash-view" style="display:none;">
+                <div class="trash-header">
+                    <button id="trash-back-btn" class="trash-back-btn" title="Back to conversations">&larr;</button>
+                    <span class="trash-title">Trash</span>
+                </div>
+                <div id="trash-list" class="trash-list">
+                    <p class="secondary" style="font-size:0.85rem;padding:0.5rem;">Trash is empty</p>
+                </div>
+            </div>
+
+            <button id="trash-btn" class="trash-toggle-btn" title="View trash">&#128465; Trash</button>
+        </aside>
+
+        <!-- Main Chat Area -->
+        <div class="chat-main">
+            <!-- Tag Selector -->
+            <div class="tag-selector" id="tag-selector">
+                <span class="tag-label">Search in:</span>
+                <div id="tag-badges" class="tag-badges">
+                    <!-- Populated by JS -->
+                </div>
+            </div>
+
+            <!-- Messages -->
+            <div class="chat-messages" id="chat-messages">
+                <div class="chat-welcome" id="chat-welcome">
+                    <h2>geoRAG</h2>
+                    <p>Geotechnical Engineering RAG Assistant</p>
+                    <p class="secondary">Select topics to focus your search</p>
+                    <div id="welcome-tags" class="welcome-tags">
+                        <!-- Populated by JS -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Input -->
+            <div class="chat-input-area">
+                <form id="chat-form" class="chat-form">
+                    <textarea id="chat-input" placeholder="Ask a geotechnical engineering question..." rows="2"></textarea>
+                    <button type="submit" id="send-btn">Send</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Trash Confirm Dialog -->
+    <dialog id="trash-confirm-dialog">
+        <article>
+            <header>Move to Trash?</header>
+            <p>This conversation will be moved to the trash. You can restore it later.</p>
+            <footer>
+                <button class="secondary outline dialog-cancel">Cancel</button>
+                <button class="dialog-confirm">Move to Trash</button>
+            </footer>
+        </article>
+    </dialog>
+
+    <!-- Permanent Delete Dialog -->
+    <dialog id="permanent-delete-dialog">
+        <article>
+            <header>Delete Permanently?</header>
+            <p><strong>This action cannot be undone.</strong> The conversation and all its messages will be permanently deleted.</p>
+            <footer>
+                <button class="secondary outline dialog-cancel">Cancel</button>
+                <button class="dialog-confirm permanent-delete-btn">Delete Permanently</button>
+            </footer>
+        </article>
+    </dialog>
+</div>
+
+<!-- Documents Page -->
+<div id="page-documents" class="spa-page" style="display:none">
+    <div class="documents-layout">
+        <!-- Stats Bar -->
+        <div class="stats-bar" id="stats-bar">
+            <span id="stats-total">-- files</span>
+            <span class="separator">|</span>
+            <span id="stats-status">Scanning...</span>
+        </div>
+
+        <!-- Controls -->
+        <div class="doc-controls">
+            <div class="search-row">
+                <input type="search" id="search-input" placeholder="Search files..." class="search-input">
+                <select id="ext-filter">
+                    <option value="">All types</option>
+                    <option value="pdf">PDF</option>
+                    <option value="docx">Word</option>
+                    <option value="xlsx">Excel</option>
+                    <option value="pptx">PowerPoint</option>
+                    <option value="png">PNG</option>
+                    <option value="jpg">JPG</option>
+                    <option value="dwg">CAD</option>
+                    <option value="txt">Text</option>
+                </select>
+                <select id="tag-filter">
+                    <option value="">All tags</option>
+                </select>
+                <select id="status-filter">
+                    <option value="">All statuses</option>
+                    <option value="new">New</option>
+                    <option value="processed">Processed</option>
+                    <option value="failed">Failed</option>
+                    <option value="skipped">Skipped</option>
+                </select>
+            </div>
+            <div class="action-row" id="action-row">
+                <button id="process-btn" class="outline" style="display:none;">Process Selected</button>
+                <button id="autotag-btn" class="outline" style="display:none;">Auto-Tag Selected</button>
+                <button id="multi-tag-btn" class="outline" style="display:none;">Multi Tag</button>
+            </div>
+        </div>
+
+        <!-- File Table -->
+        <div class="file-table-wrapper">
+            <table class="file-table">
+                <thead>
+                    <tr>
+                        <th><input type="checkbox" id="select-all"></th>
+                        <th>File</th>
+                        <th>Type</th>
+                        <th>Size</th>
+                        <th>Directory</th>
+                        <th>Status</th>
+                        <th>Tags</th>
+                        <th>Chunks</th>
+                    </tr>
+                </thead>
+                <tbody id="file-list">
+                    <tr><td colspan="8" class="center">Click "Scan Files" to discover documents</td></tr>
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination -->
+        <div class="pagination" id="pagination"></div>
+
+        <!-- Tag Management Modal -->
+        <dialog id="tag-modal">
+            <article>
+                <header>
+                    <button aria-label="Close" rel="prev" class="close-modal"></button>
+                    <h3>Manage Tags</h3>
+                </header>
+                <div id="tag-modal-content">
+                    <!-- Populated by JS -->
+                </div>
+            </article>
+        </dialog>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/js/chat.js"></script>
+<script src="/static/js/documents.js"></script>
+<script src="/static/js/router.js"></script>
+{% endblock %}

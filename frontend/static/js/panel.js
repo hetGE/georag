@@ -119,8 +119,8 @@ const LibraryPanel = (() => {
             html += renderCompletePhase(status);
         }
 
-        // Action buttons (only when not processing/stopping)
-        if (status.phase !== 'not_started' && status.phase !== 'stopping' && !status.is_processing) {
+        // Action buttons (only for complete phase — scanned has inline scan button)
+        if (status.phase === 'complete') {
             html += renderActionButtons(status);
         }
 
@@ -149,7 +149,7 @@ const LibraryPanel = (() => {
             ${already > 0 ? `<p class="lp-stats">${already.toLocaleString()} already processed.</p>` : ''}
             <div class="lp-actions">
                 <button id="lp-process-btn">${label}</button>
-                <button id="lp-skip-btn" class="outline secondary">Dismiss</button>
+                <button id="lp-action-scan" class="outline">Scan Files</button>
             </div>
         </div>`;
     }
@@ -193,13 +193,12 @@ const LibraryPanel = (() => {
         </div>`;
     }
 
-    function renderActionButtons(status) {
+    function renderActionButtons() {
         return `<hr class="lp-divider">
         <div class="lp-phase">
-            <p class="lp-section-label">Actions</p>
             <div class="lp-actions">
                 <button id="lp-action-scan" class="outline">Scan Files</button>
-                ${status.phase === 'complete' ? `<button id="lp-action-process-new" class="outline">Process New Files</button>` : ''}
+                <button id="lp-action-process-new" class="outline">Process New Files</button>
             </div>
         </div>`;
     }
@@ -214,8 +213,6 @@ const LibraryPanel = (() => {
             ?.addEventListener('click', handleScan);
         document.getElementById('lp-process-btn')
             ?.addEventListener('click', handleStartProcessing);
-        document.getElementById('lp-skip-btn')
-            ?.addEventListener('click', handleDismiss);
         document.getElementById('lp-stop-btn')
             ?.addEventListener('click', handleStop);
 
@@ -256,12 +253,6 @@ const LibraryPanel = (() => {
             btn.setAttribute('aria-busy', 'false');
             return;
         }
-        lastStatusJSON = '';
-        await checkStatus();
-    }
-
-    async function handleDismiss() {
-        await apiPost('/api/processing/onboarding-dismiss');
         lastStatusJSON = '';
         await checkStatus();
     }
