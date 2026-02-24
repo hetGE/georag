@@ -779,7 +779,7 @@ function appendSources(messageDiv, sources) {
     sourcesEl.className = 'message-sources';
     sourcesEl.innerHTML = `<div class="sources-header">Sources (${sources.length})</div>`;
 
-    sources.forEach(src => {
+    sources.forEach((src, idx) => {
         const item = document.createElement('div');
         item.className = 'source-item';
 
@@ -788,7 +788,7 @@ function appendSources(messageDiv, sources) {
         link.href = '#';
         const page = src.page ? ` (p.${src.page})` : '';
         const score = src.score ? ` [${(src.score * 100).toFixed(0)}%]` : '';
-        link.textContent = `${src.filename || src.file_path}${page}${score}`;
+        link.textContent = `[${idx + 1}] ${src.filename || src.file_path}${page}${score}`;
         link.addEventListener('click', (e) => {
             e.preventDefault();
             apiPost('/api/documents/open-by-path', { file_path: src.file_path });
