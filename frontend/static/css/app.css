@@ -257,6 +257,15 @@ nav ul:last-child li a.active:hover {
     opacity: 1;
 }
 
+.depth-indicator {
+    margin-left: auto;
+    font-size: 0.625rem;
+    font-weight: 500;
+    color: var(--pico-muted-color);
+    white-space: nowrap;
+    user-select: none;
+}
+
 /* Chat Messages */
 .chat-messages {
     flex: 1;
@@ -376,8 +385,17 @@ nav ul:last-child li a.active:hover {
     align-items: stretch;
 }
 
-.chat-form textarea {
+.chat-input-wrapper {
+    position: relative;
     flex: 1;
+}
+
+.chat-input-wrapper textarea {
+    width: 100%;
+    padding-right: 2.5rem;
+}
+
+.chat-form textarea {
     resize: none;
     margin-bottom: 0;
     min-height: 2rem;
@@ -398,6 +416,94 @@ nav ul:last-child li a.active:hover {
 .chat-form button.stop-mode {
     background: var(--pico-del-color);
     border-color: var(--pico-del-color);
+}
+
+/* Depth Settings Gear Button */
+.chat-form .depth-settings-btn {
+    position: absolute;
+    right: 0.4rem;
+    top: 50%;
+    transform: translateY(-50%);
+    background: none;
+    border: none;
+    color: var(--pico-muted-color);
+    cursor: pointer;
+    font-size: 1.5rem;
+    padding: 0.15rem;
+    margin: 0;
+    line-height: 1;
+    outline: none;
+    width: auto;
+    opacity: 0.5;
+    transition: opacity 0.15s, color 0.15s;
+}
+
+.chat-form .depth-settings-btn:focus {
+    outline: none;
+}
+
+.chat-form .depth-settings-btn:hover {
+    opacity: 1;
+    color: var(--brand-color);
+}
+
+.chat-form .depth-settings-btn:disabled {
+    opacity: 0.25;
+    cursor: not-allowed;
+    color: var(--pico-muted-color);
+}
+
+/* Depth Settings Dialog */
+#depth-settings-dialog article {
+    max-width: 420px;
+    margin: 0 auto;
+}
+
+#depth-settings-dialog header {
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+.depth-option {
+    padding: 0.6rem 0.75rem;
+    border: 1.5px solid var(--pico-muted-border-color);
+    border-radius: 0.375rem;
+    cursor: pointer;
+    margin-bottom: 0.5rem;
+    transition: border-color 0.15s, background 0.15s;
+}
+
+.depth-option:hover {
+    border-color: var(--brand-color);
+    background: rgba(20, 191, 152, 0.04);
+}
+
+.depth-option.active {
+    border-color: var(--brand-color);
+    background: rgba(20, 191, 152, 0.08);
+}
+
+.depth-option-label {
+    font-weight: 600;
+    font-size: 0.85rem;
+    margin-bottom: 0.15rem;
+}
+
+.depth-option.active .depth-option-label {
+    color: var(--brand-color);
+}
+
+.depth-option-desc {
+    font-size: 0.7rem;
+    color: var(--pico-muted-color);
+}
+
+.depth-info {
+    font-size: 0.7rem;
+    color: var(--pico-muted-color);
+    margin-top: 0.25rem;
+    margin-bottom: 0;
+    line-height: 1.4;
 }
 
 /* Documents Layout */

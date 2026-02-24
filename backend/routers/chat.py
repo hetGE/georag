@@ -82,8 +82,9 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     if request.tag_names:
         try:
             query_embedding = await embed_text(request.message)
-            chunks = query_tags(query_embedding, request.tag_names)
-            chunks = chunks[:MAX_CONTEXT_CHUNKS]
+            chunks = query_tags(query_embedding, request.tag_names, top_k=request.top_k_per_tag)
+            max_ctx = request.max_context_chunks or MAX_CONTEXT_CHUNKS
+            chunks = chunks[:max_ctx]
             sources = [
                 {"file_path": c.get("file_path", ""), "filename": c.get("filename", ""),
                  "page": c.get("page", ""), "score": c.get("score", 0)}

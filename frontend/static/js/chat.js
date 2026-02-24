@@ -9,6 +9,16 @@ let isWelcomeState = true;
 let pendingDeleteConvId = null;
 let isTrashViewOpen = false;
 
+// Retrieval depth settings (persisted in localStorage)
+let currentDepth = localStorage.getItem('georag-depth') || 'optimal';
+const DEPTH_LEVELS = [
+    { key: 'quick',    label: 'Quick and less demanding',  topK: 5,  maxCtx: 8,   desc: '5 sources per topic, 8 max context chunks' },
+    { key: 'optimal',  label: 'Optimal and balanced',      topK: 10, maxCtx: 16,  desc: '10 sources per topic, 16 max context chunks' },
+    { key: 'deep',     label: 'Deep and demanding',        topK: 20, maxCtx: 32,  desc: '20 sources per topic, 32 max context chunks' },
+    { key: 'deeper',   label: 'Deeper and very demanding', topK: 50, maxCtx: 80,  desc: '50 sources per topic, 80 max context chunks' },
+    { key: 'ludicrous',label: 'Ludicrous',                 topK: 100,maxCtx: 200, desc: '100 sources per topic, 200 max context chunks' },
+];
+
 // Cross-tab streaming lock via BroadcastChannel (status only, no token relay)
 const streamingChannel = new BroadcastChannel('chat-streaming');
 let mirrorEventSource = null;
@@ -261,6 +271,18 @@ document.addEventListener('DOMContentLoaded', async () => {
     permDialog.querySelector('.dialog-cancel').addEventListener('click', () => permDialog.close());
     permDialog.querySelector('.dialog-confirm').addEventListener('click', confirmPermanentDelete);
 
+    // Depth settings dialog
+    const depthDialog = document.getElementById('depth-settings-dialog');
+    const depthOptionsEl = document.getElementById('depth-options');
+    renderDepthOptions(depthOptionsEl, depthDialog);
+    updateDepthIndicator();
+    document.getElementById('depth-settings-btn').addEventListener('click', () => {
+        depthDialog.showModal();
+    });
+    depthDialog.addEventListener('click', (e) => {
+        if (e.target === depthDialog) depthDialog.close();
+    });
+
     // Input validation — respects welcome state
     const chatInput = document.getElementById('chat-input');
     const sendBtn = document.getElementById('send-btn');
@@ -361,13 +383,48 @@ function toggleWelcomeTag(tag, pill) {
 }
 
 
+function updateDepthIndicator() {
+    const el = document.getElementById('depth-indicator');
+    if (!el) return;
+    const level = DEPTH_LEVELS.find(l => l.key === currentDepth) || DEPTH_LEVELS[1];
+    el.textContent = '\u2699 ' + level.label;
+}
+
+function renderDepthOptions(container, dialog) {
+    container.innerHTML = '';
+    DEPTH_LEVELS.forEach(level => {
+        const card = document.createElement('div');
+        card.className = 'depth-option' + (level.key === currentDepth ? ' active' : '');
+        card.innerHTML = `
+            <div class="depth-option-label">${level.label}</div>
+            <div class="depth-option-desc">${level.desc}</div>
+        `;
+        card.addEventListener('click', () => {
+            currentDepth = level.key;
+            localStorage.setItem('georag-depth', currentDepth);
+            container.querySelectorAll('.depth-option').forEach(el => el.classList.remove('active'));
+            card.classList.add('active');
+            updateDepthIndicator();
+            dialog.close();
+        });
+        container.appendChild(card);
+    });
+}
+
+function getDepthParams() {
+    const level = DEPTH_LEVELS.find(l => l.key === currentDepth) || DEPTH_LEVELS[1];
+    return { top_k_per_tag: level.topK, max_context_chunks: level.maxCtx };
+}
+
 function updateInputState() {
     const chatInput = document.getElementById('chat-input');
     const sendBtn = document.getElementById('send-btn');
+    const depthBtn = document.getElementById('depth-settings-btn');
 
     if (isStreaming) {
         chatInput.disabled = true;
         sendBtn.disabled = false;
+        if (depthBtn) depthBtn.disabled = true;
         return;
     }
 
@@ -376,8 +433,11 @@ function updateInputState() {
         chatInput.placeholder = 'Chat is active in another tab...';
         // Stop button is managed by enterRemoteStopMode — don't override it
         sendBtn.disabled = false;
+        if (depthBtn) depthBtn.disabled = true;
         return;
     }
+
+    if (depthBtn) depthBtn.disabled = false;
 
     if (window.libraryIsProcessing) {
         chatInput.disabled = true;
@@ -662,6 +722,7 @@ async function handleSubmit(e) {
     let broadcastedStart = false;
 
     try {
+        const depthParams = getDepthParams();
         const response = await fetch('/api/chat', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -669,6 +730,8 @@ async function handleSubmit(e) {
                 message: message,
                 conversation_id: currentConversationId,
                 tag_names: Array.from(selectedTags),
+                top_k_per_tag: depthParams.top_k_per_tag,
+                max_context_chunks: depthParams.max_context_chunks,
             }),
             signal: controller.signal,
         });

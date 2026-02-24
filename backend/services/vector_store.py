@@ -33,7 +33,7 @@ def add_chunks(tag_name: str, ids: list[str], embeddings: list[list[float]],
         )
 
 
-def query_tags(query_embedding: list[float], tag_names: list[str]) -> list[dict]:
+def query_tags(query_embedding: list[float], tag_names: list[str], top_k: int | None = None) -> list[dict]:
     """Query multiple tag collections, merge and deduplicate results."""
     all_results = []
 
@@ -45,7 +45,7 @@ def query_tags(query_embedding: list[float], tag_names: list[str]) -> list[dict]
 
         results = collection.query(
             query_embeddings=[query_embedding],
-            n_results=TOP_K_PER_TAG,
+            n_results=top_k or TOP_K_PER_TAG,
             include=["documents", "metadatas", "distances"],
         )
 

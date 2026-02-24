@@ -42,6 +42,8 @@ class ChatRequest(BaseModel):
     message: str
     conversation_id: Optional[int] = None
     tag_names: list[str] = []
+    top_k_per_tag: Optional[int] = None
+    max_context_chunks: Optional[int] = None
 
 
 class ConversationResponse(BaseModel):

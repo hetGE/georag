@@ -34,6 +34,7 @@
                 <div id="tag-badges" class="tag-badges">
                     <!-- Populated by JS -->
                 </div>
+                <span class="depth-indicator" id="depth-indicator" title="Retrieval depth">⚙ Optimal</span>
             </div>
 
             <!-- Messages -->
@@ -51,7 +52,10 @@
             <!-- Input -->
             <div class="chat-input-area">
                 <form id="chat-form" class="chat-form">
-                    <textarea id="chat-input" placeholder="Ask a geotechnical engineering question..." rows="2"></textarea>
+                    <div class="chat-input-wrapper">
+                        <textarea id="chat-input" placeholder="Ask a geotechnical engineering question..." rows="2"></textarea>
+                        <button type="button" id="depth-settings-btn" class="depth-settings-btn" title="Retrieval depth">&#9881;</button>
+                    </div>
                     <button type="submit" id="send-btn">Send</button>
                 </form>
             </div>
@@ -79,6 +83,15 @@
                 <button class="secondary outline dialog-cancel">Cancel</button>
                 <button class="dialog-confirm permanent-delete-btn">Delete Permanently</button>
             </footer>
+        </article>
+    </dialog>
+
+    <!-- Depth Settings Dialog -->
+    <dialog id="depth-settings-dialog">
+        <article>
+            <header>Retrieval Depth</header>
+            <div id="depth-options"></div>
+            <p class="depth-info">Higher depths send more context to the LLM. Configure your local model with a larger context window for Deep (16K+), Deeper (64K+), or Ludicrous (128K+) settings.</p>
         </article>
     </dialog>
 </div>
