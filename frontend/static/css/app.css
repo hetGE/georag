@@ -845,7 +845,7 @@ body:has(.lp-panel.open) .lp-toggle {
 }
 
 .lp-close:hover {
-    color: var(--pico-color);
+    color: var(--brand-color);
 }
 
 .lp-phase {
