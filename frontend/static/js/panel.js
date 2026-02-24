@@ -33,6 +33,14 @@ const LibraryPanel = (() => {
             }
         });
         startPolling();
+
+        // Cross-tab sync: another tab started processing → force immediate status check
+        window.syncChannel.addEventListener('message', (e) => {
+            if (e.data.type === 'processing-started') {
+                lastStatusJSON = '';
+                checkStatus();
+            }
+        });
     }
 
     function toggle() { isOpen ? closePanel() : openPanel(); }
@@ -255,6 +263,7 @@ const LibraryPanel = (() => {
         }
         lastStatusJSON = '';
         await checkStatus();
+        window.syncChannel.postMessage({ type: 'processing-started', payload: {} });
     }
 
     async function handleStop() {
@@ -301,6 +310,7 @@ const LibraryPanel = (() => {
         }
         lastStatusJSON = '';
         await checkStatus();
+        window.syncChannel.postMessage({ type: 'processing-started', payload: {} });
     }
 
     // --- Utility ---

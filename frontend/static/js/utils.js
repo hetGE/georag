@@ -59,3 +59,6 @@ function createTagBadge(tag, selected = false, onClick = null) {
 
     return badge;
 }
+
+// Cross-tab sync channel (non-streaming actions)
+window.syncChannel = new BroadcastChannel('app-sync');

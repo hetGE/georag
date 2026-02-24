@@ -4,12 +4,244 @@ let currentConversationId = null;
 let selectedTags = new Set();
 let allTags = [];
 let isStreaming = false;
+let remoteStreaming = false;
 let isWelcomeState = true;
 let pendingDeleteConvId = null;
 let isTrashViewOpen = false;
 
+// Cross-tab streaming lock via BroadcastChannel (status only, no token relay)
+const streamingChannel = new BroadcastChannel('chat-streaming');
+let mirrorEventSource = null;
+let activeAbortController = null;
+let remoteStopHandler = null;
+
+streamingChannel.onmessage = (e) => {
+    const msg = e.data;
+
+    // Handle stop-request from mirror tab
+    if (msg.type === 'stop-request') {
+        if (activeAbortController) {
+            activeAbortController.abort();
+        }
+        apiPost('/api/chat/stop');
+        return;
+    }
+
+    if (msg.streaming) {
+        remoteStreaming = true;
+        document.body.classList.add('chat-streaming');
+        document.getElementById('new-chat-btn').disabled = true;
+        document.querySelector('.chat-sidebar').classList.add('streaming-locked');
+        showRemoteStream(msg.conversationId, msg.selectedTags);
+        enterRemoteStopMode();
+        updateInputState();
+    } else {
+        remoteStreaming = false;
+        closeMirrorStream();
+        exitRemoteStopMode();
+        if (!isStreaming) {
+            document.body.classList.remove('chat-streaming');
+            document.getElementById('new-chat-btn').disabled = false;
+            document.querySelector('.chat-sidebar').classList.remove('streaming-locked');
+        }
+        // Reload conversation to get final state with sources
+        if (msg.conversationId && msg.conversationId === currentConversationId) {
+            loadConversation(msg.conversationId, { broadcast: false });
+        }
+        loadConversations();
+        updateInputState();
+    }
+};
+
+// Cross-tab sync for non-streaming actions
+window.syncChannel.onmessage = (e) => {
+    const { type, payload } = e.data;
+
+    if (type === 'new-chat') {
+        if (document.body.dataset.activePage !== 'chat') return;
+        if (isStreaming || remoteStreaming) return;
+        newChat({ broadcast: false });
+    } else if (type === 'load-conversation') {
+        if (document.body.dataset.activePage !== 'chat') return;
+        if (isStreaming || remoteStreaming) return;
+        loadConversation(payload.conversationId, { broadcast: false });
+    } else if (type === 'conversations-changed') {
+        if (payload.trashedId && payload.trashedId === currentConversationId) {
+            newChat({ broadcast: false });
+        }
+        loadConversations();
+    }
+};
+
+function closeMirrorStream() {
+    if (mirrorEventSource) {
+        mirrorEventSource.close();
+        mirrorEventSource = null;
+    }
+}
+
+let syncInFlight = false;
+async function syncStreamingState() {
+    if (isStreaming || syncInFlight) return;
+    syncInFlight = true;
+    try {
+        const status = await apiGet('/api/chat/streaming');
+        if (status.streaming && !remoteStreaming) {
+            // Another tab started streaming — enter mirror mode
+            remoteStreaming = true;
+            document.body.classList.add('chat-streaming');
+            document.getElementById('new-chat-btn').disabled = true;
+            document.querySelector('.chat-sidebar').classList.add('streaming-locked');
+            if (status.conversation_id) {
+                showRemoteStream(status.conversation_id);
+            }
+            enterRemoteStopMode();
+            updateInputState();
+        } else if (!status.streaming && remoteStreaming) {
+            // Streaming ended — exit mirror mode
+            remoteStreaming = false;
+            closeMirrorStream();
+            exitRemoteStopMode();
+            document.body.classList.remove('chat-streaming');
+            document.getElementById('new-chat-btn').disabled = false;
+            document.querySelector('.chat-sidebar').classList.remove('streaming-locked');
+            if (currentConversationId) {
+                loadConversation(currentConversationId, { broadcast: false });
+            }
+            loadConversations();
+            updateInputState();
+        }
+    } catch {}
+    syncInFlight = false;
+}
+
+function enterRemoteStopMode() {
+    const sendBtn = document.getElementById('send-btn');
+    sendBtn.textContent = 'Stop';
+    sendBtn.type = 'button';
+    sendBtn.classList.add('stop-mode');
+    sendBtn.disabled = false;
+    if (remoteStopHandler) {
+        sendBtn.removeEventListener('click', remoteStopHandler);
+    }
+    remoteStopHandler = () => {
+        streamingChannel.postMessage({ type: 'stop-request' });
+        apiPost('/api/chat/stop');
+    };
+    sendBtn.addEventListener('click', remoteStopHandler);
+}
+
+function exitRemoteStopMode() {
+    const sendBtn = document.getElementById('send-btn');
+    if (remoteStopHandler) {
+        sendBtn.removeEventListener('click', remoteStopHandler);
+        remoteStopHandler = null;
+    }
+    sendBtn.textContent = 'Send';
+    sendBtn.type = 'submit';
+    sendBtn.classList.remove('stop-mode');
+}
+
+async function showRemoteStream(conversationId, broadcastTags) {
+    // Resolve conversation ID from server if not provided
+    if (!conversationId) {
+        try {
+            const status = await apiGet('/api/chat/streaming');
+            conversationId = status.conversation_id;
+        } catch {}
+    }
+    if (!conversationId) return;
+
+    // Load the conversation (user message is already saved server-side)
+    const data = await apiGet(`/api/conversations/${conversationId}`);
+
+    currentConversationId = conversationId;
+    const messagesEl = document.getElementById('chat-messages');
+    messagesEl.innerHTML = '';
+
+    exitWelcomeState();
+
+    // Use tags from broadcast if available, otherwise fall back to conversation data
+    if (broadcastTags && broadcastTags.length) {
+        selectedTags = new Set(broadcastTags);
+    } else {
+        selectedTags = new Set(data.selected_tags || []);
+    }
+    renderActiveTagBadges();
+
+    data.messages.forEach(msg => {
+        appendMessage(msg.role, msg.content, msg.sources);
+    });
+
+    // Add the streaming assistant bubble
+    const assistantDiv = appendMessage('assistant', '', null, true);
+    const contentEl = assistantDiv.querySelector('.message-content');
+    let fullText = '';
+
+    // Connect to the SSE mirror endpoint
+    closeMirrorStream();
+    mirrorEventSource = new EventSource('/api/chat/stream-mirror');
+
+    mirrorEventSource.addEventListener('token', (e) => {
+        try {
+            const data = JSON.parse(e.data);
+            if (data.token !== undefined) {
+                fullText += data.token;
+                contentEl.innerHTML = marked.parse(fullText);
+                scrollToBottom();
+            }
+        } catch {}
+    });
+
+    mirrorEventSource.addEventListener('done', (e) => {
+        closeMirrorStream();
+        remoteStreaming = false;
+        exitRemoteStopMode();
+        document.body.classList.remove('chat-streaming');
+        document.getElementById('new-chat-btn').disabled = false;
+        document.querySelector('.chat-sidebar').classList.remove('streaming-locked');
+        updateInputState();
+        // Reload conversation for final state with sources
+        if (currentConversationId) {
+            loadConversation(currentConversationId, { broadcast: false });
+        }
+        loadConversations();
+    });
+
+    mirrorEventSource.addEventListener('error', () => {
+        closeMirrorStream();
+        remoteStreaming = false;
+        exitRemoteStopMode();
+        document.body.classList.remove('chat-streaming');
+        document.getElementById('new-chat-btn').disabled = false;
+        document.querySelector('.chat-sidebar').classList.remove('streaming-locked');
+        updateInputState();
+    });
+
+    scrollToBottom();
+    await loadConversations();
+}
+
 document.addEventListener('DOMContentLoaded', async () => {
+    // Load tags first so they're available for any streaming mirror
     await loadTags();
+
+    // Check if another tab/session is already streaming
+    try {
+        const status = await apiGet('/api/chat/streaming');
+        if (status.streaming) {
+            remoteStreaming = true;
+            document.body.classList.add('chat-streaming');
+            document.getElementById('new-chat-btn').disabled = true;
+            document.querySelector('.chat-sidebar').classList.add('streaming-locked');
+            if (status.conversation_id) {
+                await showRemoteStream(status.conversation_id);
+            }
+            enterRemoteStopMode();
+            updateInputState();
+        }
+    } catch {}
+
     await loadConversations();
 
     document.getElementById('chat-form').addEventListener('submit', handleSubmit);
@@ -40,12 +272,15 @@ document.addEventListener('DOMContentLoaded', async () => {
     chatInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            if (!isStreaming) handleSubmit(e);
+            if (!isStreaming && !remoteStreaming) handleSubmit(e);
         }
     });
 
-    // Initial welcome state
-    enterWelcomeState();
+    // Initial welcome state — skip if mirroring a remote stream
+    if (!remoteStreaming) enterWelcomeState();
+
+    // Poll streaming state every second to keep all tabs in sync
+    setInterval(syncStreamingState, 1000);
 });
 
 // ─── Welcome State Management ───
@@ -136,6 +371,14 @@ function updateInputState() {
         return;
     }
 
+    if (remoteStreaming) {
+        chatInput.disabled = true;
+        chatInput.placeholder = 'Chat is active in another tab...';
+        // Stop button is managed by enterRemoteStopMode — don't override it
+        sendBtn.disabled = false;
+        return;
+    }
+
     if (window.libraryIsProcessing) {
         chatInput.disabled = true;
         sendBtn.disabled = true;
@@ -159,7 +402,7 @@ function updateInputState() {
 }
 
 // Expose streaming state for other scripts (e.g. panel.js)
-window.chatIsStreaming = () => isStreaming;
+window.chatIsStreaming = () => isStreaming || remoteStreaming;
 // Allow panel.js to trigger input state refresh when processing starts/stops
 window.updateChatInputState = updateInputState;
 
@@ -214,7 +457,7 @@ async function loadConversations() {
     updateTrashCount();
 }
 
-async function loadConversation(convId) {
+async function loadConversation(convId, { broadcast = true } = {}) {
     if (isStreaming) return;
     currentConversationId = convId;
     const data = await apiGet(`/api/conversations/${convId}`);
@@ -234,6 +477,10 @@ async function loadConversation(convId) {
 
     await loadConversations();
     scrollToBottom();
+
+    if (broadcast) {
+        window.syncChannel.postMessage({ type: 'load-conversation', payload: { conversationId: convId } });
+    }
 }
 
 // ─── Trash (Soft Delete) ───
@@ -253,9 +500,10 @@ async function confirmTrash() {
 
     await apiDelete(`/api/conversations/${convId}`);
     if (convId === currentConversationId) {
-        newChat();
+        newChat({ broadcast: false });
     }
     await loadConversations();
+    window.syncChannel.postMessage({ type: 'conversations-changed', payload: { trashedId: convId } });
 }
 
 async function openTrashView() {
@@ -312,6 +560,7 @@ async function restoreConversation(convId) {
     await apiPost(`/api/conversations/${convId}/restore`);
     await loadTrashList();
     await loadConversations();
+    window.syncChannel.postMessage({ type: 'conversations-changed', payload: {} });
 }
 
 function promptPermanentDelete(convId) {
@@ -329,6 +578,7 @@ async function confirmPermanentDelete() {
     await apiDelete(`/api/conversations/${convId}/permanent`);
     await loadTrashList();
     await updateTrashCount();
+    window.syncChannel.postMessage({ type: 'conversations-changed', payload: { trashedId: convId } });
 }
 
 async function updateTrashCount() {
@@ -341,7 +591,7 @@ async function updateTrashCount() {
     }
 }
 
-function newChat() {
+function newChat({ broadcast = true } = {}) {
     if (isStreaming) return;
     currentConversationId = null;
     document.getElementById('chat-messages').innerHTML = `
@@ -360,6 +610,10 @@ function newChat() {
     if (isTrashViewOpen) closeTrashView();
 
     loadConversations();
+
+    if (broadcast) {
+        window.syncChannel.postMessage({ type: 'new-chat', payload: {} });
+    }
 }
 
 // ─── Chat ───
@@ -368,7 +622,7 @@ async function handleSubmit(e) {
     e.preventDefault();
     const input = document.getElementById('chat-input');
     const message = input.value.trim();
-    if (!message || isStreaming || window.libraryIsProcessing) return;
+    if (!message || isStreaming || remoteStreaming || window.libraryIsProcessing) return;
 
     // Block submit if welcome state and no tags selected
     if (isWelcomeState && allTags.length > 0 && selectedTags.size === 0) return;
@@ -396,11 +650,16 @@ async function handleSubmit(e) {
     updateInputState();
 
     const controller = new AbortController();
-    const stopHandler = () => { controller.abort(); };
+    activeAbortController = controller;
+    const stopHandler = () => {
+        controller.abort();
+        apiPost('/api/chat/stop');
+    };
     sendBtn.addEventListener('click', stopHandler, { once: true });
 
     const assistantDiv = appendMessage('assistant', '', null, true);
     const contentEl = assistantDiv.querySelector('.message-content');
+    let broadcastedStart = false;
 
     try {
         const response = await fetch('/api/chat', {
@@ -434,23 +693,26 @@ async function handleSubmit(e) {
                         const data = JSON.parse(dataStr);
 
                         if (data.token !== undefined) {
+                            // Broadcast streaming status on first token
+                            if (!broadcastedStart) {
+                                broadcastedStart = true;
+                                streamingChannel.postMessage({ streaming: true, conversationId: currentConversationId, selectedTags: Array.from(selectedTags) });
+                            }
                             fullText += data.token;
                             contentEl.innerHTML = marked.parse(fullText);
                             scrollToBottom();
                         }
                     } catch {}
                 }
-                if (line.startsWith('event: done')) {
-                    // Next data line has sources info
-                }
-                if (line.startsWith('event: error')) {
-                    // Next data line has error
-                }
                 if (line.startsWith('data: ') && line.includes('"conversation_id"')) {
                     try {
                         const doneData = JSON.parse(line.slice(6));
                         if (doneData.conversation_id) {
                             currentConversationId = doneData.conversation_id;
+                            if (!broadcastedStart) {
+                                broadcastedStart = true;
+                                streamingChannel.postMessage({ streaming: true, conversationId: currentConversationId, selectedTags: Array.from(selectedTags) });
+                            }
                         }
                         if (doneData.sources && doneData.sources.length) {
                             appendSources(assistantDiv, doneData.sources);
@@ -467,11 +729,13 @@ async function handleSubmit(e) {
     }
 
     sendBtn.removeEventListener('click', stopHandler);
+    activeAbortController = null;
     sendBtn.textContent = 'Send';
     sendBtn.type = 'submit';
     sendBtn.classList.remove('stop-mode');
     isStreaming = false;
-    document.body.classList.remove('chat-streaming');
+    streamingChannel.postMessage({ streaming: false, conversationId: currentConversationId });
+    if (!remoteStreaming) document.body.classList.remove('chat-streaming');
     document.getElementById('new-chat-btn').disabled = false;
     document.querySelector('.chat-sidebar').classList.remove('streaming-locked');
     updateInputState();

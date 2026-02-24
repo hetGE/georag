@@ -1,4 +1,5 @@
 """Chat endpoint with SSE streaming."""
+import asyncio
 import json
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -14,6 +15,11 @@ from backend.config import MAX_CONTEXT_CHUNKS, CONVERSATION_HISTORY_TURNS
 
 router = APIRouter(tags=["chat"])
 
+_chat_streaming = False
+_chat_conversation_id = None
+_chat_listeners: list[asyncio.Queue] = []
+_chat_cancel = False
+
 
 def build_context_prompt(chunks: list[dict]) -> str:
     if not chunks:
@@ -27,8 +33,30 @@ def build_context_prompt(chunks: list[dict]) -> str:
     return "\n\n---\n\n".join(context_parts)
 
 
+@router.get("/chat/streaming")
+async def chat_streaming_status():
+    return {"streaming": _chat_streaming, "conversation_id": _chat_conversation_id}
+
+
+@router.post("/chat/stop")
+async def chat_stop():
+    global _chat_cancel
+    if not _chat_streaming:
+        return {"ok": False, "reason": "not_streaming"}
+    _chat_cancel = True
+    return {"ok": True}
+
+
 @router.post("/chat")
 async def chat(request: ChatRequest, db: Session = Depends(get_db)):
+    global _chat_streaming, _chat_conversation_id, _chat_cancel
+    if _chat_streaming:
+        return EventSourceResponse(
+            iter([{"event": "error", "data": json.dumps({"error": "Another chat response is already in progress."})}])
+        )
+    _chat_streaming = True
+    _chat_cancel = False
+
     # Get or create conversation
     if request.conversation_id:
         conversation = db.get(Conversation, request.conversation_id)
@@ -98,35 +126,81 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         db.commit()
 
     conv_id = conversation.id
+    _chat_conversation_id = conv_id
 
     async def event_generator():
-        full_response = []
+        global _chat_streaming, _chat_conversation_id, _chat_cancel
         try:
-            async for token in stream_chat_response(llm_messages):
-                full_response.append(token)
-                yield {"event": "token", "data": json.dumps({"token": token})}
-        except Exception as e:
-            yield {"event": "error", "data": json.dumps({"error": str(e)})}
-            return
+            full_response = []
+            try:
+                async for token in stream_chat_response(llm_messages):
+                    if _chat_cancel:
+                        break
+                    full_response.append(token)
+                    yield {"event": "token", "data": json.dumps({"token": token})}
+                    # Push to mirror listeners
+                    token_evt = {"event": "token", "data": json.dumps({"token": token})}
+                    for q in _chat_listeners:
+                        q.put_nowait(token_evt)
+            except Exception as e:
+                yield {"event": "error", "data": json.dumps({"error": str(e)})}
+                error_evt = {"event": "error", "data": json.dumps({"error": str(e)})}
+                for q in _chat_listeners:
+                    q.put_nowait(error_evt)
+                return
 
-        # Save assistant message
-        assistant_content = "".join(full_response)
-        session = db
-        assistant_msg = Message(
-            conversation_id=conv_id,
-            role="assistant",
-            content=assistant_content,
-            sources=sources,
-        )
-        session.add(assistant_msg)
-        session.commit()
+            # Save assistant message
+            assistant_content = "".join(full_response)
+            session = db
+            assistant_msg = Message(
+                conversation_id=conv_id,
+                role="assistant",
+                content=assistant_content,
+                sources=sources,
+            )
+            session.add(assistant_msg)
+            session.commit()
 
-        yield {
-            "event": "done",
-            "data": json.dumps({
-                "conversation_id": conv_id,
-                "sources": sources,
-            }),
-        }
+            done_data = {
+                "event": "done",
+                "data": json.dumps({
+                    "conversation_id": conv_id,
+                    "sources": sources,
+                }),
+            }
+            yield done_data
+            # Push done to mirror listeners
+            for q in _chat_listeners:
+                q.put_nowait(done_data)
+        finally:
+            _chat_streaming = False
+            _chat_conversation_id = None
+            _chat_cancel = False
 
     return EventSourceResponse(event_generator())
+
+
+@router.get("/chat/stream-mirror")
+async def chat_stream_mirror():
+    """SSE endpoint for mirroring an active stream to other tabs."""
+    if not _chat_streaming:
+        # Nothing is streaming — return an immediate done so the client closes cleanly
+        async def empty():
+            yield {"event": "done", "data": json.dumps({"conversation_id": None, "sources": []})}
+        return EventSourceResponse(empty())
+
+    queue: asyncio.Queue = asyncio.Queue()
+    _chat_listeners.append(queue)
+
+    async def mirror_generator():
+        try:
+            while True:
+                evt = await queue.get()
+                yield evt
+                if evt.get("event") == "done" or evt.get("event") == "error":
+                    break
+        finally:
+            if queue in _chat_listeners:
+                _chat_listeners.remove(queue)
+
+    return EventSourceResponse(mirror_generator())
