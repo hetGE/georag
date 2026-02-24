@@ -2,7 +2,7 @@
 import pdfplumber
 
 
-async def extract_pdf(file_path: str) -> str:
+def extract_pdf(file_path: str) -> str:
     """Extract text from a PDF file."""
     text_parts = []
     try:

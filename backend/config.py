@@ -25,7 +25,7 @@ CHAT_URL = f"{LM_STUDIO_BASE_URL}/v1/chat/completions"
 # Embedding settings
 EMBEDDING_MODEL = "text-embedding-nomic-embed-text-v1.5"
 EMBEDDING_DIM = 768
-EMBEDDING_BATCH_SIZE = 32
+EMBEDDING_BATCH_SIZE = 128
 
 # Chat model
 CHAT_MODEL = "qwen3-vl-30b"

@@ -3,7 +3,7 @@ from pathlib import Path
 import re
 
 
-async def extract_text(file_path: str) -> str:
+def extract_text(file_path: str) -> str:
     """Extract text from plain text files, HTML, RTF, CSV, Markdown."""
     path = Path(file_path)
 

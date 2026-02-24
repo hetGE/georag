@@ -21,12 +21,11 @@ def get_or_create_collection(tag_name: str):
 
 def add_chunks(tag_name: str, ids: list[str], embeddings: list[list[float]],
                documents: list[str], metadatas: list[dict]):
-    """Add chunks to a tag's collection."""
+    """Add chunks to a tag's collection using upsert for idempotent reprocessing."""
     collection = get_or_create_collection(tag_name)
-    # ChromaDB has a batch limit, so we chunk the inserts
-    batch_size = 100
+    batch_size = 5000
     for i in range(0, len(ids), batch_size):
-        collection.add(
+        collection.upsert(
             ids=ids[i:i + batch_size],
             embeddings=embeddings[i:i + batch_size],
             documents=documents[i:i + batch_size],

@@ -2,7 +2,7 @@
 from docx import Document
 
 
-async def extract_docx(file_path: str) -> str:
+def extract_docx(file_path: str) -> str:
     """Extract text from a .docx file."""
     try:
         doc = Document(file_path)

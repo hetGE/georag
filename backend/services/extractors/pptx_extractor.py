@@ -2,7 +2,7 @@
 from pptx import Presentation
 
 
-async def extract_pptx(file_path: str) -> str:
+def extract_pptx(file_path: str) -> str:
     """Extract text from a .pptx file."""
     try:
         prs = Presentation(file_path)

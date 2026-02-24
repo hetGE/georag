@@ -1,4 +1,4 @@
-"""Orchestrates extract -> chunk -> embed -> store pipeline."""
+"""Orchestrates extract -> chunk -> embed -> store pipeline with concurrency."""
 import asyncio
 import traceback
 from pathlib import Path
@@ -9,7 +9,7 @@ from backend.models.schemas import File, Tag, FileTag
 from backend.services.chunker import chunk_text
 from backend.services.embedding_client import embed_batch
 from backend.services.vector_store import add_chunks
-from backend.services.tagger import tag_by_folder, tag_by_llm
+from backend.services.tagger import tag_by_heuristic, tag_by_llm, tag_batch_by_llm
 from backend.services.extractors.pdf_extractor import extract_pdf
 from backend.services.extractors.docx_extractor import extract_docx
 from backend.services.extractors.xlsx_extractor import extract_xlsx
@@ -43,6 +43,12 @@ EXTRACTOR_MAP = {
     "dxf": None,
 }
 
+# Concurrency controls
+_llm_semaphore = asyncio.Semaphore(1)  # LM Studio serves one model request at a time
+_db_lock = asyncio.Lock()
+
+BATCH_SIZE = 10  # Files processed concurrently & LLM batch size
+
 
 class DocumentProcessor:
     def __init__(self):
@@ -58,7 +64,7 @@ class DocumentProcessor:
         self._stop_flag = True
 
     async def run(self, tag_names: list[str] = None, file_ids: list[int] = None, reprocess: bool = False):
-        """Run the processing pipeline."""
+        """Run the processing pipeline with concurrent file processing."""
         self.is_running = True
         self._stop_flag = False
         self.processed_files = 0
@@ -78,19 +84,106 @@ class DocumentProcessor:
             files = query.all()
             self.total_files = len(files)
 
-            for file_record in files:
+            # Process files in batches of BATCH_SIZE
+            for batch_start in range(0, len(files), BATCH_SIZE):
                 if self._stop_flag:
                     break
 
-                self.current_file = file_record.filename
-                try:
-                    await self._process_file(file_record, db, tag_names)
-                    self.processed_files += 1
-                except Exception as e:
-                    self.failed_files += 1
-                    self.errors.append(f"{file_record.filename}: {str(e)}")
-                    file_record.scan_status = "failed"
-                    db.commit()
+                batch = files[batch_start:batch_start + BATCH_SIZE]
+
+                # Phase 1: Extract text concurrently for the batch
+                extraction_results = await asyncio.gather(
+                    *[self._extract_file(f) for f in batch],
+                    return_exceptions=True,
+                )
+
+                # Collect files that need LLM tagging
+                llm_tagging_queue = []  # (file_record, text, index_in_batch)
+                file_data = []  # (file_record, text, file_tags_or_None)
+
+                for i, (file_record, result) in enumerate(zip(batch, extraction_results)):
+                    if isinstance(result, Exception):
+                        self.failed_files += 1
+                        self.errors.append(f"{file_record.filename}: {result}")
+                        async with _db_lock:
+                            file_record.scan_status = "failed"
+                            db.commit()
+                        continue
+
+                    text, was_skipped = result
+                    if was_skipped:
+                        async with _db_lock:
+                            file_record.scan_status = "skipped"
+                            db.commit()
+                        self.processed_files += 1
+                        continue
+
+                    # Determine tags
+                    if tag_names:
+                        file_tags = [(t, 1.0) for t in tag_names]
+                    else:
+                        file_tags = tag_by_heuristic(file_record.relative_path, file_record.filename)
+
+                    if file_tags:
+                        file_data.append((file_record, text, file_tags))
+                    elif text:
+                        # Needs LLM tagging
+                        llm_tagging_queue.append((file_record, text))
+                        file_data.append((file_record, text, None))  # placeholder
+                    else:
+                        file_data.append((file_record, text, []))
+
+                # Phase 2: Batch LLM tagging for files that need it
+                if llm_tagging_queue:
+                    async with _llm_semaphore:
+                        try:
+                            files_info = [
+                                {"filename": fr.filename, "text_preview": txt[:2000]}
+                                for fr, txt in llm_tagging_queue
+                            ]
+                            llm_results = await tag_batch_by_llm(files_info)
+
+                            # Update file_data with LLM results
+                            for fr, txt in llm_tagging_queue:
+                                tags = llm_results.get(fr.filename, [])
+                                # Find and update the placeholder in file_data
+                                for j, (fd_rec, fd_txt, fd_tags) in enumerate(file_data):
+                                    if fd_rec.id == fr.id and fd_tags is None:
+                                        file_data[j] = (fd_rec, fd_txt, tags)
+                                        break
+                        except Exception:
+                            # Fallback: try individual LLM tagging
+                            for fr, txt in llm_tagging_queue:
+                                try:
+                                    async with _llm_semaphore:
+                                        tags = await tag_by_llm(txt[:2000], fr.filename)
+                                except Exception:
+                                    tags = []
+                                for j, (fd_rec, fd_txt, fd_tags) in enumerate(file_data):
+                                    if fd_rec.id == fr.id and fd_tags is None:
+                                        file_data[j] = (fd_rec, fd_txt, tags)
+                                        break
+
+                # Phase 3: Chunk, embed, store concurrently
+                store_tasks = []
+                for file_record, text, file_tags in file_data:
+                    if file_tags is None:
+                        file_tags = []
+                    store_tasks.append(
+                        self._chunk_embed_store(file_record, text, file_tags, db)
+                    )
+
+                results = await asyncio.gather(*store_tasks, return_exceptions=True)
+                for file_record_data, result in zip(file_data, results):
+                    file_record = file_record_data[0]
+                    if isinstance(result, Exception):
+                        self.failed_files += 1
+                        self.errors.append(f"{file_record.filename}: {result}")
+                        async with _db_lock:
+                            file_record.scan_status = "failed"
+                            db.commit()
+                    else:
+                        self.processed_files += 1
 
         except Exception as e:
             self.errors.append(f"Pipeline error: {str(e)}")
@@ -99,69 +192,64 @@ class DocumentProcessor:
             self.current_file = None
             db.close()
 
-    async def _process_file(self, file_record: File, db, tag_names: list[str] = None):
-        """Process a single file: extract, chunk, embed, store."""
+    async def _extract_file(self, file_record: File) -> tuple[str, bool]:
+        """Extract text from a file. Returns (text, was_skipped).
+        Runs CPU-bound extractors in a thread pool."""
         ext = file_record.extension
         extractor = EXTRACTOR_MAP.get(ext)
 
         full_path = ENGINEERING_ROOT / file_record.relative_path
 
         if not full_path.exists():
-            file_record.scan_status = "skipped"
-            db.commit()
-            return
+            return ("", True)
 
-        # Extract text
         if extractor is None:
             # Filename-only indexing for unsupported formats
             text = f"File: {file_record.filename}\nPath: {file_record.relative_path}"
-            file_record.scan_status = "processed"
-        else:
-            text = await extractor(str(full_path))
-            if not text or not text.strip():
-                file_record.scan_status = "skipped"
-                db.commit()
-                return
+            return (text, False)
 
+        # Dispatch: async extractors (image) stay async, sync ones go to thread pool
+        if asyncio.iscoroutinefunction(extractor):
+            async with _llm_semaphore:
+                text = await extractor(str(full_path))
+        else:
+            text = await asyncio.to_thread(extractor, str(full_path))
+
+        if not text or not text.strip():
+            return ("", True)
+
+        return (text, False)
+
+    async def _chunk_embed_store(self, file_record: File, text: str,
+                                  file_tags: list[tuple[str, float]], db):
+        """Chunk text, embed, save tags, store in vector DB."""
+        self.current_file = file_record.filename
         file_record.extracted_text_preview = text[:500]
 
-        # Auto-tag if no specific tags provided
-        file_tags = []
-        if tag_names:
-            file_tags = [(t, 1.0) for t in tag_names]
-        else:
-            # Folder heuristic
-            file_tags = tag_by_folder(file_record.relative_path)
-
-            # LLM tagging if no folder hints found
-            if not file_tags and text:
-                try:
-                    file_tags = await tag_by_llm(text[:2000], file_record.filename)
-                except Exception:
-                    pass
-
         # Save tags to database
-        for tag_name, confidence in file_tags:
-            tag = db.query(Tag).filter(Tag.name == tag_name).first()
-            if not tag:
-                continue
-            existing = db.query(FileTag).filter(
-                FileTag.file_id == file_record.id,
-                FileTag.tag_id == tag.id
-            ).first()
-            if not existing:
-                source = "folder_hint" if confidence == 0.7 else "auto"
-                db.add(FileTag(
-                    file_id=file_record.id, tag_id=tag.id,
-                    source=source, confidence=confidence,
-                ))
-                tag.file_count = db.query(FileTag).filter(FileTag.tag_id == tag.id).count() + 1
+        async with _db_lock:
+            for tag_name, confidence in file_tags:
+                tag = db.query(Tag).filter(Tag.name == tag_name).first()
+                if not tag:
+                    continue
+                existing = db.query(FileTag).filter(
+                    FileTag.file_id == file_record.id,
+                    FileTag.tag_id == tag.id
+                ).first()
+                if not existing:
+                    source = "folder_hint" if confidence == 0.7 else "auto"
+                    db.add(FileTag(
+                        file_id=file_record.id, tag_id=tag.id,
+                        source=source, confidence=confidence,
+                    ))
+                    tag.file_count = db.query(FileTag).filter(FileTag.tag_id == tag.id).count() + 1
 
-        if file_tags:
-            file_record.auto_tagged = 1
-            file_record.auto_tag_confidence = max(c for _, c in file_tags)
+            if file_tags:
+                file_record.auto_tagged = 1
+                file_record.auto_tag_confidence = max(c for _, c in file_tags)
 
         # Chunk and embed
+        ext = file_record.extension
         metadata = {
             "file_path": file_record.relative_path,
             "filename": file_record.filename,
@@ -172,14 +260,13 @@ class DocumentProcessor:
         file_record.chunk_count = len(chunks)
 
         if chunks and file_tags:
-            # Embed all chunks
             chunk_texts = [c["text"] for c in chunks]
             try:
                 embeddings = await embed_batch(chunk_texts)
             except Exception as e:
-                # Store without embeddings if embedding fails
-                file_record.scan_status = "processed"
-                db.commit()
+                async with _db_lock:
+                    file_record.scan_status = "processed"
+                    db.commit()
                 raise Exception(f"Embedding failed: {e}")
 
             # Store in each tag's collection
@@ -188,5 +275,6 @@ class DocumentProcessor:
                 metadatas = [c["metadata"] for c in chunks]
                 add_chunks(tag_name, ids, embeddings, chunk_texts, metadatas)
 
-        file_record.scan_status = "processed"
-        db.commit()
+        async with _db_lock:
+            file_record.scan_status = "processed"
+            db.commit()

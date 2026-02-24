@@ -2,7 +2,7 @@
 from openpyxl import load_workbook
 
 
-async def extract_xlsx(file_path: str) -> str:
+def extract_xlsx(file_path: str) -> str:
     """Extract text from an Excel file."""
     try:
         wb = load_workbook(file_path, read_only=True, data_only=True)
