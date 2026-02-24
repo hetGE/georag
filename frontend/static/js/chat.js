@@ -1,4 +1,4 @@
-// GeoRAG Chat Interface
+// geoRAG Chat Interface
 
 let currentConversationId = null;
 let selectedTags = new Set();
@@ -117,7 +117,7 @@ function newChat() {
     currentConversationId = null;
     document.getElementById('chat-messages').innerHTML = `
         <div class="chat-welcome">
-            <h2>GeoRAG</h2>
+            <h2>geoRAG</h2>
             <p>Geotechnical Engineering RAG Assistant</p>
             <p class="secondary">Select tags above to focus your search, then ask a question.</p>
         </div>
@@ -315,7 +315,7 @@ function renderOnboardingStep(status) {
 
 function renderScanStep(el) {
     el.innerHTML = `
-        <h3 class="onboarding-title">Welcome to GeoRAG</h3>
+        <h3 class="onboarding-title">Welcome to geoRAG</h3>
         <p class="onboarding-description">
             Let's index your geotechnical document library. First, we'll scan your Engineering folder to discover all documents.
         </p>

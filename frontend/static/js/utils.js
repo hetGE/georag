@@ -1,4 +1,4 @@
-// Utility functions for GeoRAG
+// Utility functions for geoRAG
 
 function formatBytes(bytes) {
     if (!bytes || bytes === 0) return '0 B';

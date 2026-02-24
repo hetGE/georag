@@ -1,4 +1,4 @@
-// GeoRAG Processing Status Polling
+// geoRAG Processing Status Polling
 
 let pollInterval = null;
 

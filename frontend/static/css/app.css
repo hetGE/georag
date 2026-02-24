@@ -1,14 +1,15 @@
-/* GeoRAG Custom Styles */
+/* geoRAG Custom Styles */
 
 :root {
-    --brand-color: #2c3e50;
-    --accent-color: #3498db;
+    --brand-color: #14bf98;
+    --accent-color: #0ea17e;
     --sidebar-width: 280px;
     --chat-max-width: 900px;
 }
 
 /* Page-level flex layout */
 body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
     display: flex;
     flex-direction: column;
     height: 100dvh;
@@ -33,9 +34,17 @@ main.container-fluid:has(.chat-layout) {
 
 /* Navigation */
 .nav-brand {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
     color: var(--brand-color) !important;
     text-decoration: none;
     font-size: 1.25rem;
+}
+
+.nav-logo {
+    height: 24px;
+    width: auto;
 }
 
 nav a.active {

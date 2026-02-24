@@ -1,4 +1,4 @@
-// GeoRAG Documents Interface
+// geoRAG Documents Interface
 
 let currentPage = 1;
 let allTagsList = [];
