@@ -5,6 +5,18 @@
     --accent-color: #0ea17e;
     --sidebar-width: 280px;
     --chat-max-width: 900px;
+
+    /* Override PicoCSS blue with brand green */
+    --pico-primary: #14bf98;
+    --pico-primary-background: #14bf98;
+    --pico-primary-border: var(--pico-primary-background);
+    --pico-primary-focus: rgba(20, 191, 152, 0.25);
+    --pico-primary-hover: #0ea17e;
+    --pico-primary-hover-background: #11b08b;
+    --pico-primary-hover-border: var(--pico-primary-hover-background);
+    --pico-primary-hover-underline: var(--pico-primary-hover);
+    --pico-primary-inverse: #fff;
+    --pico-primary-underline: rgba(20, 191, 152, 0.5);
 }
 
 /* Page-level flex layout */
@@ -306,12 +318,13 @@ nav a.active {
 }
 
 .search-input {
-    flex: 1;
+    flex: 1 1 50%;
     min-width: 200px;
 }
 
 .search-row select {
-    max-width: 160px;
+    flex: 1 1 0;
+    min-width: 0;
 }
 
 .action-row {
@@ -330,27 +343,13 @@ nav a.active {
 .processing-status {
     font-size: 0.85rem;
     color: var(--pico-muted-color);
+    white-space: nowrap;
 }
 
-/* Progress Bar */
-.progress-container {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    margin-bottom: 1rem;
-    padding: 0.5rem;
-    background: var(--pico-card-background-color);
-    border-radius: 0.375rem;
-}
-
-.progress-container progress {
+.action-row progress {
     flex: 1;
     margin-bottom: 0;
-}
-
-.btn-sm {
-    font-size: 0.8rem !important;
-    padding: 0.25rem 0.5rem !important;
+    min-width: 120px;
 }
 
 /* File Table */
@@ -571,8 +570,7 @@ nav a.active {
     }
 
     .search-row select {
-        max-width: none;
-        flex: 1;
+        flex: 1 1 100%;
     }
 }
 

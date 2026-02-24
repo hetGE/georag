@@ -38,12 +38,23 @@ async def stop_processing():
 
 
 @router.get("/processing/status")
-async def processing_status():
+async def processing_status(db: Session = Depends(get_db)):
+    status_counts = dict(
+        db.query(File.scan_status, func.count(File.id))
+        .group_by(File.scan_status)
+        .all()
+    )
+    total_files = sum(status_counts.values())
+    processed_files = status_counts.get("processed", 0)
+    failed_files = status_counts.get("failed", 0)
+    skipped_files = status_counts.get("skipped", 0)
+
     return {
         "is_running": _processor.is_running,
-        "total_files": _processor.total_files,
-        "processed_files": _processor.processed_files,
-        "failed_files": _processor.failed_files,
+        "total_files": total_files,
+        "processed_files": processed_files,
+        "failed_files": failed_files,
+        "skipped_files": skipped_files,
         "current_file": _processor.current_file,
         "errors": _processor.errors[-20:],  # Last 20 errors
     }
@@ -69,6 +80,7 @@ def onboarding_status(db: Session = Depends(get_db)):
     new_files = status_counts.get("new", 0) + status_counts.get("failed", 0)
     processed_files = status_counts.get("processed", 0)
     failed_files = status_counts.get("failed", 0)
+    skipped_files = status_counts.get("skipped", 0)
 
     # Extension breakdown for display
     by_extension = dict(
@@ -96,6 +108,7 @@ def onboarding_status(db: Session = Depends(get_db)):
         "new_files": new_files,
         "processed_files": processed_files,
         "failed_files": failed_files,
+        "skipped_files": skipped_files,
         "is_processing": _processor.is_running,
         "dismissed": dismissed,
         "by_extension": by_extension,

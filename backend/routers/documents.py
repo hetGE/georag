@@ -121,6 +121,8 @@ def add_tag_to_file(file_id: int, tag_name: str, db: Session = Depends(get_db)):
 
     db.add(FileTag(file_id=file_id, tag_id=tag.id, source="manual"))
     tag.file_count = db.query(FileTag).filter(FileTag.tag_id == tag.id).count() + 1
+    if file.scan_status != "processed":
+        file.scan_status = "processed"
     db.commit()
     return {"status": "tagged"}
 

@@ -37,19 +37,14 @@
             </select>
         </div>
         <div class="action-row">
-            <button id="scan-btn" class="outline">Scan Files</button>
-            <button id="process-btn" class="outline">Process Selected</button>
-            <button id="autotag-btn" class="outline">Auto-Tag Selected</button>
-            <button id="process-new-btn" class="outline">Process New Files</button>
-            <span id="processing-status" class="processing-status"></span>
+            <button id="scan-btn" class="outline" style="display:none;">Scan Files</button>
+            <button id="process-btn" class="outline" style="display:none;">Process Selected</button>
+            <button id="autotag-btn" class="outline" style="display:none;">Auto-Tag Selected</button>
+            <button id="process-new-btn" class="outline" style="display:none;">Process New Files</button>
+            <span id="processing-status" class="processing-status">Checking status...</span>
+            <progress id="progress-bar" value="0" max="100" style="display:none;"></progress>
+            <button id="stop-btn" class="outline secondary" style="display:none;">Stop</button>
         </div>
-    </div>
-
-    <!-- Processing Progress -->
-    <div id="progress-bar-container" class="progress-container" style="display:none;">
-        <progress id="progress-bar" value="0" max="100"></progress>
-        <span id="progress-text">0 / 0</span>
-        <button id="stop-processing-btn" class="outline secondary btn-sm">Stop</button>
     </div>
 
     <!-- File Table -->

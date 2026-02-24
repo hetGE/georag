@@ -399,7 +399,7 @@ function renderProgressStep(el, status) {
             <progress value="${pct}" max="100"></progress>
             <span class="onboarding-progress-text">${processed.toLocaleString()} / ${total.toLocaleString()} files (${pct}%)</span>
         </div>
-        ${status.failed_files > 0 ? `<p class="onboarding-stats">${status.failed_files} failed</p>` : ''}
+        ${status.failed_files > 0 || status.skipped_files > 0 ? `<p class="onboarding-stats">${status.failed_files > 0 ? `${status.failed_files} failed` : ''}${status.failed_files > 0 && status.skipped_files > 0 ? ' · ' : ''}${status.skipped_files > 0 ? `${status.skipped_files} skipped` : ''}</p>` : ''}
         <p class="onboarding-description" style="font-size:0.85rem;">You can close this and come back — progress is saved automatically.</p>
         <div class="onboarding-actions">
             <button id="onboarding-stop-btn" class="outline secondary">Stop</button>

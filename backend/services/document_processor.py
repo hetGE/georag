@@ -56,6 +56,7 @@ class DocumentProcessor:
         self.total_files = 0
         self.processed_files = 0
         self.failed_files = 0
+        self.skipped_files = 0
         self.current_file = None
         self.errors = []
         self._stop_flag = False
@@ -69,6 +70,7 @@ class DocumentProcessor:
         self._stop_flag = False
         self.processed_files = 0
         self.failed_files = 0
+        self.skipped_files = 0
         self.errors = []
         self.current_file = None
 
@@ -115,6 +117,7 @@ class DocumentProcessor:
                         async with _db_lock:
                             file_record.scan_status = "skipped"
                             db.commit()
+                        self.skipped_files += 1
                         self.processed_files += 1
                         continue
 

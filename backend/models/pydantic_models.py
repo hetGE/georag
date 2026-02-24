@@ -77,5 +77,6 @@ class ProcessingStatus(BaseModel):
     total_files: int = 0
     processed_files: int = 0
     failed_files: int = 0
+    skipped_files: int = 0
     current_file: Optional[str] = None
     errors: list[str] = []
