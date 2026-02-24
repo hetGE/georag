@@ -429,25 +429,93 @@ nav a.active {
 }
 
 /* Tag Modal */
-.tag-modal-list {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-}
-
-.tag-modal-item {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 0.4rem 0.6rem;
-    border-radius: 0.375rem;
-    border: 1px solid var(--pico-muted-border-color);
-}
-
-.tag-modal-item button {
-    margin-bottom: 0;
+.tag-modal-section-label {
     font-size: 0.75rem;
-    padding: 0.2rem 0.5rem;
+    font-weight: 600;
+    color: var(--pico-muted-color);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.375rem;
+}
+
+.tag-modal-pills {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    min-height: 2rem;
+    max-height: 200px;
+    overflow-y: auto;
+    overflow-x: visible;
+    padding: 0.25rem;
+}
+
+.tag-modal-divider {
+    border: none;
+    border-top: 1px dashed var(--pico-muted-border-color);
+    margin: 0.75rem 0;
+}
+
+.tag-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.3rem 0.7rem;
+    border-radius: 1rem;
+    font-size: 0.8rem;
+    font-weight: 500;
+    cursor: pointer;
+    border: 2px solid;
+    transition: opacity 0.15s, transform 0.1s;
+    margin-bottom: 0;
+    line-height: 1.2;
+}
+
+.tag-pill:hover {
+    opacity: 0.85;
+    transform: scale(1.03);
+}
+
+.tag-pill.assigned {
+    color: #fff;
+}
+
+.tag-pill.available {
+    background: transparent;
+}
+
+/* Pill pop-in animation for moved tags */
+.tag-pill.pill-pop-in {
+    animation: pill-pop-in 0.3s ease-out;
+}
+
+@keyframes pill-pop-in {
+    0% {
+        opacity: 0;
+        transform: scale(0.5);
+    }
+    70% {
+        transform: scale(1.08);
+    }
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+}
+
+.tag-modal-empty {
+    font-size: 0.8rem;
+    color: var(--pico-muted-color);
+    font-style: italic;
+    padding: 0.25rem 0;
+}
+
+#tag-modal article {
+    overflow: visible;
+}
+
+#tag-modal-content {
+    overflow: visible;
+    padding: 0 0.5rem;
 }
 
 /* Tag Modal - Open File */

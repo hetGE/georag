@@ -206,8 +206,6 @@ async function autotagSelected() {
 
 async function openTagModal(fileId, filename) {
     const modal = document.getElementById('tag-modal');
-    document.getElementById('tag-modal-filename').textContent = filename;
-
     const content = document.getElementById('tag-modal-content');
     content.innerHTML = '<p>Loading tags...</p>';
     modal.showModal();
@@ -217,49 +215,66 @@ async function openTagModal(fileId, filename) {
     const file = fileData.files?.[0];
     const currentTags = new Set((file?.tags || []).map(t => t.name));
 
+    renderTagModalContent(fileId, filename, file, currentTags);
+}
+
+function renderTagModalContent(fileId, filename, file, currentTags, movedTag) {
+    const content = document.getElementById('tag-modal-content');
+
+    const assignedTags = allTagsList.filter(t => currentTags.has(t.name));
+    const availableTags = allTagsList.filter(t => !currentTags.has(t.name));
+
     content.innerHTML = `
         <div class="tag-modal-open-file">
             <a href="/api/documents/${fileId}/open" target="_blank" class="open-file-btn outline">
                 Open File
             </a>
-            <span class="open-file-path" title="${escapeHtml(file?.relative_path || '')}">${truncatePath(file?.parent_directory || '')}/${escapeHtml(filename)}</span>
+            <span class="open-file-path" title="${escapeHtml(file?.relative_path || '')}">${escapeHtml(filename)}</span>
         </div>
-        <div class="tag-modal-list"></div>`;
-    const list = content.querySelector('.tag-modal-list');
+        <div class="tag-modal-section-label">Assigned</div>
+        <div class="tag-modal-pills" id="assigned-pills"></div>
+        <hr class="tag-modal-divider">
+        <div class="tag-modal-section-label">Available</div>
+        <div class="tag-modal-pills" id="available-pills"></div>`;
 
-    allTagsList.forEach(tag => {
-        const hasTag = currentTags.has(tag.name);
-        const item = document.createElement('div');
-        item.className = 'tag-modal-item';
-        item.innerHTML = `
-            <span>
-                <span class="tag-mini" style="background:${tag.color}">${tag.display_name}</span>
-                <small style="margin-left:0.5rem;color:var(--pico-muted-color)">${tag.description || ''}</small>
-            </span>
-            <button class="${hasTag ? 'secondary outline' : 'outline'}" data-tag="${tag.name}" data-has="${hasTag}">
-                ${hasTag ? 'Remove' : 'Add'}
-            </button>
-        `;
+    const assignedContainer = content.querySelector('#assigned-pills');
+    const availableContainer = content.querySelector('#available-pills');
 
-        item.querySelector('button').addEventListener('click', async (e) => {
-            const btn = e.target;
-            const tagName = btn.dataset.tag;
-            const has = btn.dataset.has === 'true';
-
-            if (has) {
-                await apiDelete(`/api/documents/${fileId}/tags/${tagName}`);
-                btn.textContent = 'Add';
-                btn.className = 'outline';
-                btn.dataset.has = 'false';
-            } else {
-                await apiPost(`/api/documents/${fileId}/tags/${tagName}`, {});
-                btn.textContent = 'Remove';
-                btn.className = 'secondary outline';
-                btn.dataset.has = 'true';
-            }
-            loadDocuments();
+    if (!assignedTags.length) {
+        assignedContainer.innerHTML = '<span class="tag-modal-empty">(none)</span>';
+    } else {
+        assignedTags.forEach(tag => {
+            const pill = document.createElement('button');
+            pill.className = 'tag-pill assigned' + (tag.name === movedTag ? ' pill-pop-in' : '');
+            pill.title = tag.description || '';
+            pill.style.backgroundColor = tag.color;
+            pill.style.borderColor = tag.color;
+            pill.textContent = `✕ ${tag.display_name}`;
+            pill.addEventListener('click', () => {
+                currentTags.delete(tag.name);
+                renderTagModalContent(fileId, filename, file, currentTags, tag.name);
+                apiDelete(`/api/documents/${fileId}/tags/${tag.name}`).then(() => loadDocuments());
+            });
+            assignedContainer.appendChild(pill);
         });
+    }
 
-        list.appendChild(item);
-    });
+    if (!availableTags.length) {
+        availableContainer.innerHTML = '<span class="tag-modal-empty">(none)</span>';
+    } else {
+        availableTags.forEach(tag => {
+            const pill = document.createElement('button');
+            pill.className = 'tag-pill available' + (tag.name === movedTag ? ' pill-pop-in' : '');
+            pill.title = tag.description || '';
+            pill.style.borderColor = tag.color;
+            pill.style.color = tag.color;
+            pill.textContent = `+ ${tag.display_name}`;
+            pill.addEventListener('click', () => {
+                currentTags.add(tag.name);
+                renderTagModalContent(fileId, filename, file, currentTags, tag.name);
+                apiPost(`/api/documents/${fileId}/tags/${tag.name}`, {}).then(() => loadDocuments());
+            });
+            availableContainer.appendChild(pill);
+        });
+    }
 }
