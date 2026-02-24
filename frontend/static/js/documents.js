@@ -22,6 +22,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('scan-btn').addEventListener('click', scanFiles);
     document.getElementById('process-btn').addEventListener('click', processSelected);
     document.getElementById('autotag-btn').addEventListener('click', autotagSelected);
+    document.getElementById('process-new-btn').addEventListener('click', processNewFiles);
     document.getElementById('select-all').addEventListener('change', toggleSelectAll);
 
     // Close modal
@@ -176,6 +177,18 @@ async function processSelected() {
     // processing.js will handle progress polling
 }
 
+async function processNewFiles() {
+    const btn = document.getElementById('process-new-btn');
+    btn.disabled = true;
+    btn.setAttribute('aria-busy', 'true');
+    const result = await apiPost('/api/processing/start', {});
+    btn.disabled = false;
+    btn.setAttribute('aria-busy', 'false');
+    if (result.error) {
+        alert(result.error);
+    }
+}
+
 async function autotagSelected() {
     const ids = Array.from(selectedFileIds);
     if (!ids.length) {
@@ -200,7 +213,14 @@ async function openTagModal(fileId, filename) {
     const file = fileData.files?.[0];
     const currentTags = new Set((file?.tags || []).map(t => t.name));
 
-    content.innerHTML = '<div class="tag-modal-list"></div>';
+    content.innerHTML = `
+        <div class="tag-modal-open-file">
+            <a href="/api/documents/${fileId}/open" target="_blank" class="open-file-btn outline">
+                Open File
+            </a>
+            <span class="open-file-path" title="${escapeHtml(file?.relative_path || '')}">${truncatePath(file?.parent_directory || '')}/${escapeHtml(filename)}</span>
+        </div>
+        <div class="tag-modal-list"></div>`;
     const list = content.querySelector('.tag-modal-list');
 
     allTagsList.forEach(tag => {

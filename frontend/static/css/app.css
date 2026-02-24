@@ -441,6 +441,45 @@ nav a.active {
     padding: 0.2rem 0.5rem;
 }
 
+/* Tag Modal - Open File */
+.tag-modal-open-file {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.5rem 0.6rem;
+    margin-bottom: 0.75rem;
+    border-radius: 0.375rem;
+    background: var(--pico-secondary-focus);
+}
+
+.open-file-btn {
+    display: inline-block;
+    margin-bottom: 0 !important;
+    font-size: 0.8rem !important;
+    padding: 0.25rem 0.75rem !important;
+    white-space: nowrap;
+    text-decoration: none;
+    border-radius: 0.25rem;
+    border: 1px solid var(--pico-primary);
+    color: var(--pico-primary);
+    cursor: pointer;
+}
+
+.open-file-btn:hover {
+    background: var(--pico-primary);
+    color: #fff;
+    text-decoration: none;
+}
+
+.open-file-path {
+    font-size: 0.75rem;
+    color: var(--pico-muted-color);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-family: monospace;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .chat-sidebar {
@@ -459,6 +498,62 @@ nav a.active {
         max-width: none;
         flex: 1;
     }
+}
+
+/* Onboarding Wizard */
+.onboarding {
+    margin: 0.5rem 0;
+    padding: 1.25rem 1.5rem;
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 0.5rem;
+    background: var(--pico-card-background-color);
+    flex-shrink: 0;
+}
+
+.onboarding-title {
+    margin: 0 0 0.5rem 0;
+    font-size: 1.15rem;
+    color: var(--brand-color);
+}
+
+.onboarding-description {
+    margin: 0 0 0.75rem 0;
+    color: var(--pico-muted-color);
+    font-size: 0.925rem;
+    line-height: 1.5;
+}
+
+.onboarding-stats {
+    margin: 0 0 0.75rem 0;
+    font-size: 0.85rem;
+    color: var(--pico-muted-color);
+}
+
+.onboarding-actions {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+.onboarding-actions button {
+    margin-bottom: 0;
+    width: auto;
+    padding: 0.4rem 1rem;
+    font-size: 0.875rem;
+}
+
+.onboarding-progress {
+    margin-bottom: 0.75rem;
+}
+
+.onboarding-progress progress {
+    width: 100%;
+    margin-bottom: 0.25rem;
+}
+
+.onboarding-progress-text {
+    font-size: 0.85rem;
+    color: var(--pico-muted-color);
 }
 
 /* Loading spinner */

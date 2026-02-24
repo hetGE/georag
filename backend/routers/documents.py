@@ -1,8 +1,10 @@
 """Document list, search, filter, pagination."""
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, HTTPException
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 
+from backend.config import ENGINEERING_ROOT
 from backend.models.database import get_db
 from backend.models.schemas import File, Tag, FileTag
 
@@ -82,6 +84,29 @@ def document_stats(db: Session = Depends(get_db)):
         .all()
     )
     return {"total": total, "by_status": by_status, "by_extension": by_ext}
+
+
+@router.get("/documents/{file_id}/open")
+def open_file(file_id: int, db: Session = Depends(get_db)):
+    """Serve a file for viewing/downloading."""
+    file = db.get(File, file_id)
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    full_path = ENGINEERING_ROOT / file.relative_path
+    if not full_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    # Security: ensure the resolved path is still under ENGINEERING_ROOT
+    resolved = full_path.resolve()
+    if not str(resolved).startswith(str(ENGINEERING_ROOT.resolve())):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    return FileResponse(
+        path=str(resolved),
+        filename=file.filename,
+        media_type=None,  # Let FastAPI auto-detect from extension
+    )
 
 
 @router.post("/documents/{file_id}/tags/{tag_name}")
