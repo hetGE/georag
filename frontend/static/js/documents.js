@@ -19,11 +19,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('tag-filter').addEventListener('change', () => { currentPage = 1; loadDocuments(); });
     document.getElementById('status-filter').addEventListener('change', () => { currentPage = 1; loadDocuments(); });
 
-    document.getElementById('scan-btn').addEventListener('click', scanFiles);
+    document.getElementById('select-all').addEventListener('change', toggleSelectAll);
     document.getElementById('process-btn').addEventListener('click', processSelected);
     document.getElementById('autotag-btn').addEventListener('click', autotagSelected);
-    document.getElementById('process-new-btn').addEventListener('click', processNewFiles);
-    document.getElementById('select-all').addEventListener('change', toggleSelectAll);
+
+    // Show action buttons once processing status is known
+    checkActionButtonVisibility();
 
     // Close modal
     document.querySelector('.close-modal')?.addEventListener('click', () => {
@@ -148,53 +149,13 @@ function toggleSelectAll(e) {
     });
 }
 
-async function scanFiles() {
-    const btn = document.getElementById('scan-btn');
-    btn.disabled = true;
-    btn.textContent = 'Scanning...';
-    btn.setAttribute('aria-busy', 'true');
-
-    try {
-        const result = await apiPost('/api/processing/scan');
-        const newFiles = result.files_new || 0;
-        const removed = result.files_removed || 0;
-        btn.textContent = `${result.files_found?.toLocaleString() || 0} files`
-            + (newFiles > 0 ? ` · ${newFiles} new` : '')
-            + (removed > 0 ? ` · ${removed} removed` : '');
-        await loadStats();
-        loadDocuments();
-    } catch (e) {
-        btn.textContent = 'Scan Failed';
-    }
-
-    btn.setAttribute('aria-busy', 'false');
-    setTimeout(() => {
-        btn.disabled = false;
-        btn.textContent = 'Scan Files';
-    }, 2000);
-}
-
 async function processSelected() {
     const ids = Array.from(selectedFileIds);
     if (!ids.length) {
         alert('Select files to process first');
         return;
     }
-
-    await apiPost('/api/processing/start', {file_ids: ids});
-    // processing.js will handle progress polling
-}
-
-async function processNewFiles() {
-    const btn = document.getElementById('process-new-btn');
-    btn.disabled = true;
-    btn.setAttribute('aria-busy', 'true');
-    const result = await apiPost('/api/processing/start', {});
-    btn.disabled = false;
-    btn.setAttribute('aria-busy', 'false');
-    if (result.error) {
-        alert(result.error);
-    }
+    await apiPost('/api/processing/start', { file_ids: ids });
 }
 
 async function autotagSelected() {
@@ -203,10 +164,24 @@ async function autotagSelected() {
         alert('Select files to auto-tag first');
         return;
     }
-
-    // Process with auto-tagging (no specific tags = auto-tag mode)
-    await apiPost('/api/processing/start', {file_ids: ids});
+    await apiPost('/api/processing/start', { file_ids: ids });
 }
+
+async function checkActionButtonVisibility() {
+    try {
+        const status = await apiGet('/api/processing/status');
+        const show = !status.is_running;
+        document.getElementById('process-btn').style.display = show ? '' : 'none';
+        document.getElementById('autotag-btn').style.display = show ? '' : 'none';
+    } catch {}
+}
+
+// Re-check visibility periodically (processing may start/stop)
+setInterval(checkActionButtonVisibility, 3000);
+
+// Expose globals for Library Panel cross-page communication
+window.getSelectedFileIds = () => Array.from(selectedFileIds);
+window.documentsRefresh = () => { loadStats(); loadDocuments(); };
 
 async function openTagModal(fileId, filename) {
     const modal = document.getElementById('tag-modal');

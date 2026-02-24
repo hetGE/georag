@@ -5,6 +5,7 @@
     --accent-color: #0ea17e;
     --sidebar-width: 280px;
     --chat-max-width: 900px;
+    --panel-width: 340px;
 }
 
 /* Override PicoCSS blue with brand green – must match [data-theme] specificity */
@@ -339,8 +340,20 @@ nav a.active {
 .search-row {
     display: flex;
     gap: 0.5rem;
-    margin-bottom: 0.75rem;
     flex-wrap: wrap;
+}
+
+.action-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    margin-top: 0.5rem;
+}
+
+.action-row button {
+    margin-bottom: 0;
+    font-size: 0.875rem;
+    padding: 0.4rem 0.8rem;
 }
 
 .search-row input,
@@ -356,31 +369,6 @@ nav a.active {
 .search-row select {
     flex: 1 1 0;
     min-width: 0;
-}
-
-.action-row {
-    display: flex;
-    gap: 0.5rem;
-    align-items: center;
-    flex-wrap: wrap;
-}
-
-.action-row button {
-    margin-bottom: 0;
-    font-size: 0.875rem;
-    padding: 0.4rem 0.8rem;
-}
-
-.processing-status {
-    font-size: 0.85rem;
-    color: var(--pico-muted-color);
-    white-space: nowrap;
-}
-
-.action-row progress {
-    flex: 1;
-    margin-bottom: 0;
-    min-width: 120px;
 }
 
 /* File Table */
@@ -605,62 +593,6 @@ nav a.active {
     }
 }
 
-/* Onboarding Wizard */
-.onboarding {
-    margin: 0.5rem 0;
-    padding: 1.25rem 1.5rem;
-    border: 1px solid var(--pico-muted-border-color);
-    border-radius: 0.5rem;
-    background: var(--pico-card-background-color);
-    flex-shrink: 0;
-}
-
-.onboarding-title {
-    margin: 0 0 0.5rem 0;
-    font-size: 1.15rem;
-    color: var(--brand-color);
-}
-
-.onboarding-description {
-    margin: 0 0 0.75rem 0;
-    color: var(--pico-muted-color);
-    font-size: 0.925rem;
-    line-height: 1.5;
-}
-
-.onboarding-stats {
-    margin: 0 0 0.75rem 0;
-    font-size: 0.85rem;
-    color: var(--pico-muted-color);
-}
-
-.onboarding-actions {
-    display: flex;
-    gap: 0.5rem;
-    align-items: center;
-}
-
-.onboarding-actions button {
-    margin-bottom: 0;
-    width: auto;
-    padding: 0.4rem 1rem;
-    font-size: 0.875rem;
-}
-
-.onboarding-progress {
-    margin-bottom: 0.75rem;
-}
-
-.onboarding-progress progress {
-    width: 100%;
-    margin-bottom: 0.25rem;
-}
-
-.onboarding-progress-text {
-    font-size: 0.85rem;
-    color: var(--pico-muted-color);
-}
-
 /* Loading spinner */
 .loading-dots::after {
     content: '';
@@ -684,4 +616,189 @@ nav a.active {
 .chat-sidebar::-webkit-scrollbar-thumb {
     background: var(--pico-muted-border-color);
     border-radius: 3px;
+}
+
+/* ===== Library Panel ===== */
+
+.lp-toggle {
+    position: fixed;
+    right: 1rem;
+    top: 50%;
+    transform: translateY(-50%);
+    z-index: 100;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    border: 1.5px solid var(--brand-color);
+    background: var(--pico-card-background-color);
+    color: var(--brand-color);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    transition: right 0.3s ease, background 0.15s, color 0.15s;
+    padding: 0;
+    margin: 0;
+}
+
+.lp-toggle:hover {
+    background: var(--brand-color);
+    color: #fff;
+}
+
+body:has(.lp-panel.open) .lp-toggle {
+    right: calc(var(--panel-width) + 1rem);
+}
+
+.lp-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    background: var(--brand-color);
+    color: #fff;
+    font-size: 0.6rem;
+    font-weight: 700;
+    padding: 0.1rem 0.3rem;
+    border-radius: 0.5rem;
+    min-width: 1rem;
+    text-align: center;
+    line-height: 1.2;
+}
+
+.lp-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: var(--panel-width);
+    z-index: 200;
+    background: var(--pico-card-background-color);
+    border-left: 1px solid var(--pico-muted-border-color);
+    box-shadow: -4px 0 16px rgba(0,0,0,0.06);
+    transform: translateX(100%);
+    transition: transform 0.3s ease;
+    overflow-y: auto;
+}
+
+.lp-panel.open {
+    transform: translateX(0);
+}
+
+.lp-panel.no-transition {
+    transition: none !important;
+}
+
+.lp-content {
+    padding: 1.25rem;
+}
+
+.lp-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+    padding-bottom: 0.75rem;
+    border-bottom: 1px solid var(--pico-muted-border-color);
+}
+
+.lp-header h3 {
+    margin: 0;
+    font-size: 1.1rem;
+    color: var(--brand-color);
+}
+
+.lp-close {
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    cursor: pointer;
+    color: var(--pico-muted-color);
+    padding: 0;
+    margin: 0;
+    line-height: 1;
+    width: auto;
+}
+
+.lp-close:hover {
+    color: var(--pico-color);
+}
+
+.lp-phase {
+    margin-bottom: 1rem;
+}
+
+.lp-phase p {
+    font-size: 0.9rem;
+    color: var(--pico-muted-color);
+    line-height: 1.5;
+    margin-bottom: 0.75rem;
+}
+
+.lp-phase strong {
+    color: var(--pico-color);
+}
+
+.lp-phase progress {
+    width: 100%;
+    margin-bottom: 0.25rem;
+}
+
+.lp-progress-text {
+    font-size: 0.85rem;
+    color: var(--pico-muted-color);
+}
+
+.lp-stats {
+    font-size: 0.85rem;
+    color: var(--pico-muted-color);
+    margin-bottom: 0.5rem;
+}
+
+.lp-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+}
+
+.lp-actions button {
+    margin-bottom: 0;
+    font-size: 0.875rem;
+    padding: 0.4rem 0.8rem;
+    width: 100%;
+}
+
+.lp-divider {
+    border: none;
+    border-top: 1px dashed var(--pico-muted-border-color);
+    margin: 1rem 0;
+}
+
+.lp-section-label {
+    font-size: 0.75rem !important;
+    font-weight: 600;
+    color: var(--pico-muted-color) !important;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 0.25rem !important;
+}
+
+.lp-panel::-webkit-scrollbar {
+    width: 6px;
+}
+
+.lp-panel::-webkit-scrollbar-thumb {
+    background: var(--pico-muted-border-color);
+    border-radius: 3px;
+}
+
+@media (max-width: 768px) {
+    .lp-panel {
+        width: 100%;
+    }
+
+    body:has(.lp-panel.open) .lp-toggle {
+        display: none;
+    }
 }

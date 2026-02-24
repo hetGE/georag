@@ -36,14 +36,9 @@
                 <option value="skipped">Skipped</option>
             </select>
         </div>
-        <div class="action-row">
-            <button id="scan-btn" class="outline" style="display:none;">Scan Files</button>
+        <div class="action-row" id="action-row">
             <button id="process-btn" class="outline" style="display:none;">Process Selected</button>
             <button id="autotag-btn" class="outline" style="display:none;">Auto-Tag Selected</button>
-            <button id="process-new-btn" class="outline" style="display:none;">Process New Files</button>
-            <span id="processing-status" class="processing-status">Checking status...</span>
-            <progress id="progress-bar" value="0" max="100" style="display:none;"></progress>
-            <button id="stop-btn" class="outline secondary" style="display:none;">Stop</button>
         </div>
     </div>
 
@@ -88,5 +83,4 @@
 
 {% block scripts %}
 <script src="/static/js/documents.js"></script>
-<script src="/static/js/processing.js"></script>
 {% endblock %}

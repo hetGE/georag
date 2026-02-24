@@ -112,6 +112,7 @@ def onboarding_status(db: Session = Depends(get_db)):
         "is_processing": _processor.is_running,
         "dismissed": dismissed,
         "by_extension": by_extension,
+        "current_file": _processor.current_file,
     }
 
 
