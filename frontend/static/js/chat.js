@@ -384,9 +384,9 @@ function appendSources(messageDiv, sources) {
     const existing = messageDiv.querySelector('.message-sources');
     if (existing) existing.remove();
 
-    const sourcesEl = document.createElement('details');
+    const sourcesEl = document.createElement('div');
     sourcesEl.className = 'message-sources';
-    sourcesEl.innerHTML = `<summary>Sources (${sources.length})</summary>`;
+    sourcesEl.innerHTML = `<div class="sources-header">Sources (${sources.length})</div>`;
 
     sources.forEach(src => {
         const item = document.createElement('div');

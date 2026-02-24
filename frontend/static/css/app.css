@@ -311,8 +311,7 @@ nav ul:last-child li a.active:hover {
     color: var(--pico-muted-color);
 }
 
-.message-sources summary {
-    cursor: pointer;
+.sources-header {
     font-weight: 500;
 }
 
