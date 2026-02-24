@@ -65,6 +65,11 @@ const LibraryPanel = (() => {
                 renderPanel(status);
             }
             updateBadge(status);
+            const wasProcessing = window.libraryIsProcessing;
+            window.libraryIsProcessing = status.is_processing || status.phase === 'processing';
+            if (wasProcessing !== window.libraryIsProcessing) {
+                window.updateChatInputState?.();
+            }
         } catch {
             // API not available
         }
@@ -222,6 +227,7 @@ const LibraryPanel = (() => {
     }
 
     async function handleStartProcessing() {
+        if (window.chatIsStreaming?.()) return;
         const btn = document.getElementById('lp-process-btn');
         btn.disabled = true;
         btn.setAttribute('aria-busy', 'true');
@@ -275,6 +281,7 @@ const LibraryPanel = (() => {
     }
 
     async function handleProcessNew() {
+        if (window.chatIsStreaming?.()) return;
         const btn = document.getElementById('lp-action-process-new');
         btn.disabled = true;
         btn.setAttribute('aria-busy', 'true');

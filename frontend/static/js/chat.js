@@ -24,7 +24,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     chatInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
-            handleSubmit(e);
+            if (!isStreaming) handleSubmit(e);
         }
     });
 
@@ -129,6 +129,20 @@ function syncSmallBadges() {
 function updateInputState() {
     const chatInput = document.getElementById('chat-input');
     const sendBtn = document.getElementById('send-btn');
+
+    if (isStreaming) {
+        chatInput.disabled = true;
+        sendBtn.disabled = false;
+        return;
+    }
+
+    if (window.libraryIsProcessing) {
+        chatInput.disabled = true;
+        sendBtn.disabled = true;
+        chatInput.placeholder = 'Chat is unavailable while the library is processing...';
+        return;
+    }
+
     const hasText = chatInput.value.trim().length > 0;
 
     if (isWelcomeState && allTags.length > 0 && selectedTags.size === 0) {
@@ -143,6 +157,11 @@ function updateInputState() {
         sendBtn.disabled = !hasText;
     }
 }
+
+// Expose streaming state for other scripts (e.g. panel.js)
+window.chatIsStreaming = () => isStreaming;
+// Allow panel.js to trigger input state refresh when processing starts/stops
+window.updateChatInputState = updateInputState;
 
 // ─── Tags ───
 
@@ -254,7 +273,7 @@ async function handleSubmit(e) {
     e.preventDefault();
     const input = document.getElementById('chat-input');
     const message = input.value.trim();
-    if (!message || isStreaming) return;
+    if (!message || isStreaming || window.libraryIsProcessing) return;
 
     // Block submit if welcome state and no tags selected
     if (isWelcomeState && allTags.length > 0 && selectedTags.size === 0) return;
@@ -272,7 +291,16 @@ async function handleSubmit(e) {
 
     // Start streaming
     isStreaming = true;
-    document.getElementById('send-btn').disabled = true;
+    const sendBtn = document.getElementById('send-btn');
+    sendBtn.textContent = 'Stop';
+    sendBtn.type = 'button';
+    sendBtn.classList.add('stop-mode');
+    updateInputState();
+
+    const controller = new AbortController();
+    const stopHandler = () => { controller.abort(); };
+    sendBtn.addEventListener('click', stopHandler, { once: true });
+
     const assistantDiv = appendMessage('assistant', '', null, true);
     const contentEl = assistantDiv.querySelector('.message-content');
 
@@ -285,6 +313,7 @@ async function handleSubmit(e) {
                 conversation_id: currentConversationId,
                 tag_names: Array.from(selectedTags),
             }),
+            signal: controller.signal,
         });
 
         const reader = response.body.getReader();
@@ -334,9 +363,15 @@ async function handleSubmit(e) {
         }
 
     } catch (err) {
-        contentEl.textContent = 'Error: ' + err.message;
+        if (err.name !== 'AbortError') {
+            contentEl.textContent = 'Error: ' + err.message;
+        }
     }
 
+    sendBtn.removeEventListener('click', stopHandler);
+    sendBtn.textContent = 'Send';
+    sendBtn.type = 'submit';
+    sendBtn.classList.remove('stop-mode');
     isStreaming = false;
     updateInputState();
     await loadConversations();

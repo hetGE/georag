@@ -358,6 +358,11 @@ nav ul:last-child li a.active:hover {
     flex-shrink: 0;
 }
 
+.chat-form button.stop-mode {
+    background: var(--pico-del-color);
+    border-color: var(--pico-del-color);
+}
+
 /* Documents Layout */
 .documents-layout {
     display: flex;
