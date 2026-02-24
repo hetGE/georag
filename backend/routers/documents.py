@@ -86,7 +86,7 @@ def document_stats(db: Session = Depends(get_db)):
 
 @router.post("/documents/{file_id}/tags/{tag_name}")
 def add_tag_to_file(file_id: int, tag_name: str, db: Session = Depends(get_db)):
-    file = db.query(File).get(file_id)
+    file = db.get(File, file_id)
     tag = db.query(Tag).filter(Tag.name == tag_name).first()
     if not file or not tag:
         return {"error": "File or tag not found"}

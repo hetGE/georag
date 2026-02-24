@@ -31,7 +31,7 @@ def build_context_prompt(chunks: list[dict]) -> str:
 async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     # Get or create conversation
     if request.conversation_id:
-        conversation = db.query(Conversation).get(request.conversation_id)
+        conversation = db.get(Conversation, request.conversation_id)
         if not conversation:
             conversation = Conversation(selected_tags=request.tag_names)
             db.add(conversation)

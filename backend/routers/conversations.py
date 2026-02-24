@@ -25,7 +25,7 @@ def list_conversations(db: Session = Depends(get_db)):
 
 @router.get("/conversations/{conv_id}")
 def get_conversation(conv_id: int, db: Session = Depends(get_db)):
-    conv = db.query(Conversation).get(conv_id)
+    conv = db.get(Conversation, conv_id)
     if not conv:
         return {"error": "Conversation not found"}
 
@@ -54,7 +54,7 @@ def get_conversation(conv_id: int, db: Session = Depends(get_db)):
 
 @router.delete("/conversations/{conv_id}")
 def delete_conversation(conv_id: int, db: Session = Depends(get_db)):
-    conv = db.query(Conversation).get(conv_id)
+    conv = db.get(Conversation, conv_id)
     if not conv:
         return {"error": "Conversation not found"}
 
