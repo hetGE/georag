@@ -1,6 +1,6 @@
 """Document list, search, filter, pagination."""
+import subprocess
 from fastapi import APIRouter, Depends, Query, HTTPException
-from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 
@@ -88,9 +88,9 @@ def document_stats(db: Session = Depends(get_db)):
     return {"total": total, "by_status": by_status, "by_extension": by_ext}
 
 
-@router.get("/documents/{file_id}/open")
+@router.post("/documents/{file_id}/open")
 def open_file(file_id: int, db: Session = Depends(get_db)):
-    """Serve a file for viewing/downloading."""
+    """Open a file locally with the system default application."""
     file = db.get(File, file_id)
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
@@ -104,11 +104,8 @@ def open_file(file_id: int, db: Session = Depends(get_db)):
     if not str(resolved).startswith(str(ENGINEERING_ROOT.resolve())):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    return FileResponse(
-        path=str(resolved),
-        filename=file.filename,
-        media_type=None,  # Let FastAPI auto-detect from extension
-    )
+    subprocess.Popen(["open", str(resolved)])
+    return {"status": "opened"}
 
 
 @router.post("/documents/{file_id}/tags/{tag_name}")

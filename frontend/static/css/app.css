@@ -535,17 +535,16 @@ nav a.active {
     font-size: 0.8rem !important;
     padding: 0.25rem 0.75rem !important;
     white-space: nowrap;
-    text-decoration: none;
     border-radius: 0.25rem;
     border: 1px solid var(--pico-primary);
     color: var(--pico-primary);
+    background: transparent;
     cursor: pointer;
 }
 
 .open-file-btn:hover {
     background: var(--pico-primary);
     color: #fff;
-    text-decoration: none;
 }
 
 .open-file-path {
