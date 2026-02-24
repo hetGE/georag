@@ -156,7 +156,11 @@ async function scanFiles() {
 
     try {
         const result = await apiPost('/api/processing/scan');
-        btn.textContent = `Found ${result.files_found?.toLocaleString() || 0} files`;
+        const newFiles = result.files_new || 0;
+        const removed = result.files_removed || 0;
+        btn.textContent = `${result.files_found?.toLocaleString() || 0} files`
+            + (newFiles > 0 ? ` · ${newFiles} new` : '')
+            + (removed > 0 ? ` · ${removed} removed` : '');
         await loadStats();
         loadDocuments();
     } catch (e) {

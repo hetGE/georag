@@ -5,8 +5,11 @@
     --accent-color: #0ea17e;
     --sidebar-width: 280px;
     --chat-max-width: 900px;
+}
 
-    /* Override PicoCSS blue with brand green */
+/* Override PicoCSS blue with brand green – must match [data-theme] specificity */
+:root[data-theme=light],
+:root:not([data-theme]) {
     --pico-primary: #14bf98;
     --pico-primary-background: #14bf98;
     --pico-primary-border: var(--pico-primary-background);
@@ -59,9 +62,37 @@ main.container-fluid:has(.chat-layout) {
     width: auto;
 }
 
+/* Nav pills for Chat / Documents */
+nav ul:last-child {
+    gap: 0.25rem;
+}
+
+nav ul:last-child li {
+    padding: 0;
+}
+
+nav ul:last-child a {
+    display: inline-block;
+    padding: 0.3rem 1rem;
+    border-radius: 2rem;
+    border: 1.5px solid var(--brand-color);
+    color: var(--brand-color);
+    text-decoration: none;
+    font-size: 0.875rem;
+    font-weight: 500;
+    transition: background 0.15s, color 0.15s;
+}
+
+nav ul:last-child a:hover {
+    background: rgba(20, 191, 152, 0.1);
+    text-decoration: none;
+}
+
 nav a.active {
-    font-weight: bold;
-    text-decoration: underline;
+    background: var(--brand-color) !important;
+    color: #fff !important;
+    font-weight: 600;
+    text-decoration: none;
 }
 
 /* Chat Layout */
@@ -402,7 +433,7 @@ nav a.active {
     font-weight: 500;
 }
 
-.status-new { background: #e8f4fd; color: #2980b9; }
+.status-new { background: #e0f5ef; color: #0ea17e; }
 .status-processed { background: #d5f5e3; color: #27ae60; }
 .status-failed { background: #fadbd8; color: #e74c3c; }
 .status-skipped { background: #fdebd0; color: #e67e22; }

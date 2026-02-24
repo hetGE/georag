@@ -64,8 +64,8 @@ async def processing_status(db: Session = Depends(get_db)):
 async def scan_files():
     """Trigger file system scan."""
     from backend.services.scanner import scan_engineering_directory
-    count = scan_engineering_directory()
-    return {"status": "complete", "files_found": count}
+    result = scan_engineering_directory()
+    return {"status": "complete", **result}
 
 
 @router.get("/processing/onboarding-status")

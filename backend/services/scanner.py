@@ -4,12 +4,13 @@ from pathlib import Path
 
 from backend.config import ENGINEERING_ROOT, SKIP_DIRS, SUPPORTED_EXTENSIONS
 from backend.models.database import SessionLocal
-from backend.models.schemas import File
+from backend.models.schemas import File, FileTag, Tag
+from backend.services.vector_store import delete_file_from_tag
 
 
-def scan_engineering_directory() -> int:
+def scan_engineering_directory() -> dict:
     """Walk the Engineering directory and insert/update files in the database.
-    Returns the number of files found."""
+    Returns dict with files_found and files_removed counts."""
     db = SessionLocal()
     try:
         # Get existing paths for fast lookup
@@ -20,6 +21,7 @@ def scan_engineering_directory() -> int:
         new_files = []
         found_paths = set()
         count = 0
+        new_count = 0
 
         for root, dirs, files in os.walk(ENGINEERING_ROOT):
             # Skip excluded directories
@@ -63,6 +65,7 @@ def scan_engineering_directory() -> int:
                     scan_status="new",
                 ))
                 count += 1
+                new_count += 1
 
                 # Batch insert every 500 files
                 if len(new_files) >= 500:
@@ -75,7 +78,22 @@ def scan_engineering_directory() -> int:
             db.bulk_save_objects(new_files)
             db.commit()
 
-        return count
+        # Remove files that no longer exist on disk
+        deleted_paths = existing_paths - found_paths
+        removed = len(deleted_paths)
+        if deleted_paths:
+            # Clean up vector store chunks for deleted files
+            stale_files = db.query(File).filter(File.relative_path.in_(deleted_paths)).all()
+            for f in stale_files:
+                for ft in f.tags:
+                    tag = db.get(Tag, ft.tag_id)
+                    if tag:
+                        delete_file_from_tag(tag.name, f.relative_path)
+                        tag.file_count = max(0, tag.file_count - 1)
+                db.delete(f)
+            db.commit()
+
+        return {"files_found": count, "files_new": new_count, "files_removed": removed}
 
     finally:
         db.close()
