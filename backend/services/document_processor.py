@@ -99,6 +99,9 @@ class DocumentProcessor:
                     return_exceptions=True,
                 )
 
+                if self._stop_flag:
+                    break
+
                 # Collect files that need LLM tagging
                 llm_tagging_queue = []  # (file_record, text, index_in_batch)
                 file_data = []  # (file_record, text, file_tags_or_None)
@@ -137,6 +140,9 @@ class DocumentProcessor:
                         file_data.append((file_record, text, []))
 
                 # Phase 2: Batch LLM tagging for files that need it
+                if self._stop_flag:
+                    break
+
                 if llm_tagging_queue:
                     async with _llm_semaphore:
                         try:
@@ -166,6 +172,9 @@ class DocumentProcessor:
                                     if fd_rec.id == fr.id and fd_tags is None:
                                         file_data[j] = (fd_rec, fd_txt, tags)
                                         break
+
+                if self._stop_flag:
+                    break
 
                 # Phase 3: Chunk, embed, store concurrently
                 store_tasks = []

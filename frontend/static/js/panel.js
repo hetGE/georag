@@ -83,7 +83,10 @@ const LibraryPanel = (() => {
     // --- Badge ---
 
     function updateBadge(status) {
-        if (status.phase === 'processing') {
+        if (status.phase === 'stopping') {
+            badgeEl.textContent = '…';
+            badgeEl.style.display = '';
+        } else if (status.phase === 'processing') {
             const pct = status.total_files > 0
                 ? Math.round((status.processed_files / status.total_files) * 100) : 0;
             badgeEl.textContent = pct + '%';
@@ -108,14 +111,16 @@ const LibraryPanel = (() => {
             html += renderScanPhase();
         } else if (status.phase === 'scanned') {
             html += renderScannedPhase(status);
+        } else if (status.phase === 'stopping') {
+            html += renderStoppingPhase(status);
         } else if (status.phase === 'processing') {
             html += renderProcessingPhase(status);
         } else if (status.phase === 'complete') {
             html += renderCompletePhase(status);
         }
 
-        // Action buttons (only when not processing)
-        if (status.phase !== 'not_started' && !status.is_processing) {
+        // Action buttons (only when not processing/stopping)
+        if (status.phase !== 'not_started' && status.phase !== 'stopping' && !status.is_processing) {
             html += renderActionButtons(status);
         }
 
@@ -165,6 +170,19 @@ const LibraryPanel = (() => {
             <p style="font-size:0.82rem;color:var(--pico-muted-color);">Progress is saved automatically. You can close this panel.</p>
             <div class="lp-actions">
                 <button id="lp-stop-btn" class="outline secondary">Stop Processing</button>
+            </div>
+        </div>`;
+    }
+
+    function renderStoppingPhase(status) {
+        const pct = status.total_files > 0
+            ? Math.round((status.processed_files / status.total_files) * 100) : 0;
+        return `<div class="lp-phase">
+            <progress value="${pct}" max="100"></progress>
+            <p class="lp-progress-text">${status.processed_files.toLocaleString()} / ${status.total_files.toLocaleString()} files (${pct}%)</p>
+            <p style="font-size:0.82rem;color:var(--pico-muted-color);">Stopping after current file&hellip;</p>
+            <div class="lp-actions">
+                <button disabled class="outline secondary" aria-busy="true">Stopping&hellip;</button>
             </div>
         </div>`;
     }
@@ -251,12 +269,10 @@ const LibraryPanel = (() => {
     async function handleStop() {
         const btn = document.getElementById('lp-stop-btn');
         btn.disabled = true;
-        btn.textContent = 'Stopping...';
+        btn.textContent = 'Stopping\u2026';
         await apiPost('/api/processing/stop');
-        setTimeout(async () => {
-            lastStatusJSON = '';
-            await checkStatus();
-        }, 2000);
+        lastStatusJSON = '';
+        await checkStatus();
     }
 
     async function handleActionScan() {

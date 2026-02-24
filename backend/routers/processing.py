@@ -93,6 +93,8 @@ def onboarding_status(db: Session = Depends(get_db)):
 
     if total_files == 0:
         phase = "not_started"
+    elif _processor.is_running and _processor._stop_flag:
+        phase = "stopping"
     elif _processor.is_running:
         phase = "processing"
     elif new_files > 0:
