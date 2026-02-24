@@ -12,8 +12,16 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('chat-form').addEventListener('submit', handleSubmit);
     document.getElementById('new-chat-btn').addEventListener('click', newChat);
 
+    // Disable send button when input is empty
+    const chatInput = document.getElementById('chat-input');
+    const sendBtn = document.getElementById('send-btn');
+    sendBtn.disabled = true;
+    chatInput.addEventListener('input', () => {
+        sendBtn.disabled = !chatInput.value.trim();
+    });
+
     // Enter to send, Shift+Enter for newline
-    document.getElementById('chat-input').addEventListener('keydown', (e) => {
+    chatInput.addEventListener('keydown', (e) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             handleSubmit(e);
@@ -206,7 +214,7 @@ async function handleSubmit(e) {
     }
 
     isStreaming = false;
-    document.getElementById('send-btn').disabled = false;
+    document.getElementById('send-btn').disabled = !document.getElementById('chat-input').value.trim();
     await loadConversations();
     scrollToBottom();
 }
