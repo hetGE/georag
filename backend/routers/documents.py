@@ -1,6 +1,8 @@
 """Document list, search, filter, pagination."""
 import subprocess
+from pathlib import Path
 from fastapi import APIRouter, Depends, Query, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 
@@ -101,6 +103,25 @@ def open_file(file_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="File not found on disk")
 
     # Security: ensure the resolved path is still under ENGINEERING_ROOT
+    resolved = full_path.resolve()
+    if not str(resolved).startswith(str(ENGINEERING_ROOT.resolve())):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    subprocess.Popen(["open", str(resolved)])
+    return {"status": "opened"}
+
+
+class OpenByPathRequest(BaseModel):
+    file_path: str
+
+
+@router.post("/documents/open-by-path")
+def open_file_by_path(req: OpenByPathRequest):
+    """Open a file by its relative path with the system default application."""
+    full_path = ENGINEERING_ROOT / req.file_path
+    if not full_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
     resolved = full_path.resolve()
     if not str(resolved).startswith(str(ENGINEERING_ROOT.resolve())):
         raise HTTPException(status_code=403, detail="Access denied")

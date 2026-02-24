@@ -48,8 +48,8 @@ fi
 
 echo ""
 echo "Starting GeoRAG server..."
-echo "  URL: http://localhost:8000"
+echo "  URL: http://localhost:3000"
 echo ""
 
 cd "$SCRIPT_DIR"
-exec "$VENV_DIR/bin/uvicorn" backend.app:app --host 0.0.0.0 --port 8000 --reload
+exec "$VENV_DIR/bin/uvicorn" backend.app:app --host 0.0.0.0 --port 3000 --reload

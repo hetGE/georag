@@ -42,7 +42,6 @@ function enterWelcomeState() {
 
     // Clear selected tags
     selectedTags.clear();
-    syncSmallBadges();
 
     // Render welcome tags
     renderWelcomeTags();
@@ -56,6 +55,9 @@ function exitWelcomeState() {
 
     // Show the small tag-selector row
     document.getElementById('tag-selector').style.display = '';
+
+    // Render read-only active tag badges
+    renderActiveTagBadges();
 
     // Enable input
     updateInputState();
@@ -103,28 +105,10 @@ function toggleWelcomeTag(tag, pill) {
         pill.style.backgroundColor = tag.color;
     }
 
-    // Sync with small badges
-    syncSmallBadges();
-
     // Update input enabled/disabled
     updateInputState();
 }
 
-function syncSmallBadges() {
-    document.querySelectorAll('#tag-badges .tag-badge').forEach(badge => {
-        const tag = allTags.find(t => t.name === badge.dataset.tagName);
-        if (!tag) return;
-        if (selectedTags.has(tag.name)) {
-            badge.classList.add('selected');
-            badge.style.color = '#fff';
-            badge.style.backgroundColor = tag.color;
-        } else {
-            badge.classList.remove('selected');
-            badge.style.color = tag.color;
-            badge.style.backgroundColor = 'transparent';
-        }
-    });
-}
 
 function updateInputState() {
     const chatInput = document.getElementById('chat-input');
@@ -167,27 +151,17 @@ window.updateChatInputState = updateInputState;
 
 async function loadTags() {
     allTags = await apiGet('/api/tags');
+}
+
+function renderActiveTagBadges() {
     const container = document.getElementById('tag-badges');
     container.innerHTML = '';
 
-    allTags.forEach(tag => {
-        const badge = createTagBadge(tag, false, toggleTag);
-        container.appendChild(badge);
-    });
-}
-
-function toggleTag(tag, badge) {
-    if (selectedTags.has(tag.name)) {
-        selectedTags.delete(tag.name);
-        badge.classList.remove('selected');
-        badge.style.color = tag.color;
-        badge.style.backgroundColor = 'transparent';
-    } else {
-        selectedTags.add(tag.name);
-        badge.classList.add('selected');
-        badge.style.color = '#fff';
-        badge.style.backgroundColor = tag.color;
-    }
+    allTags
+        .filter(tag => selectedTags.has(tag.name))
+        .forEach(tag => {
+            container.appendChild(createTagBadge(tag, true, null));
+        });
 }
 
 // ─── Conversations ───
@@ -232,7 +206,7 @@ async function loadConversation(convId) {
 
     // Restore selected tags
     selectedTags = new Set(data.selected_tags || []);
-    syncSmallBadges();
+    renderActiveTagBadges();
 
     data.messages.forEach(msg => {
         appendMessage(msg.role, msg.content, msg.sources);
@@ -417,9 +391,19 @@ function appendSources(messageDiv, sources) {
     sources.forEach(src => {
         const item = document.createElement('div');
         item.className = 'source-item';
+
+        const link = document.createElement('a');
+        link.className = 'source-link';
+        link.href = '#';
         const page = src.page ? ` (p.${src.page})` : '';
         const score = src.score ? ` [${(src.score * 100).toFixed(0)}%]` : '';
-        item.textContent = `${src.filename || src.file_path}${page}${score}`;
+        link.textContent = `${src.filename || src.file_path}${page}${score}`;
+        link.addEventListener('click', (e) => {
+            e.preventDefault();
+            apiPost('/api/documents/open-by-path', { file_path: src.file_path });
+        });
+
+        item.appendChild(link);
         sourcesEl.appendChild(item);
     });
 

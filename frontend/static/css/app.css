@@ -214,7 +214,7 @@ nav ul:last-child li a.active:hover {
     border-radius: 1rem;
     font-size: 0.5625rem;
     font-weight: 500;
-    cursor: pointer;
+    cursor: default;
     border: 1.5px solid;
     opacity: 0.5;
     transition: opacity 0.15s;
@@ -223,10 +223,6 @@ nav ul:last-child li a.active:hover {
 
 .tag-badge.selected {
     opacity: 1;
-}
-
-.tag-badge:hover {
-    opacity: 0.8;
 }
 
 /* Chat Messages */
@@ -324,6 +320,16 @@ nav ul:last-child li a.active:hover {
     padding: 0.1rem 0;
     font-family: monospace;
     font-size: 0.5625rem;
+}
+
+.source-link {
+    color: var(--pico-primary);
+    text-decoration: underline;
+    cursor: pointer;
+}
+
+.source-link:hover {
+    opacity: 0.8;
 }
 
 /* Chat Input */
