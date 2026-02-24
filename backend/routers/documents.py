@@ -109,39 +109,6 @@ def open_file(file_id: int, db: Session = Depends(get_db)):
     return {"status": "opened"}
 
 
-@router.post("/documents/{file_id}/tags/{tag_name}")
-def add_tag_to_file(file_id: int, tag_name: str, db: Session = Depends(get_db)):
-    file = db.get(File, file_id)
-    tag = db.query(Tag).filter(Tag.name == tag_name).first()
-    if not file or not tag:
-        return {"error": "File or tag not found"}
-
-    existing = db.query(FileTag).filter(FileTag.file_id == file_id, FileTag.tag_id == tag.id).first()
-    if existing:
-        return {"status": "already_tagged"}
-
-    db.add(FileTag(file_id=file_id, tag_id=tag.id, source="manual"))
-    tag.file_count = db.query(FileTag).filter(FileTag.tag_id == tag.id).count() + 1
-    if file.scan_status != "processed":
-        file.scan_status = "processed"
-    db.commit()
-    return {"status": "tagged"}
-
-
-@router.delete("/documents/{file_id}/tags/{tag_name}")
-def remove_tag_from_file(file_id: int, tag_name: str, db: Session = Depends(get_db)):
-    tag = db.query(Tag).filter(Tag.name == tag_name).first()
-    if not tag:
-        return {"error": "Tag not found"}
-
-    ft = db.query(FileTag).filter(FileTag.file_id == file_id, FileTag.tag_id == tag.id).first()
-    if ft:
-        db.delete(ft)
-        tag.file_count = max(0, db.query(FileTag).filter(FileTag.tag_id == tag.id).count() - 1)
-        db.commit()
-    return {"status": "removed"}
-
-
 @router.post("/documents/batch/tags/{tag_name}")
 def batch_add_tag(tag_name: str, req: BatchTagRequest, db: Session = Depends(get_db)):
     tag = db.query(Tag).filter(Tag.name == tag_name).first()
@@ -178,3 +145,36 @@ def batch_remove_tag(tag_name: str, req: BatchTagRequest, db: Session = Depends(
     tag.file_count = db.query(FileTag).filter(FileTag.tag_id == tag.id).count()
     db.commit()
     return {"status": "removed", "count": len(req.file_ids)}
+
+
+@router.post("/documents/{file_id}/tags/{tag_name}")
+def add_tag_to_file(file_id: int, tag_name: str, db: Session = Depends(get_db)):
+    file = db.get(File, file_id)
+    tag = db.query(Tag).filter(Tag.name == tag_name).first()
+    if not file or not tag:
+        return {"error": "File or tag not found"}
+
+    existing = db.query(FileTag).filter(FileTag.file_id == file_id, FileTag.tag_id == tag.id).first()
+    if existing:
+        return {"status": "already_tagged"}
+
+    db.add(FileTag(file_id=file_id, tag_id=tag.id, source="manual"))
+    tag.file_count = db.query(FileTag).filter(FileTag.tag_id == tag.id).count() + 1
+    if file.scan_status != "processed":
+        file.scan_status = "processed"
+    db.commit()
+    return {"status": "tagged"}
+
+
+@router.delete("/documents/{file_id}/tags/{tag_name}")
+def remove_tag_from_file(file_id: int, tag_name: str, db: Session = Depends(get_db)):
+    tag = db.query(Tag).filter(Tag.name == tag_name).first()
+    if not tag:
+        return {"error": "Tag not found"}
+
+    ft = db.query(FileTag).filter(FileTag.file_id == file_id, FileTag.tag_id == tag.id).first()
+    if ft:
+        db.delete(ft)
+        tag.file_count = max(0, db.query(FileTag).filter(FileTag.tag_id == tag.id).count() - 1)
+        db.commit()
+    return {"status": "removed"}
