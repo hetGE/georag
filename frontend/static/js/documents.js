@@ -4,6 +4,7 @@ let currentPage = 1;
 let allTagsList = [];
 let selectedFileIds = new Set();
 let debounceTimer = null;
+let lastLoadedFiles = [];
 
 document.addEventListener('DOMContentLoaded', async () => {
     await loadTagFilter();
@@ -22,6 +23,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('select-all').addEventListener('change', toggleSelectAll);
     document.getElementById('process-btn').addEventListener('click', processSelected);
     document.getElementById('autotag-btn').addEventListener('click', autotagSelected);
+    document.getElementById('multi-tag-btn').addEventListener('click', openMultiTagModal);
 
     // Show action buttons once processing status is known
     checkActionButtonVisibility();
@@ -70,8 +72,10 @@ async function loadDocuments() {
     if (status) params.set('status', status);
 
     const data = await apiGet(`/api/documents?${params}`);
+    lastLoadedFiles = data.files;
     renderFileTable(data.files);
     renderPagination(data);
+    updateMultiTagVisibility();
 }
 
 function renderFileTable(files) {
@@ -109,6 +113,7 @@ function renderFileTable(files) {
             } else {
                 selectedFileIds.delete(id);
             }
+            updateMultiTagVisibility();
         });
     });
 }
@@ -147,6 +152,7 @@ function toggleSelectAll(e) {
         if (checked) selectedFileIds.add(id);
         else selectedFileIds.delete(id);
     });
+    updateMultiTagVisibility();
 }
 
 async function processSelected() {
@@ -173,7 +179,39 @@ async function checkActionButtonVisibility() {
         const show = !status.is_running;
         document.getElementById('process-btn').style.display = show ? '' : 'none';
         document.getElementById('autotag-btn').style.display = show ? '' : 'none';
+        if (!show) {
+            document.getElementById('multi-tag-btn').style.display = 'none';
+        } else {
+            updateMultiTagVisibility();
+        }
     } catch {}
+}
+
+function updateMultiTagVisibility() {
+    const btn = document.getElementById('multi-tag-btn');
+    if (!btn) return;
+
+    const ids = Array.from(selectedFileIds);
+    if (ids.length < 2) {
+        btn.style.display = 'none';
+        return;
+    }
+
+    // All selected files must be on the current page
+    const pageIds = new Set(lastLoadedFiles.map(f => f.id));
+    const selectedOnPage = ids.filter(id => pageIds.has(id));
+    if (selectedOnPage.length !== ids.length) {
+        btn.style.display = 'none';
+        return;
+    }
+
+    // All selected files must have identical tag sets
+    const selectedFiles = lastLoadedFiles.filter(f => selectedFileIds.has(f.id));
+    const tagKey = f => (f.tags || []).map(t => t.name).sort().join(',');
+    const firstKey = tagKey(selectedFiles[0]);
+    const allSame = selectedFiles.every(f => tagKey(f) === firstKey);
+
+    btn.style.display = allSame ? '' : 'none';
 }
 
 // Re-check visibility periodically (processing may start/stop)
@@ -252,6 +290,79 @@ function renderTagModalContent(fileId, filename, file, currentTags, movedTag) {
                 currentTags.add(tag.name);
                 renderTagModalContent(fileId, filename, file, currentTags, tag.name);
                 apiPost(`/api/documents/${fileId}/tags/${tag.name}`, {}).then(() => loadDocuments());
+            });
+            availableContainer.appendChild(pill);
+        });
+    }
+}
+
+function openMultiTagModal() {
+    const ids = Array.from(selectedFileIds);
+    const selectedFiles = lastLoadedFiles.filter(f => selectedFileIds.has(f.id));
+    if (selectedFiles.length < 2) return;
+
+    const currentTags = new Set((selectedFiles[0].tags || []).map(t => t.name));
+    const fileIds = selectedFiles.map(f => f.id);
+
+    const modal = document.getElementById('tag-modal');
+    renderMultiTagModalContent(fileIds, selectedFiles, currentTags);
+    modal.showModal();
+}
+
+function renderMultiTagModalContent(fileIds, selectedFiles, currentTags, movedTag) {
+    const content = document.getElementById('tag-modal-content');
+    const fileNames = selectedFiles.map(f => f.filename).join(', ');
+
+    const assignedTags = allTagsList.filter(t => currentTags.has(t.name));
+    const availableTags = allTagsList.filter(t => !currentTags.has(t.name));
+
+    content.innerHTML = `
+        <div class="multi-tag-file-list">
+            <span class="multi-tag-count">${selectedFiles.length} files selected:</span>
+            <span class="multi-tag-names">${escapeHtml(fileNames)}</span>
+        </div>
+        <div class="tag-modal-section-label">Assigned</div>
+        <div class="tag-modal-pills" id="assigned-pills"></div>
+        <hr class="tag-modal-divider">
+        <div class="tag-modal-section-label">Available</div>
+        <div class="tag-modal-pills" id="available-pills"></div>`;
+
+    const assignedContainer = content.querySelector('#assigned-pills');
+    const availableContainer = content.querySelector('#available-pills');
+
+    if (!assignedTags.length) {
+        assignedContainer.innerHTML = '<span class="tag-modal-empty">(none)</span>';
+    } else {
+        assignedTags.forEach(tag => {
+            const pill = document.createElement('button');
+            pill.className = 'tag-pill assigned' + (tag.name === movedTag ? ' pill-pop-in' : '');
+            pill.title = tag.description || '';
+            pill.style.backgroundColor = tag.color;
+            pill.style.borderColor = tag.color;
+            pill.textContent = `✕ ${tag.display_name}`;
+            pill.addEventListener('click', () => {
+                currentTags.delete(tag.name);
+                renderMultiTagModalContent(fileIds, selectedFiles, currentTags, tag.name);
+                apiDelete(`/api/documents/batch/tags/${tag.name}`, {file_ids: fileIds}).then(() => loadDocuments());
+            });
+            assignedContainer.appendChild(pill);
+        });
+    }
+
+    if (!availableTags.length) {
+        availableContainer.innerHTML = '<span class="tag-modal-empty">(none)</span>';
+    } else {
+        availableTags.forEach(tag => {
+            const pill = document.createElement('button');
+            pill.className = 'tag-pill available' + (tag.name === movedTag ? ' pill-pop-in' : '');
+            pill.title = tag.description || '';
+            pill.style.borderColor = tag.color;
+            pill.style.color = tag.color;
+            pill.textContent = `+ ${tag.display_name}`;
+            pill.addEventListener('click', () => {
+                currentTags.add(tag.name);
+                renderMultiTagModalContent(fileIds, selectedFiles, currentTags, tag.name);
+                apiPost(`/api/documents/batch/tags/${tag.name}`, {file_ids: fileIds}).then(() => loadDocuments());
             });
             availableContainer.appendChild(pill);
         });

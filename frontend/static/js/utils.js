@@ -34,8 +34,13 @@ async function apiPost(url, data = {}) {
     return res.json();
 }
 
-async function apiDelete(url) {
-    const res = await fetch(url, {method: 'DELETE'});
+async function apiDelete(url, data = null) {
+    const options = {method: 'DELETE'};
+    if (data) {
+        options.headers = {'Content-Type': 'application/json'};
+        options.body = JSON.stringify(data);
+    }
+    const res = await fetch(url, options);
     return res.json();
 }
 

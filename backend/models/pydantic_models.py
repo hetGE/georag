@@ -66,6 +66,10 @@ class MessageResponse(BaseModel):
         from_attributes = True
 
 
+class BatchTagRequest(BaseModel):
+    file_ids: list[int]
+
+
 class ProcessingRequest(BaseModel):
     tag_names: list[str] = []
     file_ids: list[int] = []

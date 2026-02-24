@@ -574,6 +574,29 @@ nav a.active {
     font-family: monospace;
 }
 
+.multi-tag-file-list {
+    padding: 0.5rem 0.6rem;
+    margin-bottom: 0.75rem;
+    border-radius: 0.375rem;
+    background: var(--pico-secondary-focus);
+}
+.multi-tag-count {
+    display: block;
+    font-size: 0.8rem;
+    font-weight: 600;
+    margin-bottom: 0.25rem;
+}
+.multi-tag-names {
+    display: block;
+    font-size: 0.7rem;
+    color: var(--pico-muted-color);
+    font-family: monospace;
+    line-height: 1.4;
+    max-height: 4.2em;
+    overflow-y: auto;
+    word-break: break-all;
+}
+
 /* Responsive */
 @media (max-width: 768px) {
     .chat-sidebar {

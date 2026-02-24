@@ -7,6 +7,7 @@ from sqlalchemy import func
 from backend.config import ENGINEERING_ROOT
 from backend.models.database import get_db
 from backend.models.schemas import File, Tag, FileTag
+from backend.models.pydantic_models import BatchTagRequest
 
 router = APIRouter(tags=["documents"])
 
@@ -139,3 +140,41 @@ def remove_tag_from_file(file_id: int, tag_name: str, db: Session = Depends(get_
         tag.file_count = max(0, db.query(FileTag).filter(FileTag.tag_id == tag.id).count() - 1)
         db.commit()
     return {"status": "removed"}
+
+
+@router.post("/documents/batch/tags/{tag_name}")
+def batch_add_tag(tag_name: str, req: BatchTagRequest, db: Session = Depends(get_db)):
+    tag = db.query(Tag).filter(Tag.name == tag_name).first()
+    if not tag:
+        return {"error": "Tag not found"}
+
+    for file_id in req.file_ids:
+        file = db.get(File, file_id)
+        if not file:
+            continue
+        existing = db.query(FileTag).filter(FileTag.file_id == file_id, FileTag.tag_id == tag.id).first()
+        if existing:
+            continue
+        db.add(FileTag(file_id=file_id, tag_id=tag.id, source="manual"))
+        if file.scan_status != "processed":
+            file.scan_status = "processed"
+
+    tag.file_count = db.query(FileTag).filter(FileTag.tag_id == tag.id).count()
+    db.commit()
+    return {"status": "tagged", "count": len(req.file_ids)}
+
+
+@router.delete("/documents/batch/tags/{tag_name}")
+def batch_remove_tag(tag_name: str, req: BatchTagRequest, db: Session = Depends(get_db)):
+    tag = db.query(Tag).filter(Tag.name == tag_name).first()
+    if not tag:
+        return {"error": "Tag not found"}
+
+    db.query(FileTag).filter(
+        FileTag.file_id.in_(req.file_ids),
+        FileTag.tag_id == tag.id,
+    ).delete(synchronize_session=False)
+
+    tag.file_count = db.query(FileTag).filter(FileTag.tag_id == tag.id).count()
+    db.commit()
+    return {"status": "removed", "count": len(req.file_ids)}
