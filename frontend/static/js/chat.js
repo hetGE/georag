@@ -4,6 +4,7 @@ let currentConversationId = null;
 let selectedTags = new Set();
 let allTags = [];
 let isStreaming = false;
+let isWelcomeState = true;
 
 document.addEventListener('DOMContentLoaded', async () => {
     await loadTags();
@@ -12,12 +13,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     document.getElementById('chat-form').addEventListener('submit', handleSubmit);
     document.getElementById('new-chat-btn').addEventListener('click', newChat);
 
-    // Disable send button when input is empty
+    // Input validation — respects welcome state
     const chatInput = document.getElementById('chat-input');
     const sendBtn = document.getElementById('send-btn');
-    sendBtn.disabled = true;
     chatInput.addEventListener('input', () => {
-        sendBtn.disabled = !chatInput.value.trim();
+        updateInputState();
     });
 
     // Enter to send, Shift+Enter for newline
@@ -27,7 +27,124 @@ document.addEventListener('DOMContentLoaded', async () => {
             handleSubmit(e);
         }
     });
+
+    // Initial welcome state
+    enterWelcomeState();
 });
+
+// ─── Welcome State Management ───
+
+function enterWelcomeState() {
+    isWelcomeState = true;
+
+    // Hide the small tag-selector row
+    document.getElementById('tag-selector').style.display = 'none';
+
+    // Clear selected tags
+    selectedTags.clear();
+    syncSmallBadges();
+
+    // Render welcome tags
+    renderWelcomeTags();
+
+    // Disable input
+    updateInputState();
+}
+
+function exitWelcomeState() {
+    isWelcomeState = false;
+
+    // Show the small tag-selector row
+    document.getElementById('tag-selector').style.display = '';
+
+    // Enable input
+    updateInputState();
+}
+
+function renderWelcomeTags() {
+    const container = document.getElementById('welcome-tags');
+    if (!container) return;
+    container.innerHTML = '';
+
+    // If no tags configured, skip enforcement
+    if (!allTags.length) {
+        exitWelcomeState();
+        return;
+    }
+
+    const sorted = [...allTags].sort((a, b) => a.display_name.length - b.display_name.length);
+    sorted.forEach(tag => {
+        const pill = document.createElement('span');
+        pill.className = 'welcome-tag';
+        pill.textContent = tag.display_name;
+        pill.style.borderColor = tag.color;
+        pill.style.color = tag.color;
+        pill.style.backgroundColor = 'transparent';
+        pill.dataset.tagName = tag.name;
+
+        pill.addEventListener('click', () => {
+            toggleWelcomeTag(tag, pill);
+        });
+
+        container.appendChild(pill);
+    });
+}
+
+function toggleWelcomeTag(tag, pill) {
+    if (selectedTags.has(tag.name)) {
+        selectedTags.delete(tag.name);
+        pill.classList.remove('selected');
+        pill.style.color = tag.color;
+        pill.style.backgroundColor = 'transparent';
+    } else {
+        selectedTags.add(tag.name);
+        pill.classList.add('selected');
+        pill.style.color = '#fff';
+        pill.style.backgroundColor = tag.color;
+    }
+
+    // Sync with small badges
+    syncSmallBadges();
+
+    // Update input enabled/disabled
+    updateInputState();
+}
+
+function syncSmallBadges() {
+    document.querySelectorAll('#tag-badges .tag-badge').forEach(badge => {
+        const tag = allTags.find(t => t.name === badge.dataset.tagName);
+        if (!tag) return;
+        if (selectedTags.has(tag.name)) {
+            badge.classList.add('selected');
+            badge.style.color = '#fff';
+            badge.style.backgroundColor = tag.color;
+        } else {
+            badge.classList.remove('selected');
+            badge.style.color = tag.color;
+            badge.style.backgroundColor = 'transparent';
+        }
+    });
+}
+
+function updateInputState() {
+    const chatInput = document.getElementById('chat-input');
+    const sendBtn = document.getElementById('send-btn');
+    const hasText = chatInput.value.trim().length > 0;
+
+    if (isWelcomeState && allTags.length > 0 && selectedTags.size === 0) {
+        // Disabled: no tags selected in welcome state
+        chatInput.disabled = true;
+        sendBtn.disabled = true;
+        chatInput.placeholder = 'Select at least one topic above to start...';
+    } else {
+        // Enabled
+        chatInput.disabled = false;
+        chatInput.placeholder = 'Ask a geotechnical engineering question...';
+        sendBtn.disabled = !hasText;
+    }
+}
+
+// ─── Tags ───
 
 async function loadTags() {
     allTags = await apiGet('/api/tags');
@@ -53,6 +170,8 @@ function toggleTag(tag, badge) {
         badge.style.backgroundColor = tag.color;
     }
 }
+
+// ─── Conversations ───
 
 async function loadConversations() {
     const conversations = await apiGet('/api/conversations');
@@ -89,20 +208,12 @@ async function loadConversation(convId) {
     const messagesEl = document.getElementById('chat-messages');
     messagesEl.innerHTML = '';
 
+    // Exit welcome state
+    exitWelcomeState();
+
     // Restore selected tags
     selectedTags = new Set(data.selected_tags || []);
-    document.querySelectorAll('.tag-badge').forEach(badge => {
-        const tag = allTags.find(t => t.name === badge.dataset.tagName);
-        if (tag && selectedTags.has(tag.name)) {
-            badge.classList.add('selected');
-            badge.style.color = '#fff';
-            badge.style.backgroundColor = tag.color;
-        } else if (tag) {
-            badge.classList.remove('selected');
-            badge.style.color = tag.color;
-            badge.style.backgroundColor = 'transparent';
-        }
-    });
+    syncSmallBadges();
 
     data.messages.forEach(msg => {
         appendMessage(msg.role, msg.content, msg.sources);
@@ -123,14 +234,21 @@ async function deleteConversation(convId) {
 function newChat() {
     currentConversationId = null;
     document.getElementById('chat-messages').innerHTML = `
-        <div class="chat-welcome">
+        <div class="chat-welcome" id="chat-welcome">
             <h2>geoRAG</h2>
             <p>Geotechnical Engineering RAG Assistant</p>
-            <p class="secondary">Select tags above to focus your search, then ask a question.</p>
+            <p class="secondary">Select topics to focus your search</p>
+            <div id="welcome-tags" class="welcome-tags"></div>
         </div>
     `;
+
+    // Re-enter welcome state
+    enterWelcomeState();
+
     loadConversations();
 }
+
+// ─── Chat ───
 
 async function handleSubmit(e) {
     e.preventDefault();
@@ -138,9 +256,15 @@ async function handleSubmit(e) {
     const message = input.value.trim();
     if (!message || isStreaming) return;
 
-    // Clear welcome message
+    // Block submit if welcome state and no tags selected
+    if (isWelcomeState && allTags.length > 0 && selectedTags.size === 0) return;
+
+    // Clear welcome message and exit welcome state
     const welcome = document.querySelector('.chat-welcome');
     if (welcome) welcome.remove();
+    if (isWelcomeState) {
+        exitWelcomeState();
+    }
 
     // Show user message
     appendMessage('user', message);
@@ -214,7 +338,7 @@ async function handleSubmit(e) {
     }
 
     isStreaming = false;
-    document.getElementById('send-btn').disabled = !document.getElementById('chat-input').value.trim();
+    updateInputState();
     await loadConversations();
     scrollToBottom();
 }
@@ -271,4 +395,3 @@ function scrollToBottom() {
     const el = document.getElementById('chat-messages');
     el.scrollTop = el.scrollHeight;
 }
-
