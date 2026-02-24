@@ -1,5 +1,5 @@
 """SQLAlchemy engine and session management."""
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, text, inspect
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 from backend.config import DATABASE_URL
@@ -22,3 +22,10 @@ def init_db():
     """Create all tables."""
     from backend.models.schemas import File, Tag, FileTag, Conversation, Message  # noqa: F401
     Base.metadata.create_all(bind=engine)
+
+    # Migration: add deleted_at column to existing conversations table
+    insp = inspect(engine)
+    columns = [c['name'] for c in insp.get_columns('conversations')]
+    if 'deleted_at' not in columns:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE conversations ADD COLUMN deleted_at DATETIME"))

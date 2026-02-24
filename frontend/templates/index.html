@@ -9,6 +9,19 @@
         <div id="conversation-list" class="conversation-list">
             <p class="secondary">No conversations yet</p>
         </div>
+
+        <!-- Trash View (hidden by default) -->
+        <div id="trash-view" class="trash-view" style="display:none;">
+            <div class="trash-header">
+                <button id="trash-back-btn" class="trash-back-btn" title="Back to conversations">&larr;</button>
+                <span class="trash-title">Trash</span>
+            </div>
+            <div id="trash-list" class="trash-list">
+                <p class="secondary" style="font-size:0.85rem;padding:0.5rem;">Trash is empty</p>
+            </div>
+        </div>
+
+        <button id="trash-btn" class="trash-toggle-btn" title="View trash">&#128465; Trash</button>
     </aside>
 
     <!-- Main Chat Area -->
@@ -42,6 +55,30 @@
         </div>
     </div>
 </div>
+
+<!-- Trash Confirm Dialog -->
+<dialog id="trash-confirm-dialog">
+    <article>
+        <header>Move to Trash?</header>
+        <p>This conversation will be moved to the trash. You can restore it later.</p>
+        <footer>
+            <button class="secondary outline dialog-cancel">Cancel</button>
+            <button class="dialog-confirm">Move to Trash</button>
+        </footer>
+    </article>
+</dialog>
+
+<!-- Permanent Delete Dialog -->
+<dialog id="permanent-delete-dialog">
+    <article>
+        <header>Delete Permanently?</header>
+        <p><strong>This action cannot be undone.</strong> The conversation and all its messages will be permanently deleted.</p>
+        <footer>
+            <button class="secondary outline dialog-cancel">Cancel</button>
+            <button class="dialog-confirm permanent-delete-btn">Delete Permanently</button>
+        </footer>
+    </article>
+</dialog>
 {% endblock %}
 
 {% block scripts %}

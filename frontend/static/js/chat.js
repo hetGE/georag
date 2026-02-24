@@ -5,6 +5,8 @@ let selectedTags = new Set();
 let allTags = [];
 let isStreaming = false;
 let isWelcomeState = true;
+let pendingDeleteConvId = null;
+let isTrashViewOpen = false;
 
 document.addEventListener('DOMContentLoaded', async () => {
     await loadTags();
@@ -12,6 +14,20 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     document.getElementById('chat-form').addEventListener('submit', handleSubmit);
     document.getElementById('new-chat-btn').addEventListener('click', newChat);
+
+    // Trash button
+    document.getElementById('trash-btn').addEventListener('click', openTrashView);
+    document.getElementById('trash-back-btn').addEventListener('click', closeTrashView);
+
+    // Trash confirm dialog
+    const trashDialog = document.getElementById('trash-confirm-dialog');
+    trashDialog.querySelector('.dialog-cancel').addEventListener('click', () => trashDialog.close());
+    trashDialog.querySelector('.dialog-confirm').addEventListener('click', confirmTrash);
+
+    // Permanent delete dialog
+    const permDialog = document.getElementById('permanent-delete-dialog');
+    permDialog.querySelector('.dialog-cancel').addEventListener('click', () => permDialog.close());
+    permDialog.querySelector('.dialog-confirm').addEventListener('click', confirmPermanentDelete);
 
     // Input validation — respects welcome state
     const chatInput = document.getElementById('chat-input');
@@ -172,6 +188,7 @@ async function loadConversations() {
 
     if (!conversations.length) {
         list.innerHTML = '<p class="secondary" style="font-size:0.85rem;padding:0.5rem;">No conversations yet</p>';
+        updateTrashCount();
         return;
     }
 
@@ -186,13 +203,15 @@ async function loadConversations() {
         `;
         item.addEventListener('click', (e) => {
             if (e.target.classList.contains('conv-delete')) {
-                deleteConversation(conv.id);
+                promptTrashConversation(conv.id);
             } else {
                 loadConversation(conv.id);
             }
         });
         list.appendChild(item);
     });
+
+    updateTrashCount();
 }
 
 async function loadConversation(convId) {
@@ -216,12 +235,108 @@ async function loadConversation(convId) {
     scrollToBottom();
 }
 
-async function deleteConversation(convId) {
+// ─── Trash (Soft Delete) ───
+
+function promptTrashConversation(convId) {
+    pendingDeleteConvId = convId;
+    document.getElementById('trash-confirm-dialog').showModal();
+}
+
+async function confirmTrash() {
+    document.getElementById('trash-confirm-dialog').close();
+    if (!pendingDeleteConvId) return;
+
+    const convId = pendingDeleteConvId;
+    pendingDeleteConvId = null;
+
     await apiDelete(`/api/conversations/${convId}`);
     if (convId === currentConversationId) {
         newChat();
     }
     await loadConversations();
+}
+
+async function openTrashView() {
+    isTrashViewOpen = true;
+    document.getElementById('new-chat-btn').style.display = 'none';
+    document.getElementById('conversation-list').style.display = 'none';
+    document.getElementById('trash-btn').style.display = 'none';
+    document.getElementById('trash-view').style.display = '';
+    await loadTrashList();
+}
+
+function closeTrashView() {
+    isTrashViewOpen = false;
+    document.getElementById('new-chat-btn').style.display = '';
+    document.getElementById('conversation-list').style.display = '';
+    document.getElementById('trash-btn').style.display = '';
+    document.getElementById('trash-view').style.display = 'none';
+}
+
+async function loadTrashList() {
+    const items = await apiGet('/api/conversations/trash');
+    const list = document.getElementById('trash-list');
+
+    if (!items.length) {
+        list.innerHTML = '<p class="secondary" style="font-size:0.85rem;padding:0.5rem;">Trash is empty</p>';
+        return;
+    }
+
+    list.innerHTML = '';
+    items.forEach(conv => {
+        const item = document.createElement('div');
+        item.className = 'conversation-item trash-item';
+        item.innerHTML = `
+            <span class="conv-title">${escapeHtml(conv.title)}</span>
+            <span class="conv-date">Deleted ${formatDate(conv.deleted_at)}</span>
+            <span class="trash-actions">
+                <span class="trash-restore" title="Restore">&#x21A9;</span>
+                <span class="trash-permanent-delete" title="Delete permanently">&#x2715;</span>
+            </span>
+        `;
+        item.querySelector('.trash-restore').addEventListener('click', (e) => {
+            e.stopPropagation();
+            restoreConversation(conv.id);
+        });
+        item.querySelector('.trash-permanent-delete').addEventListener('click', (e) => {
+            e.stopPropagation();
+            promptPermanentDelete(conv.id);
+        });
+        list.appendChild(item);
+    });
+}
+
+async function restoreConversation(convId) {
+    await apiPost(`/api/conversations/${convId}/restore`);
+    await loadTrashList();
+    await loadConversations();
+}
+
+function promptPermanentDelete(convId) {
+    pendingDeleteConvId = convId;
+    document.getElementById('permanent-delete-dialog').showModal();
+}
+
+async function confirmPermanentDelete() {
+    document.getElementById('permanent-delete-dialog').close();
+    if (!pendingDeleteConvId) return;
+
+    const convId = pendingDeleteConvId;
+    pendingDeleteConvId = null;
+
+    await apiDelete(`/api/conversations/${convId}/permanent`);
+    await loadTrashList();
+    await updateTrashCount();
+}
+
+async function updateTrashCount() {
+    const items = await apiGet('/api/conversations/trash');
+    const btn = document.getElementById('trash-btn');
+    if (items.length > 0) {
+        btn.textContent = `\u{1F5D1} Trash (${items.length})`;
+    } else {
+        btn.textContent = '\u{1F5D1} Trash';
+    }
 }
 
 function newChat() {
@@ -237,6 +352,9 @@ function newChat() {
 
     // Re-enter welcome state
     enterWelcomeState();
+
+    // Close trash view if open
+    if (isTrashViewOpen) closeTrashView();
 
     loadConversations();
 }

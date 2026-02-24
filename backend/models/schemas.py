@@ -70,6 +70,7 @@ class Conversation(Base):
     title = Column(String, default="New Conversation")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+    deleted_at = Column(DateTime, nullable=True, default=None)
     selected_tags = Column(JSON, default=list)
 
     messages = relationship("Message", back_populates="conversation", cascade="all, delete-orphan",

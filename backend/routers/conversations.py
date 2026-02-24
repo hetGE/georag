@@ -1,4 +1,5 @@
 """Conversation history management."""
+import datetime
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
@@ -8,9 +9,35 @@ from backend.models.schemas import Conversation, Message
 router = APIRouter(tags=["conversations"])
 
 
+@router.get("/conversations/trash")
+def list_trash(db: Session = Depends(get_db)):
+    convos = (
+        db.query(Conversation)
+        .filter(Conversation.deleted_at.isnot(None))
+        .order_by(Conversation.deleted_at.desc())
+        .limit(50)
+        .all()
+    )
+    return [
+        {
+            "id": c.id,
+            "title": c.title,
+            "created_at": c.created_at.isoformat() if c.created_at else None,
+            "deleted_at": c.deleted_at.isoformat() if c.deleted_at else None,
+        }
+        for c in convos
+    ]
+
+
 @router.get("/conversations")
 def list_conversations(db: Session = Depends(get_db)):
-    convos = db.query(Conversation).order_by(Conversation.updated_at.desc()).limit(50).all()
+    convos = (
+        db.query(Conversation)
+        .filter(Conversation.deleted_at.is_(None))
+        .order_by(Conversation.updated_at.desc())
+        .limit(50)
+        .all()
+    )
     return [
         {
             "id": c.id,
@@ -54,6 +81,19 @@ def get_conversation(conv_id: int, db: Session = Depends(get_db)):
 
 @router.delete("/conversations/{conv_id}")
 def delete_conversation(conv_id: int, db: Session = Depends(get_db)):
+    """Soft-delete: move conversation to trash."""
+    conv = db.get(Conversation, conv_id)
+    if not conv:
+        return {"error": "Conversation not found"}
+
+    conv.deleted_at = datetime.datetime.utcnow()
+    db.commit()
+    return {"status": "trashed"}
+
+
+@router.delete("/conversations/{conv_id}/permanent")
+def permanent_delete_conversation(conv_id: int, db: Session = Depends(get_db)):
+    """Hard-delete: permanently remove conversation and its messages."""
     conv = db.get(Conversation, conv_id)
     if not conv:
         return {"error": "Conversation not found"}
@@ -62,3 +102,15 @@ def delete_conversation(conv_id: int, db: Session = Depends(get_db)):
     db.delete(conv)
     db.commit()
     return {"status": "deleted"}
+
+
+@router.post("/conversations/{conv_id}/restore")
+def restore_conversation(conv_id: int, db: Session = Depends(get_db)):
+    """Restore a trashed conversation."""
+    conv = db.get(Conversation, conv_id)
+    if not conv:
+        return {"error": "Conversation not found"}
+
+    conv.deleted_at = None
+    db.commit()
+    return {"status": "restored"}

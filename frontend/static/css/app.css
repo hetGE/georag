@@ -115,7 +115,9 @@ nav ul:last-child li a.active:hover {
     min-width: var(--sidebar-width);
     border-right: 1px solid var(--pico-muted-border-color);
     padding-right: 1rem;
-    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
 }
 
 .chat-sidebar button {
@@ -127,6 +129,9 @@ nav ul:last-child li a.active:hover {
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
 }
 
 .conversation-item {
@@ -696,12 +701,16 @@ nav ul:last-child li a.active:hover {
 
 /* Scrollbar */
 .chat-messages::-webkit-scrollbar,
-.chat-sidebar::-webkit-scrollbar {
+.chat-sidebar::-webkit-scrollbar,
+.conversation-list::-webkit-scrollbar,
+.trash-list::-webkit-scrollbar {
     width: 6px;
 }
 
 .chat-messages::-webkit-scrollbar-thumb,
-.chat-sidebar::-webkit-scrollbar-thumb {
+.chat-sidebar::-webkit-scrollbar-thumb,
+.conversation-list::-webkit-scrollbar-thumb,
+.trash-list::-webkit-scrollbar-thumb {
     background: var(--pico-muted-border-color);
     border-radius: 3px;
 }
@@ -889,4 +898,144 @@ body:has(.lp-panel.open) .lp-toggle {
     body:has(.lp-panel.open) .lp-toggle {
         display: none;
     }
+}
+
+/* ===== Trash Feature ===== */
+
+.trash-toggle-btn {
+    margin-top: auto;
+    width: 100%;
+    font-size: 0.7rem;
+    padding: 0.35rem 0.75rem;
+    border: none;
+    background: transparent;
+    color: var(--pico-muted-color);
+    cursor: pointer;
+    opacity: 0.7;
+    transition: opacity 0.15s;
+    flex-shrink: 0;
+}
+
+.trash-toggle-btn:hover {
+    opacity: 1;
+    color: #000;
+}
+
+.trash-view {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.trash-header {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding-bottom: 0.5rem;
+    border-bottom: 1px solid var(--pico-muted-border-color);
+    margin-bottom: 0.5rem;
+    flex-shrink: 0;
+}
+
+.trash-back-btn {
+    background: none;
+    border: none;
+    font-size: 1rem;
+    cursor: pointer;
+    color: var(--pico-muted-color);
+    padding: 0.1rem 0.3rem;
+    margin: 0;
+    line-height: 1;
+    width: auto;
+}
+
+.trash-back-btn:hover {
+    color: var(--pico-color);
+}
+
+.trash-title {
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+.trash-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.trash-item {
+    position: relative;
+}
+
+.trash-actions {
+    float: right;
+    opacity: 0;
+    display: flex;
+    gap: 0.25rem;
+    transition: opacity 0.15s;
+}
+
+.conversation-item:hover .trash-actions {
+    opacity: 1;
+}
+
+.trash-restore {
+    cursor: pointer;
+    color: var(--pico-primary);
+    font-size: 0.625rem;
+    padding: 0 0.2rem;
+}
+
+.trash-restore:hover {
+    opacity: 0.7;
+}
+
+.trash-permanent-delete {
+    cursor: pointer;
+    color: var(--pico-del-color);
+    font-size: 0.5625rem;
+    padding: 0 0.2rem;
+}
+
+.trash-permanent-delete:hover {
+    opacity: 0.7;
+}
+
+/* ===== Confirmation Dialogs ===== */
+
+#trash-confirm-dialog article,
+#permanent-delete-dialog article {
+    max-width: 400px;
+    margin: 0 auto;
+}
+
+#trash-confirm-dialog header,
+#permanent-delete-dialog header {
+    font-size: 1rem;
+    font-weight: 600;
+}
+
+#trash-confirm-dialog footer,
+#permanent-delete-dialog footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 0.5rem;
+}
+
+#trash-confirm-dialog footer button,
+#permanent-delete-dialog footer button {
+    margin-bottom: 0;
+    font-size: 0.85rem;
+    padding: 0.4rem 1rem;
+    width: auto;
+}
+
+.permanent-delete-btn {
+    background: var(--pico-del-color) !important;
+    border-color: var(--pico-del-color) !important;
 }
