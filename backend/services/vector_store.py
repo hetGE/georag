@@ -76,6 +76,14 @@ def query_tags(query_embedding: list[float], tag_names: list[str], top_k: int | 
     return deduped
 
 
+def delete_collection(tag_name: str):
+    """Delete an entire tag collection from ChromaDB."""
+    try:
+        _client.delete_collection(_collection_name(tag_name))
+    except Exception:
+        pass
+
+
 def delete_file_from_tag(tag_name: str, file_path: str):
     """Remove all chunks for a file from a tag's collection."""
     try:

@@ -63,6 +63,17 @@ streamingChannel.onmessage = (e) => {
     }
 };
 
+// Refresh tags when navigating back to chat (covers create/edit/delete done on other pages)
+document.addEventListener('spa:pageshow', async (e) => {
+    if (e.detail.page === 'chat') {
+        await loadTags();
+        if (isWelcomeState) {
+            renderWelcomeTags();
+        }
+        renderActiveTagBadges();
+    }
+});
+
 // Cross-tab sync for non-streaming actions
 window.syncChannel.onmessage = (e) => {
     const { type, payload } = e.data;
@@ -75,6 +86,8 @@ window.syncChannel.onmessage = (e) => {
         if (document.body.dataset.activePage !== 'chat') return;
         if (isStreaming || remoteStreaming) return;
         loadConversation(payload.conversationId, { broadcast: false });
+    } else if (type === 'tags-changed') {
+        refreshChatTags();
     } else if (type === 'conversations-changed') {
         if (payload.trashedId && payload.trashedId === currentConversationId) {
             newChat({ broadcast: false });
@@ -471,6 +484,20 @@ window.updateChatInputState = updateInputState;
 async function loadTags() {
     allTags = await apiGet('/api/tags');
 }
+
+async function refreshChatTags() {
+    await loadTags();
+    // Remove stale selections (deleted tags)
+    const validNames = new Set(allTags.map(t => t.name));
+    for (const name of selectedTags) {
+        if (!validNames.has(name)) selectedTags.delete(name);
+    }
+    if (isWelcomeState) {
+        renderWelcomeTags();
+    }
+    renderActiveTagBadges();
+}
+window.refreshChatTags = refreshChatTags;
 
 function renderActiveTagBadges() {
     const container = document.getElementById('tag-badges');

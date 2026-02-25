@@ -260,9 +260,10 @@ Go to the **Documents** page (`/documents`) to:
 
 - **Search**: Find files by name
 - **Filter**: Narrow by file type (PDF, Word, Excel, etc.), processing status, or topic tag
-- **Tag files**: Click a file to manage its tags, or select multiple files for batch tagging
+- **Tag files**: Click a file to manage its tags, or select multiple files for batch tagging. The stats bar and tag filter counts update live after every tag change.
+- **Manage tags**: Click "Manage Tags" to create, edit, or delete topic tags. You can change a tag's display name, color, and description. The internal slug is immutable once created. Deleting a tag removes it from all files and deletes its vector collection. Tag creation and deletion are disabled while processing is running.
 - **Open files**: Click the filename to open it directly in your system's default application
-- **See stats**: The top bar shows total file counts and processing status
+- **See stats**: The top bar shows total file counts and processing status, refreshed automatically when tags are assigned or removed
 
 ## Stopping the Server
 
@@ -689,9 +690,10 @@ FastAPI auto generates interactive docs at `/docs` (Swagger) and `/redoc`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/api/tags` | All tags with file counts. |
+| `GET` | `/api/tags` | All tags with live file counts. |
 | `POST` | `/api/tags` | Create tag. Body: `{name, display_name, description?, color?}`. |
-| `DELETE` | `/api/tags/{name}` | Delete tag + all associations. |
+| `PUT` | `/api/tags/{id}` | Update tag. Body: `{display_name?, description?, color?}`. Slug is immutable. |
+| `DELETE` | `/api/tags/{name}` | Delete tag, all file associations, and its vector collection. |
 
 ### Processing Endpoints
 

@@ -5,6 +5,17 @@ import re
 from backend.config import DEFAULT_TAGS
 from backend.services.llm_client import chat_completion
 
+
+def _get_all_tags():
+    """Fetch all tags from DB so the LLM sees newly created tags."""
+    from backend.models.database import SessionLocal
+    from backend.models.schemas import Tag
+    db = SessionLocal()
+    try:
+        return [{"name": t.name, "description": t.description or t.display_name} for t in db.query(Tag).all()]
+    finally:
+        db.close()
+
 # Keywords to tag mappings (checked against folder path AND filename)
 HEURISTIC_HINTS = {
     "pile": "piling",
@@ -117,9 +128,10 @@ tag_by_folder = tag_by_heuristic
 async def tag_by_llm(text_preview: str, filename: str) -> list[tuple[str, float]]:
     """Use LLM to classify document into tags.
     Returns list of (tag_name, confidence) tuples."""
-    tag_names = [t["name"] for t in DEFAULT_TAGS]
+    all_tags = _get_all_tags()
+    tag_names = [t["name"] for t in all_tags]
     tag_descriptions = "\n".join(
-        f"- {t['name']}: {t['description']}" for t in DEFAULT_TAGS
+        f"- {t['name']}: {t['description']}" for t in all_tags
     )
 
     prompt = f"""Classify this geotechnical engineering document into one or more of these categories.
@@ -159,9 +171,10 @@ async def tag_batch_by_llm(files_info: list[dict]) -> dict[str, list[tuple[str, 
     files_info: [{"filename": str, "text_preview": str}, ...]
     Returns: {"filename": [(tag_name, confidence), ...], ...}
     """
-    tag_names = [t["name"] for t in DEFAULT_TAGS]
+    all_tags = _get_all_tags()
+    tag_names = [t["name"] for t in all_tags]
     tag_descriptions = "\n".join(
-        f"- {t['name']}: {t['description']}" for t in DEFAULT_TAGS
+        f"- {t['name']}: {t['description']}" for t in all_tags
     )
 
     file_entries = []

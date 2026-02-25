@@ -136,6 +136,7 @@
                 <button id="process-btn" class="outline" style="display:none;">Process Selected</button>
                 <button id="autotag-btn" class="outline" style="display:none;">Auto-Tag Selected</button>
                 <button id="multi-tag-btn" class="outline" style="display:none;">Multi Tag</button>
+                <button id="manage-tags-btn" class="outline">Manage Tags</button>
             </div>
         </div>
 
@@ -173,6 +174,17 @@
                 <div id="tag-modal-content">
                     <!-- Populated by JS -->
                 </div>
+            </article>
+        </dialog>
+
+        <!-- Tag Admin Modal -->
+        <dialog id="tag-admin-modal">
+            <article>
+                <header>
+                    <button aria-label="Close" rel="prev" class="close-tag-admin"></button>
+                    <h3>Manage Tags</h3>
+                </header>
+                <div id="tag-admin-content"></div>
             </article>
         </dialog>
     </div>

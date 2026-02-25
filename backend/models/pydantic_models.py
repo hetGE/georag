@@ -11,6 +11,12 @@ class TagCreate(BaseModel):
     color: Optional[str] = "#6c757d"
 
 
+class TagUpdate(BaseModel):
+    display_name: Optional[str] = None
+    description: Optional[str] = None
+    color: Optional[str] = None
+
+
 class TagResponse(BaseModel):
     id: int
     name: str

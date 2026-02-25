@@ -44,6 +44,15 @@ async function apiDelete(url, data = null) {
     return res.json();
 }
 
+async function apiPut(url, data = {}) {
+    const res = await fetch(url, {
+        method: 'PUT',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(data),
+    });
+    return res.json();
+}
+
 function createTagBadge(tag, selected = false, onClick = null) {
     const badge = document.createElement('span');
     badge.className = 'tag-badge' + (selected ? ' selected' : '');

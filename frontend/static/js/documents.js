@@ -28,13 +28,17 @@ async function initDocuments() {
     document.getElementById('process-btn').addEventListener('click', processSelected);
     document.getElementById('autotag-btn').addEventListener('click', autotagSelected);
     document.getElementById('multi-tag-btn').addEventListener('click', openMultiTagModal);
+    document.getElementById('manage-tags-btn').addEventListener('click', openTagAdminModal);
 
     // Show action buttons once processing status is known
     checkActionButtonVisibility();
 
-    // Close modal
+    // Close modals
     document.querySelector('.close-modal')?.addEventListener('click', () => {
         document.getElementById('tag-modal').close();
+    });
+    document.querySelector('.close-tag-admin')?.addEventListener('click', () => {
+        document.getElementById('tag-admin-modal').close();
     });
 }
 
@@ -284,7 +288,7 @@ function renderTagModalContent(fileId, filename, file, currentTags, movedTag) {
             pill.addEventListener('click', () => {
                 currentTags.delete(tag.name);
                 renderTagModalContent(fileId, filename, file, currentTags, tag.name);
-                apiDelete(`/api/documents/${fileId}/tags/${tag.name}`).then(() => loadDocuments());
+                apiDelete(`/api/documents/${fileId}/tags/${tag.name}`).then(async () => { loadDocuments(); loadStats(); allTagsList = await apiGet('/api/tags'); refreshTagFilter(); });
             });
             assignedContainer.appendChild(pill);
         });
@@ -303,7 +307,7 @@ function renderTagModalContent(fileId, filename, file, currentTags, movedTag) {
             pill.addEventListener('click', () => {
                 currentTags.add(tag.name);
                 renderTagModalContent(fileId, filename, file, currentTags, tag.name);
-                apiPost(`/api/documents/${fileId}/tags/${tag.name}`, {}).then(() => loadDocuments());
+                apiPost(`/api/documents/${fileId}/tags/${tag.name}`, {}).then(async () => { loadDocuments(); loadStats(); allTagsList = await apiGet('/api/tags'); refreshTagFilter(); });
             });
             availableContainer.appendChild(pill);
         });
@@ -357,7 +361,7 @@ function renderMultiTagModalContent(fileIds, selectedFiles, currentTags, movedTa
             pill.addEventListener('click', () => {
                 currentTags.delete(tag.name);
                 renderMultiTagModalContent(fileIds, selectedFiles, currentTags, tag.name);
-                apiDelete(`/api/documents/batch/tags/${tag.name}`, {file_ids: fileIds}).then(() => loadDocuments());
+                apiDelete(`/api/documents/batch/tags/${tag.name}`, {file_ids: fileIds}).then(async () => { loadDocuments(); loadStats(); allTagsList = await apiGet('/api/tags'); refreshTagFilter(); });
             });
             assignedContainer.appendChild(pill);
         });
@@ -376,9 +380,222 @@ function renderMultiTagModalContent(fileIds, selectedFiles, currentTags, movedTa
             pill.addEventListener('click', () => {
                 currentTags.add(tag.name);
                 renderMultiTagModalContent(fileIds, selectedFiles, currentTags, tag.name);
-                apiPost(`/api/documents/batch/tags/${tag.name}`, {file_ids: fileIds}).then(() => loadDocuments());
+                apiPost(`/api/documents/batch/tags/${tag.name}`, {file_ids: fileIds}).then(async () => { loadDocuments(); loadStats(); allTagsList = await apiGet('/api/tags'); refreshTagFilter(); });
             });
             availableContainer.appendChild(pill);
         });
     }
+}
+
+// ===== Tag Admin (Create & Edit) =====
+
+async function openTagAdminModal() {
+    const modal = document.getElementById('tag-admin-modal');
+    const content = document.getElementById('tag-admin-content');
+    content.innerHTML = '<p>Loading...</p>';
+    modal.showModal();
+
+    allTagsList = await apiGet('/api/tags');
+    renderTagAdmin();
+}
+
+function renderTagAdmin() {
+    const content = document.getElementById('tag-admin-content');
+    const isProcessing = window.libraryIsProcessing || false;
+
+    // Tags table
+    let rows = '';
+    allTagsList.forEach(tag => {
+        rows += `
+        <tr id="tag-admin-row-${tag.id}">
+            <td class="col-color"><span class="tag-admin-swatch" style="background:${escapeHtml(tag.color)}"></span></td>
+            <td class="col-name">${escapeHtml(tag.display_name)}</td>
+            <td class="col-slug">${escapeHtml(tag.name)}</td>
+            <td class="col-desc" title="${escapeHtml(tag.description || '')}">${escapeHtml(tag.description || '')}</td>
+            <td class="col-files">${tag.file_count}</td>
+            <td class="col-actions"><button class="outline tag-admin-edit-btn" onclick="toggleTagEdit(${tag.id})">Edit</button></td>
+        </tr>
+        <tr class="tag-admin-edit-row" id="tag-edit-form-${tag.id}" style="display:none">
+            <td class="col-color">
+                <input type="color" id="tag-edit-color-${tag.id}" value="${escapeHtml(tag.color)}">
+            </td>
+            <td class="col-name">
+                <input type="text" id="tag-edit-display-${tag.id}" value="${escapeHtml(tag.display_name)}">
+            </td>
+            <td class="col-slug">
+                <span>${escapeHtml(tag.name)}</span>
+                <span class="tag-admin-note">immutable</span>
+            </td>
+            <td class="col-desc">
+                <input type="text" id="tag-edit-desc-${tag.id}" value="${escapeHtml(tag.description || '')}">
+            </td>
+            <td class="col-files"></td>
+            <td class="col-actions">
+                <div class="tag-admin-edit-actions">
+                    <button onclick="saveTagEdit(${tag.id})">Save</button>
+                    <button class="outline" onclick="toggleTagEdit(${tag.id})">Cancel</button>
+                    <button class="tag-admin-delete-btn" onclick="deleteTag('${tag.name}', '${escapeHtml(tag.display_name)}')">Delete</button>
+                </div>
+            </td>
+        </tr>`;
+    });
+
+    // Create New Tag section
+    const disabled = isProcessing ? 'disabled' : '';
+    const processingNote = isProcessing ? ' <small>— Tag creation is disabled while processing is running.</small>' : '';
+
+    let html = `
+    <div class="tag-admin-table-wrap">
+        <table class="tag-admin-table">
+            <thead>
+                <tr>
+                    <th class="col-color">Color</th>
+                    <th class="col-name">Display Name</th>
+                    <th class="col-slug">Slug</th>
+                    <th class="col-desc">Description</th>
+                    <th class="col-files">Files</th>
+                    <th class="col-actions"></th>
+                </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+            <tfoot>
+                <tr class="tag-admin-create-label-row">
+                    <td colspan="6">CREATE NEW TAG${processingNote}</td>
+                </tr>
+                <tr class="tag-admin-create-row">
+                    <td class="col-color"><input type="color" id="tag-create-color" value="#6c757d" ${disabled}></td>
+                    <td class="col-name"><input type="text" id="tag-create-display" placeholder="Display Name" ${disabled}></td>
+                    <td class="col-slug"><input type="text" id="tag-create-name" placeholder="slug_name" ${disabled}></td>
+                    <td class="col-desc"><input type="text" id="tag-create-desc" placeholder="Description" ${disabled}></td>
+                    <td class="col-files"></td>
+                    <td class="col-actions"><button onclick="createNewTag()" ${disabled}>Create</button></td>
+                </tr>
+            </tfoot>
+        </table>
+    </div>`;
+
+    content.innerHTML = html;
+}
+
+function toggleTagEdit(tagId) {
+    const form = document.getElementById(`tag-edit-form-${tagId}`);
+    if (form) {
+        form.style.display = form.style.display === 'none' ? '' : 'none';
+    }
+}
+
+async function saveTagEdit(tagId) {
+    const displayName = document.getElementById(`tag-edit-display-${tagId}`).value.trim();
+    const description = document.getElementById(`tag-edit-desc-${tagId}`).value.trim();
+    const color = document.getElementById(`tag-edit-color-${tagId}`).value;
+
+    if (!displayName) {
+        alert('Display name is required.');
+        return;
+    }
+
+    const result = await apiPut(`/api/tags/${tagId}`, {
+        display_name: displayName,
+        description: description || null,
+        color: color,
+    });
+
+    if (result.error) {
+        alert(result.error);
+        return;
+    }
+
+    // Refresh tags and re-render
+    allTagsList = await apiGet('/api/tags');
+    renderTagAdmin();
+    refreshTagFilter();
+    loadDocuments();
+
+    // Update chat page tag pills (same tab + other tabs)
+    window.refreshChatTags?.();
+    window.syncChannel.postMessage({ type: 'tags-changed', payload: {} });
+}
+
+async function deleteTag(tagName, displayName) {
+    if (!confirm(`Delete "${displayName}"? This will remove it from all files.`)) return;
+
+    const result = await apiDelete(`/api/tags/${tagName}`);
+    if (result.error) {
+        alert(result.error);
+        return;
+    }
+
+    allTagsList = await apiGet('/api/tags');
+    renderTagAdmin();
+    refreshTagFilter();
+    loadDocuments();
+
+    window.refreshChatTags?.();
+    window.syncChannel.postMessage({ type: 'tags-changed', payload: {} });
+}
+
+async function createNewTag() {
+    const name = document.getElementById('tag-create-name').value.trim();
+    const displayName = document.getElementById('tag-create-display').value.trim();
+    const description = document.getElementById('tag-create-desc').value.trim();
+    const color = document.getElementById('tag-create-color').value;
+
+    if (!name) {
+        alert('Internal name is required.');
+        return;
+    }
+    if (!/^[a-z0-9_]+$/.test(name)) {
+        alert('Internal name must contain only lowercase letters, numbers, and underscores.');
+        return;
+    }
+    if (!displayName) {
+        alert('Display name is required.');
+        return;
+    }
+
+    const result = await apiPost('/api/tags', {
+        name: name,
+        display_name: displayName,
+        description: description || null,
+        color: color,
+    });
+
+    if (result.error) {
+        alert(result.error);
+        return;
+    }
+
+    // Refresh tags and re-render
+    allTagsList = await apiGet('/api/tags');
+    renderTagAdmin();
+    refreshTagFilter();
+
+    // Update chat page tag pills (same tab + other tabs)
+    window.refreshChatTags?.();
+    window.syncChannel.postMessage({ type: 'tags-changed', payload: {} });
+}
+
+function refreshTagFilter() {
+    const select = document.getElementById('tag-filter');
+    const currentValue = select.value;
+
+    // Remove all options except "All tags"
+    while (select.options.length > 1) {
+        select.remove(1);
+    }
+
+    const noTagOpt = document.createElement('option');
+    noTagOpt.value = '__none__';
+    noTagOpt.textContent = 'No tag';
+    select.appendChild(noTagOpt);
+
+    allTagsList.forEach(tag => {
+        const opt = document.createElement('option');
+        opt.value = tag.name;
+        opt.textContent = `${tag.display_name} (${tag.file_count})`;
+        select.appendChild(opt);
+    });
+
+    // Restore previous selection if still valid
+    select.value = currentValue;
 }
