@@ -78,6 +78,7 @@ def onboarding_status(db: Session = Depends(get_db)):
     new_files = status_counts.get("new", 0) + status_counts.get("failed", 0)
     processed_files = status_counts.get("processed", 0)
     failed_files = status_counts.get("failed", 0)
+    skipped_files = status_counts.get("skipped", 0)
 
     # Extension breakdown for display
     by_extension = dict(
@@ -108,6 +109,7 @@ def onboarding_status(db: Session = Depends(get_db)):
         "new_files": new_files,
         "processed_files": processed_files,
         "failed_files": failed_files,
+        "skipped_files": skipped_files,
         "is_processing": _processor.is_running,
         "dismissed": dismissed,
         "by_extension": by_extension,

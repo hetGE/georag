@@ -70,12 +70,12 @@ async function loadTagFilter() {
 
 async function loadStats() {
     const stats = await apiGet('/api/documents/stats');
-    document.getElementById('stats-total').textContent = `${stats.total.toLocaleString()} files`;
+    document.getElementById('stats-total').textContent = `${stats.total} files`;
 
-    const statusParts = Object.entries(stats.by_status || {})
-        .map(([k, v]) => `${v} ${k}`)
-        .join(', ');
-    document.getElementById('stats-status').textContent = statusParts || 'No files scanned';
+    const parts = [];
+    if (stats.untagged > 0) parts.push(`${stats.untagged} untagged`);
+    Object.entries(stats.by_status || {}).forEach(([k, v]) => parts.push(`${v} ${k}`));
+    document.getElementById('stats-status').textContent = parts.join(', ') || 'No files scanned';
 }
 
 async function loadDocuments() {

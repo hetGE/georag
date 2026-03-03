@@ -695,7 +695,7 @@ nav ul:last-child li a.active:hover {
     flex-wrap: wrap;
     gap: 0.5rem;
     min-height: 2rem;
-    max-height: 200px;
+    max-height: 400px;
     overflow-y: auto;
     overflow-x: visible;
     padding: 0.25rem;
@@ -763,6 +763,8 @@ nav ul:last-child li a.active:hover {
 
 #tag-modal article {
     overflow: visible;
+    width: min(calc(100vw - 2rem), 750px);
+    max-height: min(calc(100vh - 2rem), 700px);
 }
 
 #tag-modal-content {

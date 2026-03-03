@@ -89,7 +89,9 @@ def document_stats(db: Session = Depends(get_db)):
         .limit(20)
         .all()
     )
-    return {"total": total, "by_status": by_status, "by_extension": by_ext}
+    tagged_ids = db.query(FileTag.file_id).distinct()
+    untagged = db.query(File).filter(~File.id.in_(tagged_ids)).count()
+    return {"total": total, "by_status": by_status, "by_extension": by_ext, "untagged": untagged}
 
 
 @router.post("/documents/{file_id}/open")
