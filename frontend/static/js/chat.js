@@ -401,7 +401,7 @@ function renderWelcomeTags() {
         return;
     }
 
-    const sorted = [...allTags].sort((a, b) => a.display_name.length - b.display_name.length);
+    const sorted = [...allTags].sort((a, b) => (b.file_count || 0) - (a.file_count || 0));
     sorted.forEach(tag => {
         const pill = document.createElement('span');
         pill.className = 'welcome-tag';

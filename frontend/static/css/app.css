@@ -35,6 +35,11 @@ body {
 
 nav.container-fluid {
     flex-shrink: 0;
+    height: 40px;
+    min-height: 40px;
+    padding-top: 0;
+    padding-bottom: 0;
+    align-items: center;
 }
 
 main.container-fluid {
@@ -79,14 +84,14 @@ body.chat-streaming .lp-actions:not(:has(#lp-stop-btn))::after {
 .nav-brand {
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.4rem;
     color: var(--brand-color) !important;
     text-decoration: none;
-    font-size: 1.25rem;
+    font-size: 1.05rem;
 }
 
 .nav-logo {
-    height: 24px;
+    height: 20px;
     width: auto;
 }
 
@@ -96,18 +101,20 @@ nav ul:last-child {
 }
 
 nav ul:last-child li {
-    padding: 0.5rem 0.25rem;
+    padding: 0.25rem 0.2rem;
 }
 
 nav ul:last-child li a {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    height: 30px;
     margin: 0;
-    padding: 0.3rem 1rem;
+    padding: 0 0.85rem;
     border-radius: 2rem;
     border: 1.5px solid var(--brand-color);
     color: var(--brand-color);
     text-decoration: none;
-    font-size: 0.875rem;
+    font-size: 0.8rem;
     font-weight: 500;
     transition: background 0.15s, color 0.15s;
 }
@@ -291,10 +298,11 @@ nav ul:last-child li a.active:hover {
 
 /* Welcome Tag Grid */
 .welcome-tags {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
     gap: 0.5rem;
-    max-width: 600px;
+    max-width: 700px;
     margin: 1.25rem auto 0;
 }
 
