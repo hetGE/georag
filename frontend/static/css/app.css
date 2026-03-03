@@ -599,12 +599,12 @@ nav ul:last-child li a.active:hover {
 }
 
 .file-table {
-    font-size: 0.85rem;
+    font-size: 0.6rem;
 }
 
 .file-table th,
 .file-table td {
-    padding: 0.4rem 0.5rem;
+    padding: 0.2rem 0.4rem;
     white-space: nowrap;
 }
 
@@ -626,27 +626,31 @@ nav ul:last-child li a.active:hover {
     text-overflow: ellipsis;
 }
 
+.file-table th:nth-child(7),
+.file-table td:nth-child(7) {
+    max-width: 100px;
+}
+
 .file-table .tag-cell {
-    display: flex;
-    gap: 0.25rem;
-    flex-wrap: wrap;
+    white-space: normal;
 }
 
 .tag-mini {
     display: inline-block;
-    padding: 0.1rem 0.4rem;
+    padding: 0.1rem 0.35rem;
     border-radius: 0.75rem;
-    font-size: 0.7rem;
+    font-size: 0.6rem;
     font-weight: 500;
     color: #fff;
     white-space: nowrap;
+    margin: 0.05rem;
 }
 
 .status-badge {
     display: inline-block;
     padding: 0.1rem 0.4rem;
     border-radius: 0.25rem;
-    font-size: 0.75rem;
+    font-size: 0.6rem;
     font-weight: 500;
 }
 

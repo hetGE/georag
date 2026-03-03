@@ -107,9 +107,10 @@ function renderFileTable(files) {
 
     tbody.innerHTML = files.map(f => {
         const checked = selectedFileIds.has(f.id) ? 'checked' : '';
-        const tags = (f.tags || []).map(t =>
-            `<span class="tag-mini" style="background:${t.color}">${t.display_name}</span>`
-        ).join('');
+        const tags = (f.tags || []).map(t => {
+            const abbr = t.display_name.split(/\s+/).map(w => w[0]).join('').toUpperCase();
+            return `<span class="tag-mini" style="background:${t.color}" title="${escapeHtml(t.display_name)}">${abbr}</span>`;
+        }).join('');
 
         return `<tr>
             <td><input type="checkbox" class="file-cb" data-id="${f.id}" ${checked}></td>
