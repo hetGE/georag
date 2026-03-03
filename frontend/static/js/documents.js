@@ -264,6 +264,9 @@ function renderTagModalContent(fileId, filename, file, currentTags, movedTag) {
             <button class="open-file-btn outline" onclick="apiPost('/api/documents/${fileId}/open', {})">
                 Open File
             </button>
+            <button class="open-file-btn outline" onclick="apiPost('/api/documents/${fileId}/open-folder', {})">
+                Open Folder
+            </button>
             <span class="open-file-path" title="${escapeHtml(file?.relative_path || '')}">${escapeHtml(filename)}</span>
         </div>
         <div class="tag-modal-section-label">Assigned</div>

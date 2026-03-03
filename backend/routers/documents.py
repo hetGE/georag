@@ -1,4 +1,5 @@
 """Document list, search, filter, pagination."""
+import platform
 import subprocess
 from pathlib import Path
 from fastapi import APIRouter, Depends, Query, HTTPException
@@ -108,6 +109,31 @@ def open_file(file_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=403, detail="Access denied")
 
     subprocess.Popen(["open", str(resolved)])
+    return {"status": "opened"}
+
+
+@router.post("/documents/{file_id}/open-folder")
+def open_folder(file_id: int, db: Session = Depends(get_db)):
+    """Open the containing folder of a file with the file selected."""
+    file = db.get(File, file_id)
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    full_path = ENGINEERING_ROOT / file.relative_path
+    if not full_path.exists():
+        raise HTTPException(status_code=404, detail="File not found on disk")
+
+    resolved = full_path.resolve()
+    if not str(resolved).startswith(str(ENGINEERING_ROOT.resolve())):
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    system = platform.system()
+    if system == "Darwin":
+        subprocess.Popen(["open", "-R", str(resolved)])
+    elif system == "Windows":
+        subprocess.Popen(["explorer", "/select,", str(resolved)])
+    else:
+        subprocess.Popen(["xdg-open", str(resolved.parent)])
     return {"status": "opened"}
 
 
