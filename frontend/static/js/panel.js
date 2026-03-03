@@ -177,10 +177,15 @@ const LibraryPanel = (() => {
         const extras = [];
         if (status.failed_files > 0) extras.push(`${status.failed_files} failed`);
 
+        const tagLine = (status.new_tags_added > 0)
+            ? `<p class="lp-stats">${status.new_tags_added} tag${status.new_tags_added !== 1 ? 's' : ''} added to ${status.files_newly_tagged} file${status.files_newly_tagged !== 1 ? 's' : ''}</p>`
+            : '';
+
         return `<div class="lp-phase">
             <progress value="${pct}" max="100"></progress>
             <p class="lp-progress-text">${status.processed_files.toLocaleString()} / ${status.total_files.toLocaleString()} files (${pct}%)</p>
             ${extras.length ? `<p class="lp-stats">${extras.join(' &middot; ')}</p>` : ''}
+            ${tagLine}
             ${status.current_file ? `<p class="lp-stats" style="font-family:monospace;font-size:0.7rem;word-break:break-all;">${escapeHtml(status.current_file)}</p>` : ''}
             <p style="font-size:0.82rem;color:var(--pico-muted-color);">Progress is saved automatically. You can close this panel.</p>
             <div class="lp-actions">
@@ -203,8 +208,12 @@ const LibraryPanel = (() => {
     }
 
     function renderCompletePhase(status) {
+        const tagLine = (status.new_tags_added > 0)
+            ? `<p class="lp-stats">${status.new_tags_added} tag${status.new_tags_added !== 1 ? 's' : ''} added to ${status.files_newly_tagged} file${status.files_newly_tagged !== 1 ? 's' : ''}</p>`
+            : '';
         return `<div class="lp-phase">
             <p><strong>${status.processed_files.toLocaleString()}</strong> files processed${status.failed_files > 0 ? `, ${status.failed_files} failed` : ''}. Your library is ready for searching.</p>
+            ${tagLine}
         </div>`;
     }
 

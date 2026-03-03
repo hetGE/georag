@@ -59,6 +59,8 @@ class DocumentProcessor:
         self.current_file = None
         self.errors = []
         self._stop_flag = False
+        self.new_tags_added = 0
+        self.files_newly_tagged = 0
 
     def stop(self):
         self._stop_flag = True
@@ -71,6 +73,8 @@ class DocumentProcessor:
         self.failed_files = 0
         self.errors = []
         self.current_file = None
+        self.new_tags_added = 0
+        self.files_newly_tagged = 0
 
         db = SessionLocal()
         try:
@@ -132,17 +136,18 @@ class DocumentProcessor:
                     # Determine tags
                     if tag_names:
                         file_tags = [(t, 1.0) for t in tag_names]
-                    else:
-                        file_tags = tag_by_heuristic(file_record.relative_path, file_record.filename)
-
-                    if file_tags:
                         file_data.append((file_record, text, file_tags))
-                    elif text:
-                        # Needs LLM tagging
-                        llm_tagging_queue.append((file_record, text))
-                        file_data.append((file_record, text, None))  # placeholder
                     else:
-                        file_data.append((file_record, text, []))
+                        heuristic_tags = tag_by_heuristic(file_record.relative_path, file_record.filename)
+
+                        if text:
+                            # Always queue for LLM so new/additional tags are considered
+                            llm_tagging_queue.append((file_record, text))
+                            file_data.append((file_record, text, heuristic_tags))
+                        elif heuristic_tags:
+                            file_data.append((file_record, text, heuristic_tags))
+                        else:
+                            file_data.append((file_record, text, []))
 
                 # Phase 2: Batch LLM tagging for files that need it
                 if self._stop_flag:
@@ -157,25 +162,32 @@ class DocumentProcessor:
                             ]
                             llm_results = await tag_batch_by_llm(files_info)
 
-                            # Update file_data with LLM results
+                            # Merge LLM results with any existing heuristic tags
                             for fr, txt in llm_tagging_queue:
-                                tags = llm_results.get(fr.filename, [])
-                                # Find and update the placeholder in file_data
+                                llm_tags = llm_results.get(fr.filename, [])
                                 for j, (fd_rec, fd_txt, fd_tags) in enumerate(file_data):
-                                    if fd_rec.id == fr.id and fd_tags is None:
-                                        file_data[j] = (fd_rec, fd_txt, tags)
+                                    if fd_rec.id == fr.id:
+                                        existing_names = {t for t, _ in (fd_tags or [])}
+                                        merged = list(fd_tags or []) + [
+                                            (t, c) for t, c in llm_tags if t not in existing_names
+                                        ]
+                                        file_data[j] = (fd_rec, fd_txt, merged)
                                         break
                         except Exception:
                             # Fallback: try individual LLM tagging
                             for fr, txt in llm_tagging_queue:
                                 try:
                                     async with _llm_semaphore:
-                                        tags = await tag_by_llm(txt[:2000], fr.filename)
+                                        llm_tags = await tag_by_llm(txt[:2000], fr.filename)
                                 except Exception:
-                                    tags = []
+                                    llm_tags = []
                                 for j, (fd_rec, fd_txt, fd_tags) in enumerate(file_data):
-                                    if fd_rec.id == fr.id and fd_tags is None:
-                                        file_data[j] = (fd_rec, fd_txt, tags)
+                                    if fd_rec.id == fr.id:
+                                        existing_names = {t for t, _ in (fd_tags or [])}
+                                        merged = list(fd_tags or []) + [
+                                            (t, c) for t, c in llm_tags if t not in existing_names
+                                        ]
+                                        file_data[j] = (fd_rec, fd_txt, merged)
                                         break
 
                 if self._stop_flag:
@@ -245,6 +257,7 @@ class DocumentProcessor:
 
         # Save tags to database
         async with _db_lock:
+            file_got_new_tag = False
             for tag_name, confidence in file_tags:
                 tag = db.query(Tag).filter(Tag.name == tag_name).first()
                 if not tag:
@@ -260,6 +273,11 @@ class DocumentProcessor:
                         source=source, confidence=confidence,
                     ))
                     tag.file_count = db.query(FileTag).filter(FileTag.tag_id == tag.id).count() + 1
+                    self.new_tags_added += 1
+                    file_got_new_tag = True
+
+            if file_got_new_tag:
+                self.files_newly_tagged += 1
 
             if file_tags:
                 file_record.auto_tagged = 1

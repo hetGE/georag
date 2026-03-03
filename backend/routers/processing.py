@@ -111,6 +111,8 @@ def onboarding_status(db: Session = Depends(get_db)):
         "dismissed": dismissed,
         "by_extension": by_extension,
         "current_file": _processor.current_file,
+        "new_tags_added": _processor.new_tags_added,
+        "files_newly_tagged": _processor.files_newly_tagged,
     }
 
 
