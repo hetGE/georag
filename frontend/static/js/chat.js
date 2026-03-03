@@ -1,5 +1,46 @@
 // geoRAG Chat Interface
 
+// Render markdown with LaTeX math support.
+// Extracts $$...$$ (display) and $...$ (inline) blocks before markdown
+// parsing so that underscores/asterisks inside formulas aren't mangled,
+// then renders them with KaTeX after marked has run.
+function renderContent(text) {
+    const mathBlocks = [];
+
+    let processed = text;
+
+    // Protect display math first ($$...$$)
+    processed = processed.replace(/\$\$([\s\S]*?)\$\$/g, (_m, math) => {
+        const idx = mathBlocks.length;
+        mathBlocks.push({ math, display: true });
+        return `\x00MATH${idx}\x00`;
+    });
+
+    // Protect inline math ($...$) — single $ must not span newlines
+    processed = processed.replace(/\$([^\$\n]+?)\$/g, (_m, math) => {
+        const idx = mathBlocks.length;
+        mathBlocks.push({ math, display: false });
+        return `\x00MATH${idx}\x00`;
+    });
+
+    let html = marked.parse(processed);
+
+    // Replace placeholders with KaTeX-rendered HTML
+    html = html.replace(/\x00MATH(\d+)\x00/g, (_m, idx) => {
+        const block = mathBlocks[parseInt(idx)];
+        try {
+            return katex.renderToString(block.math.trim(), {
+                displayMode: block.display,
+                throwOnError: false,
+            });
+        } catch {
+            return block.display ? `$$${block.math}$$` : `$${block.math}$`;
+        }
+    });
+
+    return html;
+}
+
 let currentConversationId = null;
 let selectedTags = new Set();
 let allTags = [];
@@ -210,7 +251,7 @@ async function showRemoteStream(conversationId, broadcastTags) {
             const data = JSON.parse(e.data);
             if (data.token !== undefined) {
                 fullText += data.token;
-                contentEl.innerHTML = marked.parse(fullText);
+                contentEl.innerHTML = renderContent(fullText);
                 scrollToBottom();
             }
         } catch {}
@@ -789,7 +830,7 @@ async function handleSubmit(e) {
                                 streamingChannel.postMessage({ streaming: true, conversationId: currentConversationId, selectedTags: Array.from(selectedTags) });
                             }
                             fullText += data.token;
-                            contentEl.innerHTML = marked.parse(fullText);
+                            contentEl.innerHTML = renderContent(fullText);
                             scrollToBottom();
                         }
                     } catch {}
@@ -844,7 +885,7 @@ function appendMessage(role, content, sources = null, streaming = false) {
     if (streaming) {
         contentEl.innerHTML = '<span class="loading-dots">Thinking</span>';
     } else if (role === 'assistant') {
-        contentEl.innerHTML = marked.parse(content);
+        contentEl.innerHTML = renderContent(content);
     } else {
         contentEl.textContent = content;
     }
