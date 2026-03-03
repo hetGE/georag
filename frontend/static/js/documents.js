@@ -26,6 +26,7 @@ async function initDocuments() {
 
     document.getElementById('select-all').addEventListener('change', toggleSelectAll);
     document.getElementById('process-btn').addEventListener('click', markSelectedAsNew);
+    document.getElementById('skip-btn').addEventListener('click', markSelectedAsSkipped);
     document.getElementById('autotag-btn').addEventListener('click', autotagSelected);
     document.getElementById('multi-tag-btn').addEventListener('click', openMultiTagModal);
     document.getElementById('manage-tags-btn').addEventListener('click', openTagAdminModal);
@@ -184,6 +185,17 @@ async function markSelectedAsNew() {
     loadDocuments();
 }
 
+async function markSelectedAsSkipped() {
+    const ids = Array.from(selectedFileIds);
+    if (!ids.length) {
+        alert('Select files first');
+        return;
+    }
+    await apiPost('/api/documents/batch/mark-skipped', { file_ids: ids });
+    selectedFileIds.clear();
+    loadDocuments();
+}
+
 async function autotagSelected() {
     const ids = Array.from(selectedFileIds);
     if (!ids.length) {
@@ -198,6 +210,7 @@ async function checkActionButtonVisibility() {
         const status = await apiGet('/api/processing/status');
         const show = !status.is_running;
         document.getElementById('process-btn').style.display = show ? '' : 'none';
+        document.getElementById('skip-btn').style.display = show ? '' : 'none';
         document.getElementById('autotag-btn').style.display = show ? '' : 'none';
         if (!show) {
             document.getElementById('multi-tag-btn').style.display = 'none';

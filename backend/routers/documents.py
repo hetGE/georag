@@ -207,6 +207,19 @@ def batch_mark_new(req: BatchTagRequest, db: Session = Depends(get_db)):
     return {"status": "marked", "count": count}
 
 
+@router.post("/documents/batch/mark-skipped")
+def batch_mark_skipped(req: BatchTagRequest, db: Session = Depends(get_db)):
+    """Manually skip selected files so they won't be processed."""
+    count = 0
+    for file_id in req.file_ids:
+        file = db.get(File, file_id)
+        if file and file.scan_status != "skipped":
+            file.scan_status = "skipped"
+            count += 1
+    db.commit()
+    return {"status": "marked", "count": count}
+
+
 @router.post("/documents/{file_id}/tags/{tag_name}")
 def add_tag_to_file(file_id: int, tag_name: str, db: Session = Depends(get_db)):
     file = db.get(File, file_id)

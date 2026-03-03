@@ -176,7 +176,6 @@ const LibraryPanel = (() => {
 
         const extras = [];
         if (status.failed_files > 0) extras.push(`${status.failed_files} failed`);
-        if (status.skipped_files > 0) extras.push(`${status.skipped_files} skipped`);
 
         return `<div class="lp-phase">
             <progress value="${pct}" max="100"></progress>
