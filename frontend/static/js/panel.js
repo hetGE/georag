@@ -163,6 +163,7 @@ const LibraryPanel = (() => {
             <p>Found <strong>${status.total_files.toLocaleString()}</strong> files${extSummary}.</p>
             <p>${remaining.toLocaleString()} files to process. We'll extract text, auto-tag by topic, and build the search index. You can stop and resume anytime.</p>
             ${already > 0 ? `<p class="lp-stats">${already.toLocaleString()} already processed.</p>` : ''}
+            ${status.total_tags_assigned > 0 ? `<p class="lp-stats">${status.total_tags_assigned.toLocaleString()} tags assigned.</p>` : ''}
             <div class="lp-actions">
                 <button id="lp-process-btn">${label}</button>
                 <button id="lp-action-scan" class="outline">Scan Files</button>

@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from backend.models.database import get_db
-from backend.models.schemas import File
+from backend.models.schemas import File, FileTag
 from backend.models.pydantic_models import ProcessingRequest, ProcessingStatus
 from backend.services.document_processor import DocumentProcessor
 
@@ -100,6 +100,7 @@ def onboarding_status(db: Session = Depends(get_db)):
         phase = "complete"
 
     dismissed = _ONBOARDING_DISMISSED_PATH.exists()
+    total_tags_assigned = db.query(FileTag).count()
 
     return {
         "phase": phase,
@@ -113,6 +114,7 @@ def onboarding_status(db: Session = Depends(get_db)):
         "current_file": _processor.current_file,
         "new_tags_added": _processor.new_tags_added,
         "files_newly_tagged": _processor.files_newly_tagged,
+        "total_tags_assigned": total_tags_assigned,
     }
 
 
