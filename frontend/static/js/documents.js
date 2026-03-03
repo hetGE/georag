@@ -25,7 +25,7 @@ async function initDocuments() {
     document.getElementById('status-filter').addEventListener('change', () => { currentPage = 1; loadDocuments(); });
 
     document.getElementById('select-all').addEventListener('change', toggleSelectAll);
-    document.getElementById('process-btn').addEventListener('click', processSelected);
+    document.getElementById('process-btn').addEventListener('click', markSelectedAsNew);
     document.getElementById('autotag-btn').addEventListener('click', autotagSelected);
     document.getElementById('multi-tag-btn').addEventListener('click', openMultiTagModal);
     document.getElementById('manage-tags-btn').addEventListener('click', openTagAdminModal);
@@ -173,13 +173,15 @@ function toggleSelectAll(e) {
     updateMultiTagVisibility();
 }
 
-async function processSelected() {
+async function markSelectedAsNew() {
     const ids = Array.from(selectedFileIds);
     if (!ids.length) {
-        alert('Select files to process first');
+        alert('Select files first');
         return;
     }
-    await apiPost('/api/processing/start', { file_ids: ids });
+    await apiPost('/api/documents/batch/mark-new', { file_ids: ids });
+    selectedFileIds.clear();
+    loadDocuments();
 }
 
 async function autotagSelected() {

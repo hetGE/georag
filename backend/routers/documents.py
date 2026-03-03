@@ -194,6 +194,19 @@ def batch_remove_tag(tag_name: str, req: BatchTagRequest, db: Session = Depends(
     return {"status": "removed", "count": len(req.file_ids)}
 
 
+@router.post("/documents/batch/mark-new")
+def batch_mark_new(req: BatchTagRequest, db: Session = Depends(get_db)):
+    """Mark selected files as 'new' so they will be reprocessed."""
+    count = 0
+    for file_id in req.file_ids:
+        file = db.get(File, file_id)
+        if file and file.scan_status != "new":
+            file.scan_status = "new"
+            count += 1
+    db.commit()
+    return {"status": "marked", "count": count}
+
+
 @router.post("/documents/{file_id}/tags/{tag_name}")
 def add_tag_to_file(file_id: int, tag_name: str, db: Session = Depends(get_db)):
     file = db.get(File, file_id)
