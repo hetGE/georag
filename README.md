@@ -338,6 +338,13 @@ lsof -i :3000        # See what's using it
 ./kill.sh            # Or just kill all GeoRAG processes
 ```
 
+### Virtual environment broken after Python reinstall
+If you reinstall or upgrade Python, the existing `venv/` will still reference the old Python binary and you'll see errors like `cannot execute: required file not found`. Delete the venv and let `start.sh` recreate it:
+```bash
+rm -rf venv/
+./start.sh
+```
+
 ### Nuclear option: start fresh
 ```bash
 rm -rf data/         # Deletes all processed data (your source documents are safe)
