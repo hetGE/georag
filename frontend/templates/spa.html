@@ -135,8 +135,7 @@
             <div class="action-row" id="action-row">
                 <button id="process-btn" class="outline" style="display:none;" title="Files will be reprocessed when marked as new.">Mark as New</button>
                 <button id="skip-btn" class="outline" style="display:none;" title="Manually skip selected files from processing.">Mark as Skipped</button>
-                <button id="autotag-btn" class="outline" style="display:none;">Auto-Tag Selected</button>
-                <button id="multi-tag-btn" class="outline" style="display:none;">Multi Tag</button>
+<button id="multi-tag-btn" class="outline" style="display:none;">Multi Tag</button>
                 <button id="manage-tags-btn" class="outline">Manage Tags</button>
             </div>
         </div>
@@ -174,6 +173,18 @@
                 </header>
                 <div id="tag-modal-content">
                     <!-- Populated by JS -->
+                </div>
+            </article>
+        </dialog>
+
+        <!-- Multi Tag Modal -->
+        <dialog id="multi-tag-modal">
+            <article>
+                <header>
+                    <button aria-label="Close" rel="prev" class="close-multi-tag"></button>
+                    <h3>Multi Tag Files</h3>
+                </header>
+                <div id="multi-tag-modal-content">
                 </div>
             </article>
         </dialog>

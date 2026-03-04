@@ -772,6 +772,23 @@ nav ul:last-child li a.active:hover {
     padding: 0 0.5rem;
 }
 
+#multi-tag-modal article {
+    width: min(calc(100vw - 2rem), 750px);
+    max-height: min(calc(100vh - 2rem), 700px);
+    overflow: hidden;
+}
+#multi-tag-modal-content {
+    overflow: visible;
+    padding: 0 0.5rem;
+}
+#multi-tag-modal-content .tag-modal-pills#assigned-pills {
+    max-height: none;
+    overflow: visible;
+}
+#multi-tag-modal-content .tag-modal-pills#available-pills {
+    max-height: 200px;
+}
+
 /* Tag Modal - Open File */
 .tag-modal-open-file {
     display: flex;

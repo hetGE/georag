@@ -27,8 +27,7 @@ async function initDocuments() {
     document.getElementById('select-all').addEventListener('change', toggleSelectAll);
     document.getElementById('process-btn').addEventListener('click', markSelectedAsNew);
     document.getElementById('skip-btn').addEventListener('click', markSelectedAsSkipped);
-    document.getElementById('autotag-btn').addEventListener('click', autotagSelected);
-    document.getElementById('multi-tag-btn').addEventListener('click', openMultiTagModal);
+document.getElementById('multi-tag-btn').addEventListener('click', openMultiTagModal);
     document.getElementById('manage-tags-btn').addEventListener('click', openTagAdminModal);
 
     // Show action buttons once processing status is known
@@ -37,6 +36,9 @@ async function initDocuments() {
     // Close modals
     document.querySelector('.close-modal')?.addEventListener('click', () => {
         document.getElementById('tag-modal').close();
+    });
+    document.querySelector('.close-multi-tag')?.addEventListener('click', () => {
+        document.getElementById('multi-tag-modal').close();
     });
     document.querySelector('.close-tag-admin')?.addEventListener('click', () => {
         document.getElementById('tag-admin-modal').close();
@@ -197,22 +199,12 @@ async function markSelectedAsSkipped() {
     loadDocuments();
 }
 
-async function autotagSelected() {
-    const ids = Array.from(selectedFileIds);
-    if (!ids.length) {
-        alert('Select files to auto-tag first');
-        return;
-    }
-    await apiPost('/api/processing/start', { file_ids: ids });
-}
-
 async function checkActionButtonVisibility() {
     try {
         const status = await apiGet('/api/processing/status');
         const show = !status.is_running;
         document.getElementById('process-btn').style.display = show ? '' : 'none';
         document.getElementById('skip-btn').style.display = show ? '' : 'none';
-        document.getElementById('autotag-btn').style.display = show ? '' : 'none';
         if (!show) {
             document.getElementById('multi-tag-btn').style.display = 'none';
         } else {
@@ -341,13 +333,13 @@ function openMultiTagModal() {
     const currentTags = new Set((selectedFiles[0].tags || []).map(t => t.name));
     const fileIds = selectedFiles.map(f => f.id);
 
-    const modal = document.getElementById('tag-modal');
+    const modal = document.getElementById('multi-tag-modal');
     renderMultiTagModalContent(fileIds, selectedFiles, currentTags);
     modal.showModal();
 }
 
 function renderMultiTagModalContent(fileIds, selectedFiles, currentTags, movedTag) {
-    const content = document.getElementById('tag-modal-content');
+    const content = document.getElementById('multi-tag-modal-content');
     const fileNames = selectedFiles.map(f => f.filename).join(', ');
 
     const assignedTags = allTagsList.filter(t => currentTags.has(t.name));
