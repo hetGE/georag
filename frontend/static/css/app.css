@@ -717,9 +717,7 @@ nav ul:last-child li a.active:hover {
     flex-wrap: wrap;
     gap: 0.5rem;
     min-height: 2rem;
-    max-height: 400px;
     overflow-y: auto;
-    overflow-x: visible;
     padding: 0.25rem;
 }
 
@@ -784,14 +782,32 @@ nav ul:last-child li a.active:hover {
 }
 
 #tag-modal article {
-    overflow: visible;
+    overflow: hidden;
     width: min(calc(100vw - 2rem), 750px);
     max-height: min(calc(100vh - 2rem), 700px);
+    display: flex;
+    flex-direction: column;
 }
 
 #tag-modal-content {
-    overflow: visible;
+    overflow: hidden;
     padding: 0 0.5rem;
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+#tag-modal-content #assigned-pills {
+    flex-shrink: 0;
+    max-height: 50%;
+    overflow-y: auto;
+}
+
+#tag-modal-content #available-pills {
+    flex: 1;
+    min-height: 4rem;
+    overflow-y: auto;
 }
 
 #multi-tag-modal article {
