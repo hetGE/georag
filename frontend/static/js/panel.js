@@ -36,7 +36,7 @@ const LibraryPanel = (() => {
 
         // Cross-tab sync: another tab started processing → force immediate status check
         window.syncChannel.addEventListener('message', (e) => {
-            if (e.data.type === 'processing-started') {
+            if (e.data.type === 'processing-started' || e.data.type === 'tags-changed') {
                 lastStatusJSON = '';
                 checkStatus();
             }
@@ -74,7 +74,8 @@ const LibraryPanel = (() => {
             }
             updateBadge(status);
             const wasProcessing = window.libraryIsProcessing;
-            window.libraryIsProcessing = status.is_processing || status.phase === 'processing';
+            window.libraryIsProcessing = status.is_processing || status.phase === 'processing'
+                || status.phase === 'exploring' || status.phase === 'explore_stopping';
             if (wasProcessing !== window.libraryIsProcessing) {
                 window.updateChatInputState?.();
             }
@@ -91,13 +92,21 @@ const LibraryPanel = (() => {
     // --- Badge ---
 
     function updateBadge(status) {
-        if (status.phase === 'stopping') {
+        if (status.phase === 'stopping' || status.phase === 'explore_stopping') {
             badgeEl.textContent = '…';
             badgeEl.style.display = '';
         } else if (status.phase === 'processing') {
             const pct = status.total_files > 0
                 ? Math.round((status.processed_files / status.total_files) * 100) : 0;
             badgeEl.textContent = pct + '%';
+            badgeEl.style.display = '';
+        } else if (status.phase === 'exploring') {
+            const pct = status.explore_total > 0
+                ? Math.round((status.explore_processed / status.explore_total) * 100) : 0;
+            badgeEl.textContent = pct + '%';
+            badgeEl.style.display = '';
+        } else if (status.phase === 'explore_complete') {
+            badgeEl.textContent = (status.explore_candidates || []).length;
             badgeEl.style.display = '';
         } else if (status.phase === 'not_started' || status.phase === 'scanned') {
             badgeEl.textContent = '!';
@@ -123,6 +132,12 @@ const LibraryPanel = (() => {
             html += renderStoppingPhase(status);
         } else if (status.phase === 'processing') {
             html += renderProcessingPhase(status);
+        } else if (status.phase === 'exploring') {
+            html += renderExploringPhase(status);
+        } else if (status.phase === 'explore_stopping') {
+            html += renderExploreStoppingPhase(status);
+        } else if (status.phase === 'explore_complete') {
+            html += renderExploreCompletePhase(status);
         } else if (status.phase === 'complete') {
             html += renderCompletePhase(status);
         }
@@ -132,9 +147,10 @@ const LibraryPanel = (() => {
             html += renderActionButtons(status);
         }
 
-        // Reprocess All — always at the bottom (except initial state)
-        if (status.phase !== 'not_started') {
-            const rpDisabled = (status.phase === 'processing' || status.phase === 'stopping') ? ' disabled' : '';
+        // Reprocess All — always at the bottom (except initial state and explore phases)
+        if (status.phase !== 'not_started' && status.phase !== 'explore_complete') {
+            const rpDisabled = (status.phase === 'processing' || status.phase === 'stopping'
+                || status.phase === 'exploring' || status.phase === 'explore_stopping') ? ' disabled' : '';
             html += `<div class="lp-reprocess-footer">
                 <button id="lp-action-reprocess" class="lp-reprocess-btn outline"${rpDisabled}>Reprocess All</button>
             </div>`;
@@ -169,6 +185,7 @@ const LibraryPanel = (() => {
             <div class="lp-actions">
                 <button id="lp-process-btn">${label}</button>
                 <button id="lp-action-scan" class="outline">Scan Files</button>
+                ${already > 0 ? '<button id="lp-action-explore" class="outline">Explore New Tags</button>' : ''}
             </div>
         </div>`;
     }
@@ -220,12 +237,79 @@ const LibraryPanel = (() => {
         </div>`;
     }
 
+    function renderExploringPhase(status) {
+        const pct = status.explore_total > 0
+            ? Math.round((status.explore_processed / status.explore_total) * 100) : 0;
+        return `<div class="lp-phase">
+            <progress value="${pct}" max="100"></progress>
+            <p class="lp-progress-text">Files ${status.explore_processed} / ${status.explore_total}</p>
+            ${status.explore_existing_tagged > 0 ? `<p class="lp-stats">${status.explore_existing_tagged} tags assigned to ${status.explore_existing_files} files so far</p>` : ''}
+            <p style="font-size:0.82rem;color:var(--pico-muted-color);">Analyzing untagged files for new categories&hellip;</p>
+            <div class="lp-actions">
+                <button id="lp-explore-stop-btn" class="outline secondary">Stop Exploring</button>
+            </div>
+        </div>`;
+    }
+
+    function renderExploreStoppingPhase(status) {
+        const pct = status.explore_total > 0
+            ? Math.round((status.explore_processed / status.explore_total) * 100) : 0;
+        return `<div class="lp-phase">
+            <progress value="${pct}" max="100"></progress>
+            <p class="lp-progress-text">Files ${status.explore_processed} / ${status.explore_total}</p>
+            <p style="font-size:0.82rem;color:var(--pico-muted-color);">Stopping after current batch&hellip;</p>
+            <div class="lp-actions">
+                <button disabled class="outline secondary" aria-busy="true">Stopping&hellip;</button>
+            </div>
+        </div>`;
+    }
+
+    function renderExploreCompletePhase(status) {
+        const candidates = status.explore_candidates || [];
+        const existingLine = status.explore_existing_tagged > 0
+            ? `<p class="lp-stats">${status.explore_existing_tagged} existing tags assigned to ${status.explore_existing_files} files.</p>`
+            : '';
+
+        if (!candidates.length) {
+            return `<div class="lp-phase">
+                <p>Exploration complete. No new tag categories were discovered that meet the minimum file threshold.</p>
+                ${existingLine}
+                <div class="lp-actions">
+                    <button id="lp-explore-dismiss" class="outline">Dismiss</button>
+                </div>
+            </div>`;
+        }
+
+        const cardsHtml = candidates.map((c, i) => `
+            <div class="lp-explore-card">
+                <div class="lp-explore-card-header">
+                    <input type="checkbox" class="lp-explore-cb" data-index="${i}" checked>
+                    <span class="lp-explore-swatch" style="background:${escapeHtml(c.color)}"></span>
+                    <strong>${escapeHtml(c.display_name)}</strong>
+                    <span class="lp-explore-count">${c.file_count} files</span>
+                </div>
+                <p class="lp-explore-desc">${escapeHtml(c.description)}</p>
+            </div>
+        `).join('');
+
+        return `<div class="lp-phase">
+            <p>Found <strong>${candidates.length}</strong> potential new categories:</p>
+            ${existingLine}
+            <div class="lp-explore-candidates">${cardsHtml}</div>
+            <div class="lp-actions" style="margin-top:0.75rem;">
+                <button id="lp-explore-accept">Accept Selected Tags</button>
+                <button id="lp-explore-dismiss" class="outline secondary">Dismiss All</button>
+            </div>
+        </div>`;
+    }
+
     function renderActionButtons() {
         return `<hr class="lp-divider">
         <div class="lp-phase">
             <div class="lp-actions">
                 <button id="lp-action-scan" class="outline">Scan Files</button>
                 <button id="lp-action-process-new" class="outline">Process New Files</button>
+                <button id="lp-action-explore" class="outline">Explore New Tags</button>
             </div>
         </div>`;
     }
@@ -250,6 +334,16 @@ const LibraryPanel = (() => {
             ?.addEventListener('click', handleProcessNew);
         document.getElementById('lp-action-reprocess')
             ?.addEventListener('click', handleReprocessAll);
+
+        // Explore buttons
+        document.getElementById('lp-action-explore')
+            ?.addEventListener('click', handleStartExploring);
+        document.getElementById('lp-explore-stop-btn')
+            ?.addEventListener('click', handleStopExploring);
+        document.getElementById('lp-explore-accept')
+            ?.addEventListener('click', handleAcceptExploreTags);
+        document.getElementById('lp-explore-dismiss')
+            ?.addEventListener('click', handleDismissExplore);
     }
 
     // --- Action Handlers ---
@@ -360,6 +454,87 @@ const LibraryPanel = (() => {
         lastStatusJSON = '';
         await checkStatus();
         window.syncChannel.postMessage({ type: 'processing-started', payload: {} });
+    }
+
+    // --- Explore Handlers ---
+
+    async function handleStartExploring() {
+        if (window.chatIsStreaming?.()) return;
+        const btn = document.getElementById('lp-action-explore');
+        if (btn) {
+            btn.disabled = true;
+            btn.setAttribute('aria-busy', 'true');
+        }
+        const result = await apiPost('/api/explore/start');
+        if (result.error) {
+            alert(result.error);
+            if (btn) {
+                btn.disabled = false;
+                btn.setAttribute('aria-busy', 'false');
+            }
+            return;
+        }
+        lastStatusJSON = '';
+        await checkStatus();
+        window.syncChannel.postMessage({ type: 'processing-started', payload: {} });
+    }
+
+    async function handleStopExploring() {
+        const btn = document.getElementById('lp-explore-stop-btn');
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = 'Stopping\u2026';
+        }
+        await apiPost('/api/explore/stop');
+        lastStatusJSON = '';
+        await checkStatus();
+    }
+
+    async function handleAcceptExploreTags() {
+        const checkboxes = document.querySelectorAll('.lp-explore-cb:checked');
+        const lastStatus = JSON.parse(lastStatusJSON);
+        const candidates = lastStatus.explore_candidates || [];
+
+        const selected = [];
+        checkboxes.forEach(cb => {
+            const idx = parseInt(cb.dataset.index);
+            if (candidates[idx]) {
+                selected.push({
+                    name: candidates[idx].name,
+                    display_name: candidates[idx].display_name,
+                    description: candidates[idx].description,
+                    color: candidates[idx].color,
+                    filenames: candidates[idx].filenames || [],
+                });
+            }
+        });
+
+        if (!selected.length) {
+            alert('No tags selected.');
+            return;
+        }
+
+        const btn = document.getElementById('lp-explore-accept');
+        btn.disabled = true;
+        btn.setAttribute('aria-busy', 'true');
+
+        const result = await apiPost('/api/explore/accept', { tags: selected });
+        if (result.error) {
+            alert(result.error);
+            btn.disabled = false;
+            btn.setAttribute('aria-busy', 'false');
+            return;
+        }
+
+        lastStatusJSON = '';
+        await checkStatus();
+        window.syncChannel.postMessage({ type: 'tags-changed', payload: {} });
+    }
+
+    async function handleDismissExplore() {
+        await apiPost('/api/explore/dismiss');
+        lastStatusJSON = '';
+        await checkStatus();
     }
 
     // --- Utility ---

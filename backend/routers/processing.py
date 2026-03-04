@@ -20,8 +20,11 @@ _ONBOARDING_DISMISSED_PATH = Path("data/onboarding_dismissed")
 
 @router.post("/processing/start")
 async def start_processing(request: ProcessingRequest, db: Session = Depends(get_db)):
+    from backend.routers.explore import _explorer
     if _processor.is_running:
         return {"error": "Processing already in progress"}
+    if _explorer.is_running:
+        return {"error": "Cannot process while tag exploration is running"}
 
     asyncio.create_task(_processor.run(
         tag_names=request.tag_names,
@@ -89,12 +92,20 @@ def onboarding_status(db: Session = Depends(get_db)):
         .all()
     )
 
+    from backend.routers.explore import _explorer
+
     if total_files == 0:
         phase = "not_started"
     elif _processor.is_running and _processor._stop_flag:
         phase = "stopping"
     elif _processor.is_running:
         phase = "processing"
+    elif _explorer.is_running and _explorer._stop_flag:
+        phase = "explore_stopping"
+    elif _explorer.is_running:
+        phase = "exploring"
+    elif _explorer.has_results():
+        phase = "explore_complete"
     elif new_files > 0:
         phase = "scanned"
     else:
@@ -117,6 +128,13 @@ def onboarding_status(db: Session = Depends(get_db)):
         "new_tags_added": _processor.new_tags_added,
         "files_newly_tagged": _processor.files_newly_tagged,
         "total_tags_assigned": total_tags_assigned,
+        "explore_total": _explorer.total_files,
+        "explore_processed": _explorer.processed_files,
+        "explore_batch": _explorer.current_batch,
+        "explore_batches": _explorer.total_batches,
+        "explore_candidates": _explorer.candidates if not _explorer.is_running else [],
+        "explore_existing_tagged": _explorer.existing_tags_assigned,
+        "explore_existing_files": _explorer.existing_files_tagged,
     }
 
 

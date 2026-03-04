@@ -39,13 +39,14 @@ app.mount("/static", StaticFiles(directory=str(RAG_DIR / "frontend" / "static"))
 templates = Jinja2Templates(directory=str(RAG_DIR / "frontend" / "templates"))
 
 # Import and include routers
-from backend.routers import documents, tags, chat, conversations, processing  # noqa: E402
+from backend.routers import documents, tags, chat, conversations, processing, explore  # noqa: E402
 
 app.include_router(documents.router, prefix="/api")
 app.include_router(tags.router, prefix="/api")
 app.include_router(chat.router, prefix="/api")
 app.include_router(conversations.router, prefix="/api")
 app.include_router(processing.router, prefix="/api")
+app.include_router(explore.router, prefix="/api")
 
 
 @app.get("/")

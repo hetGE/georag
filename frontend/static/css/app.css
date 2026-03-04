@@ -1446,3 +1446,77 @@ body:has(.lp-panel.open) .lp-toggle {
     background: var(--pico-muted-border-color);
     border-radius: 3px;
 }
+
+/* ===== Tag Explorer ===== */
+
+.lp-explore-candidates {
+    max-height: 45vh;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding-right: 0.25rem;
+}
+
+.lp-explore-card {
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 0.375rem;
+    padding: 0.5rem 0.65rem;
+    transition: border-color 0.15s;
+}
+
+.lp-explore-card:hover {
+    border-color: var(--brand-color);
+}
+
+.lp-explore-card-header {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.lp-explore-card-header input[type="checkbox"] {
+    margin: 0;
+    width: 18px;
+    height: 18px;
+    min-width: 18px;
+    appearance: auto;
+    -webkit-appearance: checkbox;
+    cursor: pointer;
+    flex-shrink: 0;
+}
+
+.lp-explore-swatch {
+    display: inline-block;
+    width: 0.75rem;
+    height: 0.75rem;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.lp-explore-card-header strong {
+    font-size: 0.85rem;
+}
+
+.lp-explore-count {
+    margin-left: auto;
+    font-size: 0.7rem;
+    color: var(--pico-muted-color);
+    white-space: nowrap;
+}
+
+.lp-explore-desc {
+    font-size: 0.75rem;
+    color: var(--pico-muted-color);
+    margin: 0.25rem 0 0 1.5rem;
+    line-height: 1.4;
+}
+
+.lp-explore-candidates::-webkit-scrollbar {
+    width: 6px;
+}
+
+.lp-explore-candidates::-webkit-scrollbar-thumb {
+    background: var(--pico-muted-border-color);
+    border-radius: 3px;
+}
