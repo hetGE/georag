@@ -724,9 +724,7 @@ function newChat({ broadcast = true } = {}) {
     currentConversationId = null;
     document.getElementById('chat-messages').innerHTML = `
         <div class="chat-welcome" id="chat-welcome">
-            <h2>geoRAG</h2>
-            <p>Geotechnical Engineering RAG Assistant</p>
-            <p class="secondary">Select topics to focus your search</p>
+            <p class="secondary">Select topics to focus your search:</p>
             <div id="welcome-tags" class="welcome-tags"></div>
         </div>
     `;

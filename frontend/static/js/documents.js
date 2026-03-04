@@ -231,13 +231,7 @@ function updateMultiTagVisibility() {
         return;
     }
 
-    // All selected files must have identical tag sets
-    const selectedFiles = lastLoadedFiles.filter(f => selectedFileIds.has(f.id));
-    const tagKey = f => (f.tags || []).map(t => t.name).sort().join(',');
-    const firstKey = tagKey(selectedFiles[0]);
-    const allSame = selectedFiles.every(f => tagKey(f) === firstKey);
-
-    btn.style.display = allSame ? '' : 'none';
+    btn.style.display = '';
 }
 
 // Re-check visibility periodically (processing may start/stop)
@@ -330,7 +324,12 @@ function openMultiTagModal() {
     const selectedFiles = lastLoadedFiles.filter(f => selectedFileIds.has(f.id));
     if (selectedFiles.length < 2) return;
 
-    const currentTags = new Set((selectedFiles[0].tags || []).map(t => t.name));
+    // Intersection: only tags present on ALL selected files
+    const tagSets = selectedFiles.map(f => new Set((f.tags || []).map(t => t.name)));
+    const currentTags = new Set(tagSets[0]);
+    tagSets.slice(1).forEach(s => {
+        for (const t of currentTags) if (!s.has(t)) currentTags.delete(t);
+    });
     const fileIds = selectedFiles.map(f => f.id);
 
     const modal = document.getElementById('multi-tag-modal');
