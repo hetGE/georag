@@ -78,7 +78,7 @@ def onboarding_status(db: Session = Depends(get_db)):
         .group_by(File.scan_status)
         .all()
     )
-    new_files = status_counts.get("new", 0) + status_counts.get("failed", 0)
+    new_files = status_counts.get("new", 0)
     processed_files = status_counts.get("processed", 0)
     failed_files = status_counts.get("failed", 0)
     skipped_files = status_counts.get("skipped", 0)

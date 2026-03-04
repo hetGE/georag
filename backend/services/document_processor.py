@@ -83,7 +83,7 @@ class DocumentProcessor:
             if file_ids:
                 query = query.filter(File.id.in_(file_ids))
             if not reprocess:
-                query = query.filter(File.scan_status.in_(["new", "failed"]))
+                query = query.filter(File.scan_status == "new")
 
             files = query.all()
             self.total_files = len(files)

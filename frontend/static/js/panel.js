@@ -4,6 +4,7 @@ const LibraryPanel = (() => {
     let isOpen = false;
     let pollInterval = null;
     let lastStatusJSON = '';
+    let lastStreamingState = false;
     const POLL_MS = 2000;
     const activePage = document.body.dataset.activePage;
 
@@ -68,8 +69,10 @@ const LibraryPanel = (() => {
         try {
             const status = await apiGet('/api/processing/onboarding-status');
             const json = JSON.stringify(status);
-            if (json !== lastStatusJSON) {
+            const streamingNow = window.chatIsStreaming?.() || false;
+            if (json !== lastStatusJSON || streamingNow !== lastStreamingState) {
                 lastStatusJSON = json;
+                lastStreamingState = streamingNow;
                 renderPanel(status);
             }
             updateBadge(status);
@@ -150,7 +153,8 @@ const LibraryPanel = (() => {
         // Reprocess All — always at the bottom (except initial state and explore phases)
         if (status.phase !== 'not_started' && status.phase !== 'explore_complete') {
             const rpDisabled = (status.phase === 'processing' || status.phase === 'stopping'
-                || status.phase === 'exploring' || status.phase === 'explore_stopping') ? ' disabled' : '';
+                || status.phase === 'exploring' || status.phase === 'explore_stopping'
+                || window.chatIsStreaming?.()) ? ' disabled' : '';
             html += `<div class="lp-reprocess-footer">
                 <button id="lp-action-reprocess" class="lp-reprocess-btn outline"${rpDisabled}>Reprocess All</button>
             </div>`;
@@ -161,15 +165,17 @@ const LibraryPanel = (() => {
     }
 
     function renderScanPhase() {
+        const busy = window.chatIsStreaming?.();
         return `<div class="lp-phase">
             <p>Let's index your geotechnical document library. Scan your Engineering folder to discover all documents.</p>
             <div class="lp-actions">
-                <button id="lp-scan-btn">Scan Library</button>
+                <button id="lp-scan-btn"${busy ? ' disabled' : ''}>Scan Library</button>
             </div>
         </div>`;
     }
 
     function renderScannedPhase(status) {
+        const busy = window.chatIsStreaming?.();
         const extSummary = formatExtSummary(status.by_extension || {});
         const remaining = status.new_files;
         const already = status.processed_files;
@@ -177,15 +183,15 @@ const LibraryPanel = (() => {
 
         return `<div class="lp-phase">
             <p>Found <strong>${status.total_files.toLocaleString()}</strong> files${extSummary}.</p>
-            <p>${remaining.toLocaleString()} files to process. We'll extract text, auto-tag by topic, and build the search index. You can stop and resume anytime.</p>
+            <p>${remaining.toLocaleString()} ${already > 0 ? 'new files to process. You can resume processing.' : 'files to process. We\'ll extract text, auto-tag by topic, and build the search index. You can stop and resume anytime.'}</p>
             ${already > 0 ? `<p class="lp-stats">${already.toLocaleString()} already processed.</p>` : ''}
             ${status.total_tags_assigned > 0 ? `<p class="lp-stats">${status.total_tags_assigned.toLocaleString()} tags assigned.</p>` : ''}
             ${status.failed_files > 0 ? `<p class="lp-stats">${status.failed_files.toLocaleString()} can't be read (failed).</p>` : ''}
             ${status.skipped_files > 0 ? `<p class="lp-stats">${status.skipped_files.toLocaleString()} skipped.</p>` : ''}
             <div class="lp-actions">
-                <button id="lp-process-btn">${label}</button>
-                <button id="lp-action-scan" class="outline">Scan Files</button>
-                ${already > 0 ? '<button id="lp-action-explore" class="outline">Explore New Tags</button>' : ''}
+                <button id="lp-process-btn"${busy ? ' disabled' : ''}>${label}</button>
+                <button id="lp-action-scan" class="outline"${busy ? ' disabled' : ''}>Scan Files</button>
+                ${already > 0 ? `<button id="lp-action-explore" class="outline"${busy ? ' disabled' : ''}>Explore New Tags</button>` : ''}
             </div>
         </div>`;
     }
@@ -228,11 +234,16 @@ const LibraryPanel = (() => {
     }
 
     function renderCompletePhase(status) {
+        const extSummary = formatExtSummary(status.by_extension || {});
         const tagLine = (status.new_tags_added > 0)
             ? `<p class="lp-stats">${status.new_tags_added} tag${status.new_tags_added !== 1 ? 's' : ''} added to ${status.files_newly_tagged} file${status.files_newly_tagged !== 1 ? 's' : ''}</p>`
             : '';
         return `<div class="lp-phase">
-            <p><strong>${status.processed_files.toLocaleString()}</strong> files processed${status.failed_files > 0 ? `, ${status.failed_files} failed` : ''}. Your library is ready for searching.</p>
+            <p><strong>${status.total_files.toLocaleString()}</strong> files in library${extSummary}.</p>
+            <p class="lp-stats">${status.processed_files.toLocaleString()} processed. No new files to process, press Scan to find new ones.</p>
+            ${status.total_tags_assigned > 0 ? `<p class="lp-stats">${status.total_tags_assigned.toLocaleString()} tags assigned.</p>` : ''}
+            ${status.failed_files > 0 ? `<p class="lp-stats">${status.failed_files.toLocaleString()} can't be read (failed).</p>` : ''}
+            ${status.skipped_files > 0 ? `<p class="lp-stats">${status.skipped_files.toLocaleString()} skipped.</p>` : ''}
             ${tagLine}
         </div>`;
     }
@@ -303,13 +314,17 @@ const LibraryPanel = (() => {
         </div>`;
     }
 
-    function renderActionButtons() {
+    function renderActionButtons(status) {
+        const busy = window.chatIsStreaming?.();
+        const processDisabled = (status.new_files === 0 || busy) ? ' disabled' : '';
+        const scanDisabled = busy ? ' disabled' : '';
+        const exploreDisabled = busy ? ' disabled' : '';
         return `<hr class="lp-divider">
         <div class="lp-phase">
             <div class="lp-actions">
-                <button id="lp-action-scan" class="outline">Scan Files</button>
-                <button id="lp-action-process-new" class="outline">Process New Files</button>
-                <button id="lp-action-explore" class="outline">Explore New Tags</button>
+                <button id="lp-action-scan" class="outline"${scanDisabled}>Scan Files</button>
+                <button id="lp-action-process-new" class="outline"${processDisabled}>Process New Files</button>
+                <button id="lp-action-explore" class="outline"${exploreDisabled}>Explore New Tags</button>
             </div>
         </div>`;
     }
@@ -349,6 +364,7 @@ const LibraryPanel = (() => {
     // --- Action Handlers ---
 
     async function handleScan() {
+        if (window.chatIsStreaming?.()) return;
         const btn = document.getElementById('lp-scan-btn');
         btn.disabled = true;
         btn.setAttribute('aria-busy', 'true');
@@ -391,6 +407,7 @@ const LibraryPanel = (() => {
     }
 
     async function handleActionScan() {
+        if (window.chatIsStreaming?.()) return;
         const btn = document.getElementById('lp-action-scan');
         btn.disabled = true;
         btn.setAttribute('aria-busy', 'true');
