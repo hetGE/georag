@@ -609,6 +609,21 @@ nav ul:last-child li a.active:hover {
     font-size: 0.6rem;
 }
 
+.file-table th:nth-child(1),
+.file-table td:nth-child(1) {
+    width: 1.2rem;
+    max-width: 1.2rem;
+    padding: 0.2rem 0.2rem;
+    text-align: center;
+}
+
+.file-table th:nth-child(1) input[type="checkbox"],
+.file-table td:nth-child(1) input[type="checkbox"] {
+    width: 0.7rem;
+    height: 0.7rem;
+    margin: 0;
+}
+
 .file-table th,
 .file-table td {
     padding: 0.2rem 0.4rem;
@@ -616,7 +631,7 @@ nav ul:last-child li a.active:hover {
 }
 
 .file-table td:nth-child(2) {
-    max-width: 450px;
+    max-width: 600px;
     overflow: hidden;
     text-overflow: ellipsis;
     cursor: pointer;
