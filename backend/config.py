@@ -41,6 +41,8 @@ CONVERSATION_HISTORY_TURNS = 4
 
 # Scanning
 SKIP_DIRS = {"_0RAG", ".git", "__pycache__", "node_modules", ".DS_Store", "venv"}
+JUNK_FILENAMES = {".DS_Store", "Thumbs.db", "desktop.ini", "ehthumbs.db", "ehthumbs_vista.db"}
+JUNK_FILENAME_PREFIXES = {"._"}
 SUPPORTED_EXTENSIONS = {
     "pdf", "doc", "docx", "xls", "xlsx", "xlsm",
     "ppt", "pptx", "png", "jpg", "jpeg", "gif", "bmp", "tiff",
