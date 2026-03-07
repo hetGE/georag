@@ -1,4 +1,5 @@
 """Document list, search, filter, pagination."""
+import os
 import platform
 import subprocess
 from pathlib import Path
@@ -110,7 +111,13 @@ def open_file(file_id: int, db: Session = Depends(get_db)):
     if not str(resolved).startswith(str(ENGINEERING_ROOT.resolve())):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    subprocess.Popen(["open", str(resolved)])
+    system = platform.system()
+    if system == "Darwin":
+        subprocess.Popen(["open", str(resolved)])
+    elif system == "Windows":
+        os.startfile(str(resolved))
+    else:
+        subprocess.Popen(["xdg-open", str(resolved)])
     return {"status": "opened"}
 
 
@@ -154,7 +161,13 @@ def open_file_by_path(req: OpenByPathRequest):
     if not str(resolved).startswith(str(ENGINEERING_ROOT.resolve())):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    subprocess.Popen(["open", str(resolved)])
+    system = platform.system()
+    if system == "Darwin":
+        subprocess.Popen(["open", str(resolved)])
+    elif system == "Windows":
+        os.startfile(str(resolved))
+    else:
+        subprocess.Popen(["xdg-open", str(resolved)])
     return {"status": "opened"}
 
 
