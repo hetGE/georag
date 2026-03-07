@@ -1,9 +1,13 @@
 """Chat endpoint with SSE streaming."""
 import asyncio
 import json
+import logging
+import time
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
+
+logger = logging.getLogger(__name__)
 
 from backend.models.database import get_db
 from backend.models.schemas import Conversation, Message
@@ -81,6 +85,8 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     sources = []
     if request.tag_names:
         try:
+            logger.info("Chat RAG: embedding query (%d chars) for tags %s", len(request.message), request.tag_names)
+            t0 = time.time()
             query_embedding = await embed_text(request.message)
             chunks = query_tags(query_embedding, request.tag_names, top_k=request.top_k_per_tag)
             max_ctx = request.max_context_chunks or MAX_CONTEXT_CHUNKS
@@ -90,7 +96,11 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                  "page": c.get("page", ""), "score": c.get("score", 0)}
                 for c in chunks
             ]
-        except Exception:
+            logger.info("Chat RAG: retrieved %d chunks in %.1fs", len(chunks), time.time() - t0)
+            for s in sources[:5]:
+                logger.info("  Source: %s (score=%.3f)", s["filename"], s["score"])
+        except Exception as e:
+            logger.warning("Chat RAG: retrieval failed: %s", e)
             pass  # Continue without RAG context if embedding fails
 
     # Build messages for LLM
@@ -119,6 +129,8 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     llm_messages = [{"role": "system", "content": system_prompt}]
     for msg in history:
         llm_messages.append({"role": msg.role, "content": msg.content})
+    logger.info("Chat: sending %d messages to LLM (context chunks: %d, history: %d)",
+                len(llm_messages), len(chunks), len(history))
 
     # Update conversation title from first message
     if len(history) == 1:

@@ -1,16 +1,23 @@
 """LM Studio chat + vision wrapper."""
 import json
+import logging
+import time
 from typing import AsyncGenerator
 
 import httpx
 
 from backend.config import CHAT_URL, CHAT_MODEL
 
+logger = logging.getLogger(__name__)
+
 _client = httpx.AsyncClient(timeout=120.0)
 
 
 async def stream_chat_response(messages: list[dict]) -> AsyncGenerator[str, None]:
     """Stream chat response from LM Studio. Yields tokens."""
+    logger.info("LLM stream request: model=%s, messages=%d", CHAT_MODEL, len(messages))
+    t0 = time.time()
+    token_count = 0
     async with _client.stream(
         "POST",
         CHAT_URL,
@@ -34,13 +41,17 @@ async def stream_chat_response(messages: list[dict]) -> AsyncGenerator[str, None
                 delta = data.get("choices", [{}])[0].get("delta", {})
                 content = delta.get("content", "")
                 if content:
+                    token_count += 1
                     yield content
             except json.JSONDecodeError:
                 continue
+    logger.info("LLM stream complete: ~%d tokens in %.1fs", token_count, time.time() - t0)
 
 
 async def chat_completion(messages: list[dict], max_tokens: int = 1024) -> str:
     """Non-streaming chat completion. Returns full response text."""
+    logger.info("LLM completion request: model=%s, max_tokens=%d", CHAT_MODEL, max_tokens)
+    t0 = time.time()
     response = await _client.post(CHAT_URL, json={
         "model": CHAT_MODEL,
         "messages": messages,
@@ -49,11 +60,14 @@ async def chat_completion(messages: list[dict], max_tokens: int = 1024) -> str:
     })
     response.raise_for_status()
     data = response.json()
-    return data["choices"][0]["message"]["content"]
+    result = data["choices"][0]["message"]["content"]
+    logger.info("LLM completion done: %d chars in %.1fs", len(result), time.time() - t0)
+    return result
 
 
 async def vision_describe(image_b64: str, prompt: str = "Describe this engineering diagram or figure in detail.") -> str:
     """Use vision model to describe an image."""
+    logger.info("Vision describe request (image size: %d bytes b64)", len(image_b64))
     messages = [
         {
             "role": "user",

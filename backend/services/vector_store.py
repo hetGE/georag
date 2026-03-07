@@ -1,7 +1,11 @@
 """ChromaDB per-tag collections."""
+import logging
+
 import chromadb
 
 from backend.config import CHROMA_DIR, EMBEDDING_DIM, TOP_K_PER_TAG
+
+logger = logging.getLogger(__name__)
 
 _client = chromadb.PersistentClient(path=str(CHROMA_DIR))
 
@@ -35,6 +39,7 @@ def add_chunks(tag_name: str, ids: list[str], embeddings: list[list[float]],
 
 def query_tags(query_embedding: list[float], tag_names: list[str], top_k: int | None = None) -> list[dict]:
     """Query multiple tag collections, merge and deduplicate results."""
+    logger.info("Vector query: tags=%s, top_k=%s", tag_names, top_k or TOP_K_PER_TAG)
     all_results = []
 
     for tag_name in tag_names:
@@ -73,6 +78,7 @@ def query_tags(query_embedding: list[float], tag_names: list[str], top_k: int | 
             seen.add(key)
             deduped.append(r)
 
+    logger.info("Vector query returned %d results (%d before dedup)", len(deduped), len(all_results))
     return deduped
 
 

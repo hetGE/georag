@@ -1,9 +1,12 @@
 """Auto-tagging: folder/filename heuristic + LLM classification."""
 import json
+import logging
 import re
 
 from backend.config import DEFAULT_TAGS
 from backend.services.llm_client import chat_completion
+
+logger = logging.getLogger(__name__)
 
 
 def _get_all_tags():
@@ -118,6 +121,8 @@ def tag_by_heuristic(relative_path: str, filename: str) -> list[tuple[str, float
         if keyword in combined:
             tags_found.add(tag_name)
 
+    if tags_found:
+        logger.info("Heuristic tags for %s: %s", filename, list(tags_found))
     return [(tag, 0.7) for tag in tags_found]
 
 
@@ -147,6 +152,7 @@ Reply with ONLY a JSON array of category names that apply. Example: ["piling", "
 If none apply clearly, reply with an empty array: []"""
 
     try:
+        logger.info("LLM tagging (single): %s", filename)
         response = await chat_completion([
             {"role": "system", "content": "You are a geotechnical engineering document classifier. Reply only with a JSON array."},
             {"role": "user", "content": prompt},
@@ -159,9 +165,11 @@ If none apply clearly, reply with an empty array: []"""
 
         tags = json.loads(response)
         if isinstance(tags, list):
-            return [(t, 0.8) for t in tags if t in tag_names]
-    except Exception:
-        pass
+            result = [(t, 0.8) for t in tags if t in tag_names]
+            logger.info("LLM tags for %s: %s", filename, [t for t, _ in result])
+            return result
+    except Exception as e:
+        logger.warning("LLM tagging failed for %s: %s", filename, e)
 
     return []
 
@@ -196,6 +204,8 @@ Example: {{"report.pdf": ["piling", "deep_excavation"], "log.xlsx": ["insitu_tes
 If none apply for a file, use an empty array."""
 
     result = {info["filename"]: [] for info in files_info}
+    filenames = [info["filename"] for info in files_info]
+    logger.info("LLM tagging (batch): %d files: %s", len(files_info), filenames)
 
     try:
         response = await chat_completion([
@@ -212,7 +222,10 @@ If none apply for a file, use an empty array."""
             for filename, tags in parsed.items():
                 if isinstance(tags, list) and filename in result:
                     result[filename] = [(t, 0.8) for t in tags if t in tag_names]
-    except Exception:
-        pass
+        for fn, tags in result.items():
+            if tags:
+                logger.info("  LLM tags for %s: %s", fn, [t for t, _ in tags])
+    except Exception as e:
+        logger.warning("Batch LLM tagging failed: %s", e)
 
     return result

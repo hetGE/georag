@@ -1,4 +1,5 @@
 """File system discovery - walks Engineering/ and catalogs files in SQLite."""
+import logging
 import os
 from pathlib import Path
 
@@ -10,10 +11,13 @@ from backend.models.database import SessionLocal
 from backend.models.schemas import File, FileTag, Tag
 from backend.services.vector_store import delete_file_from_tag
 
+logger = logging.getLogger(__name__)
+
 
 def scan_engineering_directory() -> dict:
     """Walk the Engineering directory and insert/update files in the database.
     Returns dict with files_found and files_removed counts."""
+    logger.info("Scanning directory: %s", ENGINEERING_ROOT)
     db = SessionLocal()
     try:
         # Get existing paths for fast lookup
@@ -119,6 +123,8 @@ def scan_engineering_directory() -> dict:
                 db.delete(f)
             db.commit()
 
+        logger.info("Scan complete: %d found, %d new, %d removed, %d cleaned",
+                    count, new_count, removed, cleaned)
         return {
             "files_found": count,
             "files_new": new_count,

@@ -1,9 +1,13 @@
 """Orchestrates extract -> chunk -> embed -> store pipeline with concurrency."""
 import asyncio
+import logging
+import time
 import traceback
 from pathlib import Path
 
 from backend.config import ENGINEERING_ROOT
+
+logger = logging.getLogger(__name__)
 from backend.models.database import SessionLocal
 from backend.models.schemas import File, Tag, FileTag
 from backend.services.chunker import chunk_text
@@ -75,6 +79,7 @@ class DocumentProcessor:
         self.current_file = None
         self.new_tags_added = 0
         self.files_newly_tagged = 0
+        pipeline_start = time.time()
 
         db = SessionLocal()
         try:
@@ -87,6 +92,7 @@ class DocumentProcessor:
 
             files = query.all()
             self.total_files = len(files)
+            logger.info("Pipeline started: %d files to process (reprocess=%s)", len(files), reprocess)
 
             # Reset statuses so progress starts from 0%
             if reprocess and files:
@@ -100,12 +106,18 @@ class DocumentProcessor:
                     break
 
                 batch = files[batch_start:batch_start + BATCH_SIZE]
+                batch_num = batch_start // BATCH_SIZE + 1
+                total_batches = (len(files) + BATCH_SIZE - 1) // BATCH_SIZE
+                logger.info("--- Batch %d/%d (%d files) ---", batch_num, total_batches, len(batch))
 
                 # Phase 1: Extract text concurrently for the batch
+                t0 = time.time()
                 extraction_results = await asyncio.gather(
                     *[self._extract_file(f) for f in batch],
                     return_exceptions=True,
                 )
+
+                logger.info("Phase 1 (extract): completed in %.1fs", time.time() - t0)
 
                 if self._stop_flag:
                     break
@@ -154,6 +166,8 @@ class DocumentProcessor:
                     break
 
                 if llm_tagging_queue:
+                    logger.info("Phase 2 (LLM tagging): %d files queued for classification", len(llm_tagging_queue))
+                    t1 = time.time()
                     async with _llm_semaphore:
                         try:
                             files_info = [
@@ -161,6 +175,7 @@ class DocumentProcessor:
                                 for fr, txt in llm_tagging_queue
                             ]
                             llm_results = await tag_batch_by_llm(files_info)
+                            logger.info("Phase 2 (LLM tagging): batch call returned in %.1fs", time.time() - t1)
 
                             # Merge LLM results with any existing heuristic tags
                             for fr, txt in llm_tagging_queue:
@@ -173,7 +188,8 @@ class DocumentProcessor:
                                         ]
                                         file_data[j] = (fd_rec, fd_txt, merged)
                                         break
-                        except Exception:
+                        except Exception as e:
+                            logger.warning("Batch LLM tagging failed (%s), falling back to individual tagging", e)
                             # Fallback: try individual LLM tagging
                             for fr, txt in llm_tagging_queue:
                                 try:
@@ -194,6 +210,8 @@ class DocumentProcessor:
                     break
 
                 # Phase 3: Chunk, embed, store concurrently
+                t2 = time.time()
+                logger.info("Phase 3 (chunk/embed/store): starting for %d files", len(file_data))
                 store_tasks = []
                 for file_record, text, file_tags in file_data:
                     if file_tags is None:
@@ -203,6 +221,7 @@ class DocumentProcessor:
                     )
 
                 results = await asyncio.gather(*store_tasks, return_exceptions=True)
+                logger.info("Phase 3 (chunk/embed/store): completed in %.1fs", time.time() - t2)
                 for file_record_data, result in zip(file_data, results):
                     file_record = file_record_data[0]
                     if isinstance(result, Exception):
@@ -215,8 +234,12 @@ class DocumentProcessor:
                         self.processed_files += 1
 
         except Exception as e:
+            logger.error("Pipeline error: %s", e, exc_info=True)
             self.errors.append(f"Pipeline error: {str(e)}")
         finally:
+            elapsed = time.time() - pipeline_start
+            logger.info("Pipeline finished: %d processed, %d failed in %.1fs",
+                        self.processed_files, self.failed_files, elapsed)
             self.is_running = False
             self.current_file = None
             db.close()
@@ -230,23 +253,30 @@ class DocumentProcessor:
         full_path = ENGINEERING_ROOT / file_record.relative_path
 
         if not full_path.exists():
+            logger.warning("Extract: file not found, skipping: %s", file_record.relative_path)
             return ("", True)
 
         if extractor is None:
             # Filename-only indexing for unsupported formats
+            logger.debug("Extract: filename-only indexing for %s (.%s)", file_record.filename, ext)
             text = f"File: {file_record.filename}\nPath: {file_record.relative_path}"
             return (text, False)
 
         # Dispatch: async extractors (image) stay async, sync ones go to thread pool
+        t0 = time.time()
         if asyncio.iscoroutinefunction(extractor):
+            logger.info("Extract [vision]: %s", file_record.filename)
             async with _llm_semaphore:
                 text = await extractor(str(full_path))
         else:
+            logger.info("Extract [%s]: %s", ext, file_record.filename)
             text = await asyncio.to_thread(extractor, str(full_path))
 
         if not text or not text.strip():
+            logger.warning("Extract: no content from %s", file_record.filename)
             return ("", True)
 
+        logger.info("Extract: %s -> %d chars in %.1fs", file_record.filename, len(text), time.time() - t0)
         return (text, False)
 
     async def _chunk_embed_store(self, file_record: File, text: str,
@@ -254,6 +284,8 @@ class DocumentProcessor:
         """Chunk text, embed, save tags, store in vector DB."""
         self.current_file = file_record.filename
         file_record.extracted_text_preview = text[:500]
+        tag_names_str = ", ".join(t for t, _ in file_tags) if file_tags else "none"
+        logger.info("Chunk/Embed/Store: %s (tags: %s)", file_record.filename, tag_names_str)
 
         # Save tags to database
         async with _db_lock:
@@ -293,12 +325,17 @@ class DocumentProcessor:
         }
         chunks = chunk_text(text, metadata)
         file_record.chunk_count = len(chunks)
+        logger.info("  Chunked %s -> %d chunks", file_record.filename, len(chunks))
 
         if chunks and file_tags:
             chunk_texts = [c["text"] for c in chunks]
             try:
+                t_emb = time.time()
                 embeddings = await embed_batch(chunk_texts)
+                logger.info("  Embedded %d chunks for %s in %.1fs",
+                            len(chunk_texts), file_record.filename, time.time() - t_emb)
             except Exception as e:
+                logger.error("  Embedding failed for %s: %s", file_record.filename, e)
                 async with _db_lock:
                     file_record.scan_status = "processed"
                     db.commit()
@@ -309,6 +346,7 @@ class DocumentProcessor:
                 ids = [f"{file_record.relative_path}::chunk_{c['metadata']['chunk_index']}" for c in chunks]
                 metadatas = [c["metadata"] for c in chunks]
                 add_chunks(tag_name, ids, embeddings, chunk_texts, metadatas)
+                logger.info("  Stored %d chunks in collection [%s]", len(chunks), tag_name)
 
         async with _db_lock:
             file_record.scan_status = "processed"

@@ -1,9 +1,13 @@
 """Discover new tag categories from untagged processed files."""
 import asyncio
 import json
+import logging
 import re
+import time
 
 from backend.models.database import SessionLocal
+
+logger = logging.getLogger(__name__)
 from backend.models.schemas import File, Tag, FileTag
 from backend.services.llm_client import chat_completion
 from backend.services.tagger import tag_by_heuristic, tag_batch_by_llm
@@ -55,6 +59,8 @@ class TagExplorer:
         self.existing_tags_assigned = 0
         self.existing_files_tagged = 0
         self._existing_files_set = set()
+        explore_start = time.time()
+        logger.info("Tag exploration started")
 
         db = SessionLocal()
         try:
@@ -68,10 +74,12 @@ class TagExplorer:
             )
 
             if not untagged_files:
+                logger.info("Tag exploration: no untagged processed files found")
                 self.errors.append("No untagged processed files found.")
                 return
 
             self.total_files = len(untagged_files)
+            logger.info("Tag exploration: %d untagged files to analyze", len(untagged_files))
             self.total_batches = (len(untagged_files) + EXPLORE_BATCH_SIZE - 1) // EXPLORE_BATCH_SIZE
 
             # Step 3: Fetch existing tags
@@ -94,6 +102,7 @@ class TagExplorer:
 
                 batch = untagged_files[batch_start:batch_start + EXPLORE_BATCH_SIZE]
                 self.current_batch += 1
+                logger.info("Explore batch %d/%d (%d files)", self.current_batch, self.total_batches, len(batch))
 
                 files_info = []
                 for f in batch:
@@ -136,6 +145,7 @@ class TagExplorer:
                             )
 
                     # --- Step 4c: LLM new tag discovery ---
+                    logger.info("Explore: LLM new tag discovery for batch %d", self.current_batch)
                     discovered_names = set(self._raw_suggestions.keys())
                     async with _llm_semaphore:
                         new_tags = await self._discover_new_tags_batch(
@@ -158,6 +168,7 @@ class TagExplorer:
                             self._raw_suggestions[tag_name]["files"].add(fname)
 
                 except Exception as e:
+                    logger.warning("Explore batch %d failed: %s", self.current_batch, e)
                     self.errors.append(f"Batch {self.current_batch}: {str(e)}")
 
                 self.processed_files += len(batch)
@@ -166,8 +177,12 @@ class TagExplorer:
             self._build_candidates(existing_tag_names)
 
         except Exception as e:
+            logger.error("Explorer error: %s", e, exc_info=True)
             self.errors.append(f"Explorer error: {str(e)}")
         finally:
+            elapsed = time.time() - explore_start
+            logger.info("Tag exploration finished: %d candidates, %d existing tags assigned in %.1fs",
+                        len(self.candidates), self.existing_tags_assigned, elapsed)
             self.is_running = False
             db.close()
 
