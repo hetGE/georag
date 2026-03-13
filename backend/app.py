@@ -6,7 +6,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
-from backend.config import RAG_DIR, DEFAULT_TAGS
+from backend.config import RAG_DIR, BUNDLE_DIR, DEFAULT_TAGS
 from backend.models.database import init_db, SessionLocal
 from backend.models.schemas import Tag
 
@@ -45,11 +45,11 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="GeoRAG", version="1.0.0", lifespan=lifespan)
 
-# Mount static files
-app.mount("/static", StaticFiles(directory=str(RAG_DIR / "frontend" / "static")), name="static")
+# Mount static files (BUNDLE_DIR points to _MEIPASS when running as EXE)
+app.mount("/static", StaticFiles(directory=str(BUNDLE_DIR / "frontend" / "static")), name="static")
 
 # Templates
-templates = Jinja2Templates(directory=str(RAG_DIR / "frontend" / "templates"))
+templates = Jinja2Templates(directory=str(BUNDLE_DIR / "frontend" / "templates"))
 
 # Import and include routers
 from backend.routers import documents, tags, chat, conversations, processing, explore  # noqa: E402

@@ -1,8 +1,15 @@
 """Configuration - all paths resolved relative to this file's location."""
+import sys
 from pathlib import Path
 
-# _0RAG directory
-RAG_DIR = Path(__file__).resolve().parent.parent
+if getattr(sys, "frozen", False):
+    # PyInstaller EXE: data lives next to the EXE, bundled resources in _MEIPASS
+    RAG_DIR = Path(sys.executable).resolve().parent
+    BUNDLE_DIR = Path(sys._MEIPASS)
+else:
+    # Running from source
+    RAG_DIR = Path(__file__).resolve().parent.parent
+    BUNDLE_DIR = RAG_DIR
 
 # Engineering root (parent of _0RAG)
 ENGINEERING_ROOT = RAG_DIR.parent
