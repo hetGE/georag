@@ -78,7 +78,8 @@ const LibraryPanel = (() => {
             updateBadge(status);
             const wasProcessing = window.libraryIsProcessing;
             window.libraryIsProcessing = status.is_processing || status.phase === 'processing'
-                || status.phase === 'exploring' || status.phase === 'explore_stopping';
+                || status.phase === 'exploring' || status.phase === 'explore_stopping'
+                || status.phase === 'ocr_processing' || status.phase === 'ocr_stopping';
             if (wasProcessing !== window.libraryIsProcessing) {
                 window.updateChatInputState?.();
             }
@@ -95,7 +96,7 @@ const LibraryPanel = (() => {
     // --- Badge ---
 
     function updateBadge(status) {
-        if (status.phase === 'stopping' || status.phase === 'explore_stopping') {
+        if (status.phase === 'stopping' || status.phase === 'explore_stopping' || status.phase === 'ocr_stopping') {
             badgeEl.textContent = '…';
             badgeEl.style.display = '';
         } else if (status.phase === 'processing') {
@@ -106,6 +107,11 @@ const LibraryPanel = (() => {
         } else if (status.phase === 'exploring') {
             const pct = status.explore_total > 0
                 ? Math.round((status.explore_processed / status.explore_total) * 100) : 0;
+            badgeEl.textContent = pct + '%';
+            badgeEl.style.display = '';
+        } else if (status.phase === 'ocr_processing') {
+            const pct = status.ocr_total > 0
+                ? Math.round((status.ocr_processed / status.ocr_total) * 100) : 0;
             badgeEl.textContent = pct + '%';
             badgeEl.style.display = '';
         } else if (status.phase === 'explore_complete') {
@@ -135,6 +141,10 @@ const LibraryPanel = (() => {
             html += renderStoppingPhase(status);
         } else if (status.phase === 'processing') {
             html += renderProcessingPhase(status);
+        } else if (status.phase === 'ocr_processing') {
+            html += renderOCRPhase(status);
+        } else if (status.phase === 'ocr_stopping') {
+            html += renderOCRStoppingPhase(status);
         } else if (status.phase === 'exploring') {
             html += renderExploringPhase(status);
         } else if (status.phase === 'explore_stopping') {
@@ -154,6 +164,7 @@ const LibraryPanel = (() => {
         if (status.phase !== 'not_started' && status.phase !== 'explore_complete') {
             const rpDisabled = (status.phase === 'processing' || status.phase === 'stopping'
                 || status.phase === 'exploring' || status.phase === 'explore_stopping'
+                || status.phase === 'ocr_processing' || status.phase === 'ocr_stopping'
                 || window.chatIsStreaming?.()) ? ' disabled' : '';
             html += `<div class="lp-reprocess-footer">
                 <button id="lp-action-reprocess" class="lp-reprocess-btn outline"${rpDisabled}>Reprocess All</button>
@@ -275,6 +286,38 @@ const LibraryPanel = (() => {
         </div>`;
     }
 
+    function renderOCRPhase(status) {
+        const pct = status.ocr_total > 0
+            ? Math.round((status.ocr_processed / status.ocr_total) * 100) : 0;
+        const extras = [];
+        if (status.ocr_success > 0) extras.push(`${status.ocr_success} succeeded`);
+        if (status.ocr_failed > 0) extras.push(`${status.ocr_failed} failed`);
+
+        return `<div class="lp-phase">
+            <progress value="${pct}" max="100"></progress>
+            <p class="lp-progress-text">${status.ocr_processed} / ${status.ocr_total} files (${pct}%)</p>
+            ${extras.length ? `<p class="lp-stats">${extras.join(' &middot; ')}</p>` : ''}
+            ${status.ocr_current_file ? `<p class="lp-stats" style="font-family:monospace;font-size:0.7rem;word-break:break-all;">${escapeHtml(status.ocr_current_file)}</p>` : ''}
+            <p style="font-size:0.82rem;color:var(--pico-muted-color);">Making scanned PDFs searchable. Re-process files after OCR completes.</p>
+            <div class="lp-actions">
+                <button id="lp-ocr-stop-btn" class="outline secondary">Stop OCR</button>
+            </div>
+        </div>`;
+    }
+
+    function renderOCRStoppingPhase(status) {
+        const pct = status.ocr_total > 0
+            ? Math.round((status.ocr_processed / status.ocr_total) * 100) : 0;
+        return `<div class="lp-phase">
+            <progress value="${pct}" max="100"></progress>
+            <p class="lp-progress-text">${status.ocr_processed} / ${status.ocr_total} files (${pct}%)</p>
+            <p style="font-size:0.82rem;color:var(--pico-muted-color);">Stopping after current file&hellip;</p>
+            <div class="lp-actions">
+                <button disabled class="outline secondary" aria-busy="true">Stopping&hellip;</button>
+            </div>
+        </div>`;
+    }
+
     function renderExploreCompletePhase(status) {
         const candidates = status.explore_candidates || [];
         const existingLine = status.explore_existing_tagged > 0
@@ -319,11 +362,14 @@ const LibraryPanel = (() => {
         const processDisabled = (status.new_files === 0 || busy) ? ' disabled' : '';
         const scanDisabled = busy ? ' disabled' : '';
         const exploreDisabled = busy ? ' disabled' : '';
+        const ocrCount = status.failed_pdfs || 0;
+        const ocrDisabled = (ocrCount === 0 || busy) ? ' disabled' : '';
         return `<hr class="lp-divider">
         <div class="lp-phase">
             <div class="lp-actions">
                 <button id="lp-action-scan" class="outline"${scanDisabled}>Scan Files</button>
                 <button id="lp-action-process-new" class="outline"${processDisabled}>Process New Files</button>
+                <button id="lp-action-ocr" class="outline"${ocrDisabled}>OCR Failed Files${ocrCount > 0 ? ' (' + ocrCount + ')' : ''}</button>
                 <button id="lp-action-explore" class="outline"${exploreDisabled}>Explore New Tags</button>
             </div>
         </div>`;
@@ -349,6 +395,12 @@ const LibraryPanel = (() => {
             ?.addEventListener('click', handleProcessNew);
         document.getElementById('lp-action-reprocess')
             ?.addEventListener('click', handleReprocessAll);
+
+        // OCR buttons
+        document.getElementById('lp-action-ocr')
+            ?.addEventListener('click', handleStartOCR);
+        document.getElementById('lp-ocr-stop-btn')
+            ?.addEventListener('click', handleStopOCR);
 
         // Explore buttons
         document.getElementById('lp-action-explore')
@@ -471,6 +523,40 @@ const LibraryPanel = (() => {
         lastStatusJSON = '';
         await checkStatus();
         window.syncChannel.postMessage({ type: 'processing-started', payload: {} });
+    }
+
+    // --- OCR Handlers ---
+
+    async function handleStartOCR() {
+        if (window.chatIsStreaming?.()) return;
+        const btn = document.getElementById('lp-action-ocr');
+        if (btn) {
+            btn.disabled = true;
+            btn.setAttribute('aria-busy', 'true');
+        }
+        const result = await apiPost('/api/ocr/start');
+        if (result.error) {
+            alert(result.error);
+            if (btn) {
+                btn.disabled = false;
+                btn.setAttribute('aria-busy', 'false');
+            }
+            return;
+        }
+        lastStatusJSON = '';
+        await checkStatus();
+        window.syncChannel.postMessage({ type: 'processing-started', payload: {} });
+    }
+
+    async function handleStopOCR() {
+        const btn = document.getElementById('lp-ocr-stop-btn');
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = 'Stopping\u2026';
+        }
+        await apiPost('/api/ocr/stop');
+        lastStatusJSON = '';
+        await checkStatus();
     }
 
     // --- Explore Handlers ---

@@ -67,6 +67,7 @@ It's like having a colleague who has read every document in your library and can
 | Capability | What It Means |
 |-----------|---------------|
 | **Read your documents** | Scans your `Engineering/` folder and extracts text from PDFs, Word, Excel, PowerPoint, images, and more |
+| **OCR scanned PDFs** | Automatically OCR scanned/image-based PDFs that have no embedded text, making them permanently searchable |
 | **Organize by topic** | Automatically classifies documents into geotechnical categories (piling, tunneling, ground improvement, etc.) |
 | **Answer questions** | Ask anything about your documents and get answers with source citations |
 | **Stream responses** | See the AI's answer appear word by word in real time |
@@ -106,6 +107,7 @@ Two pieces of software make this work:
 | **Disk space** | 10 GB free | 50 GB+ (AI models are large) |
 | **Operating system** | macOS 14+, Windows 10+, or Ubuntu 20.04+ | macOS with Apple Silicon (M1/M2/M3/M4) |
 | **Python** | 3.10 | 3.11 or newer |
+| **Tesseract OCR** | 4.x+ | Latest (`brew install tesseract` on macOS) |
 | **LM Studio** | Version 0.3+ | Latest version ([download here](https://lmstudio.ai/download)) |
 | **GPU** | Not strictly required | Apple Silicon or NVIDIA GPU (much faster) |
 
@@ -203,6 +205,10 @@ Open **http://localhost:3000** in your browser.
 If you prefer to control each step:
 
 ```bash
+# Install Tesseract (required for OCR of scanned PDFs)
+brew install tesseract             # macOS
+# or: sudo apt install tesseract-ocr  # Ubuntu/Debian
+
 # Create and activate a Python environment
 python3.11 -m venv venv
 source venv/bin/activate          # macOS/Linux
@@ -232,7 +238,9 @@ When you first open GeoRAG, the **Library Panel** on the right side walks you th
    - Generate embeddings for similarity search
    - This takes time; the progress bar shows where you are, and you can see which file is being processed at any moment.
 
-3. **Chat**: Once processing finishes, go to the Chat page, select one or more topic tags, and start asking questions.
+3. **OCR** (if needed): After processing, some scanned/image-based PDFs may fail because they have no embedded text. Click "OCR Failed Files (N)" in the Library Panel. GeoRAG will use Tesseract to add a text layer to each PDF, overwriting the original so it becomes permanently searchable. After OCR completes, click "Process New Files" to run the normal pipeline on the now-readable PDFs.
+
+4. **Chat**: Once processing finishes, go to the Chat page, select one or more topic tags, and start asking questions.
 
 > Processing speed depends on your hardware and the number of files. LM Studio (specifically the embedding model) is the bottleneck. You can stop and resume processing at any time; already processed files won't be redone.
 
@@ -278,7 +286,7 @@ Go to the **Documents** page (`/documents`) to:
 
 | Type | Formats | What Gets Extracted |
 |------|---------|--------------------|
-| **Documents** | PDF | Full text with page boundaries |
+| **Documents** | PDF | Full text with page boundaries. Scanned/image-based PDFs can be OCR'd via the Library Panel to add a searchable text layer. |
 | | Word (.doc, .docx) | Paragraphs and tables |
 | | Excel (.xls, .xlsx, .xlsm) | All sheets with sheet names |
 | | PowerPoint (.ppt, .pptx) | All slides with text and tables |
@@ -307,6 +315,16 @@ GeoRAG comes with 11 geotechnical categories. Documents are automatically classi
 You can also create your own custom tags through the Documents page or the API.
 
 ## Common Issues & Fixes
+
+### OCR button is disabled or missing
+- Make sure Tesseract is installed: `brew install tesseract` (macOS) or `apt install tesseract-ocr` (Linux)
+- Make sure `ocrmypdf` is installed: `pip install ocrmypdf`
+- The button only appears when there are failed PDF files. Process your library first; scanned PDFs that fail text extraction will show up as candidates for OCR.
+
+### OCR fails on some files
+- Some PDFs may be corrupted or password-protected; OCR will skip those and continue to the next file
+- Check the error list in the Library Panel for details on individual failures
+- For non-English documents, add the language code to `OCR_LANGUAGES` in `backend/config.py` (e.g., `["eng", "tur"]` for English + Turkish). You may also need to install the Tesseract language pack (e.g., `brew install tesseract-lang`).
 
 ### "LM Studio not detected"
 LM Studio isn't running or the server isn't started. Open LM Studio, go to the Developer tab, and make sure the server is running on port 1234.
@@ -472,7 +490,22 @@ Walks `Engineering/` recursively. Skips `_0RAG/`, `.git/`, `__pycache__/`, `node
 | Text/HTML/RTF/CSV/MD | Built in | Direct read with HTML tag stripping; UTF 8 to latin 1 fallback |
 | DWG/DXF | N/A | Filename indexed only, no content extraction |
 
-Failed extractions mark the file as `status=failed` and log the error.
+Failed extractions mark the file as `status=failed` and log the error. For PDFs, this typically means the file is a scanned image with no embedded text layer. These can be recovered via the OCR pipeline (see below).
+
+### Phase 2b: OCR Recovery (`services/ocr_processor.py`)
+
+An optional step triggered from the Library Panel after initial processing. Targets only PDFs with `status=failed`:
+
+1. Queries all files where `scan_status=failed` and `extension=pdf`
+2. For each file, runs `ocrmypdf` (Tesseract) in a background thread via `asyncio.to_thread()`
+3. OCR writes to a temporary file, then `shutil.move()` replaces the original (no corruption on failure)
+4. Uses `skip_text=True` to handle mixed PDFs (some pages already have text)
+5. On success: resets `scan_status=new`, clears `extracted_text_preview` and `chunk_count`
+6. On failure: file stays `failed`, error logged, pipeline continues to next file
+
+After OCR completes, the user clicks "Process New Files" to run the normal pipeline on the now-readable PDFs.
+
+**Mutual exclusion:** OCR, processing, and tag exploration all block each other. Only one can run at a time.
 
 ### Phase 3: Auto Tagging (`services/tagger.py`)
 
@@ -542,6 +575,8 @@ When a user sends a message via `POST /api/chat`:
 | LLM tagging | 1 | `asyncio.Semaphore(1)` | LM Studio single model inference bottleneck |
 | Embedding requests | 3 | `asyncio.Semaphore(3)` | Balance throughput vs. LM Studio capacity |
 | Database writes | 1 | `asyncio.Lock` | SQLite transaction safety |
+| OCR processing | 1 file | Sequential | CPU-intensive Tesseract, avoids thrashing |
+| Pipeline exclusion | 1 pipeline | Mutual exclusion checks | Processing, OCR, and exploration block each other |
 | Embedding batch size | 128 texts | Config constant | LM Studio request size limit |
 | Processing batch | 10 files | Config constant | Memory bounded pipeline stage |
 
@@ -564,6 +599,7 @@ When a user sends a message via `POST /api/chat`:
 | python-pptx | 1.0.2 | PowerPoint parsing |
 | langchain-text-splitters | 0.3.4 | Recursive character text splitting |
 | sse-starlette | 2.2.1 | Server Sent Events |
+| ocrmypdf | latest | OCR scanned PDFs via Tesseract (requires system `tesseract` binary) |
 | jinja2 | 3.1.4 | HTML templating |
 | pydantic | (via FastAPI) | Data validation |
 
@@ -586,6 +622,7 @@ When a user sends a message via `POST /api/chat`:
 |-----------|------|------|
 | GeoRAG (Uvicorn) | 3000 | Web server + API |
 | LM Studio | 1234 | Local LLM inference (OpenAI compatible API) |
+| Tesseract OCR | N/A | System binary for OCR (used by `ocrmypdf`) |
 
 ## Project Structure
 
@@ -610,10 +647,13 @@ _0RAG/
 │   │   ├── conversations.py        # CRUD, soft delete, trash, restore
 │   │   ├── documents.py            # Search, filter, paginate, tag, open
 │   │   ├── tags.py                 # Tag CRUD
-│   │   └── processing.py           # Scan, start/stop pipeline, onboarding
+│   │   ├── processing.py           # Scan, start/stop pipeline, onboarding
+│   │   ├── explore.py              # Tag exploration: discover new categories
+│   │   └── ocr.py                  # OCR start/stop/status for failed PDFs
 │   │
 │   └── services/
 │       ├── document_processor.py   # Pipeline orchestrator (batch + concurrency)
+│       ├── ocr_processor.py        # OCR scanned PDFs via ocrmypdf/Tesseract
 │       ├── scanner.py              # Filesystem walk + DB synchronization
 │       ├── chunker.py              # RecursiveCharacterTextSplitter wrapper
 │       ├── embedding_client.py     # Async batch embeddings via LM Studio
@@ -710,9 +750,17 @@ FastAPI auto generates interactive docs at `/docs` (Swagger) and `/redoc`.
 | `POST` | `/api/processing/start` | Start pipeline. Body: `{tag_names?, file_ids?, reprocess?}`. |
 | `POST` | `/api/processing/stop` | Gracefully stop processing. |
 | `GET` | `/api/processing/status` | Pipeline state: `{is_running, total_files, processed_files, failed_files, skipped_files, current_file, errors}`. |
-| `GET` | `/api/processing/onboarding-status` | Full onboarding state with phase, progress, and extension breakdown. |
+| `GET` | `/api/processing/onboarding-status` | Full onboarding state with phase, progress, extension breakdown, and OCR status. |
 | `POST` | `/api/processing/onboarding-dismiss` | Dismiss onboarding wizard. |
 | `DELETE` | `/api/processing/onboarding-dismiss` | Reset onboarding visibility. |
+
+### OCR Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/ocr/start` | Start OCR on all failed PDF files. Mutually exclusive with processing and exploration. |
+| `POST` | `/api/ocr/stop` | Gracefully stop OCR after current file. |
+| `GET` | `/api/ocr/status` | OCR state: `{is_running, total_files, processed_files, ocr_success, ocr_failed, current_file, errors}`. |
 
 ## Configuration Reference
 
@@ -751,6 +799,12 @@ All values live in `backend/config.py`.
 | `TOP_K_PER_TAG` | `5` | Chunks retrieved per tag during chat |
 | `MAX_CONTEXT_CHUNKS` | `8` | Max chunks assembled into the LLM prompt |
 | `CONVERSATION_HISTORY_TURNS` | `4` | Past turns (8 messages) included in prompt |
+
+### OCR
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OCR_LANGUAGES` | `["eng"]` | Tesseract language codes for OCR. Add codes for other languages (e.g., `["eng", "tur"]`). Requires corresponding Tesseract language packs. |
 
 ### File Scanning
 
@@ -814,7 +868,7 @@ The frontend is intentionally **framework free**. Vanilla JavaScript with module
 |------|-------|----------------|
 | `chat.js` | 871 | Welcome state, tag selection, message submission, SSE streaming, conversation sidebar, trash management, depth settings, cross tab mirroring |
 | `documents.js` | 385 | File table rendering, search (debounced 300ms), type/status/tag filters, pagination, single and batch tagging, tag modal |
-| `panel.js` | 381 | Library panel lifecycle (scan, process, complete), processing status polling (2s interval), reprocess all confirmation |
+| `panel.js` | 670 | Library panel lifecycle (scan, process, OCR, explore, complete), processing status polling (2s interval), OCR start/stop, reprocess all confirmation |
 | `router.js` | 55 | SPA routing via History API, page toggle, `spa:pageshow` custom event for lazy init |
 | `utils.js` | 65 | `apiGet`/`apiPost`/`apiDelete` wrappers, `escapeHtml`, tag badge factory, `syncChannel` (BroadcastChannel) |
 

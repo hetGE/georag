@@ -58,6 +58,9 @@ SUPPORTED_EXTENSIONS = {
     "mp4", "avi", "mov", "mkv",
 }
 
+# OCR settings (requires system prerequisite: brew install tesseract)
+OCR_LANGUAGES = ["eng"]
+
 # Default tags
 DEFAULT_TAGS = [
     {"name": "piling", "display_name": "Piling", "color": "#e74c3c",

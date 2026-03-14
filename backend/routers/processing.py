@@ -21,10 +21,13 @@ _ONBOARDING_DISMISSED_PATH = Path("data/onboarding_dismissed")
 @router.post("/processing/start")
 async def start_processing(request: ProcessingRequest, db: Session = Depends(get_db)):
     from backend.routers.explore import _explorer
+    from backend.routers.ocr import _ocr_processor
     if _processor.is_running:
         return {"error": "Processing already in progress"}
     if _explorer.is_running:
         return {"error": "Cannot process while tag exploration is running"}
+    if _ocr_processor.is_running:
+        return {"error": "Cannot process while OCR is running"}
 
     asyncio.create_task(_processor.run(
         tag_names=request.tag_names,
@@ -93,6 +96,12 @@ def onboarding_status(db: Session = Depends(get_db)):
     )
 
     from backend.routers.explore import _explorer
+    from backend.routers.ocr import _ocr_processor
+
+    # Count failed PDFs specifically (for OCR button)
+    failed_pdfs = db.query(File).filter(
+        File.scan_status == "failed", File.extension == "pdf"
+    ).count()
 
     if total_files == 0:
         phase = "not_started"
@@ -100,6 +109,10 @@ def onboarding_status(db: Session = Depends(get_db)):
         phase = "stopping"
     elif _processor.is_running:
         phase = "processing"
+    elif _ocr_processor.is_running and _ocr_processor._stop_flag:
+        phase = "ocr_stopping"
+    elif _ocr_processor.is_running:
+        phase = "ocr_processing"
     elif _explorer.is_running and _explorer._stop_flag:
         phase = "explore_stopping"
     elif _explorer.is_running:
@@ -120,6 +133,7 @@ def onboarding_status(db: Session = Depends(get_db)):
         "new_files": new_files,
         "processed_files": processed_files,
         "failed_files": failed_files,
+        "failed_pdfs": failed_pdfs,
         "skipped_files": skipped_files,
         "is_processing": _processor.is_running,
         "dismissed": dismissed,
@@ -135,6 +149,11 @@ def onboarding_status(db: Session = Depends(get_db)):
         "explore_candidates": _explorer.candidates if not _explorer.is_running else [],
         "explore_existing_tagged": _explorer.existing_tags_assigned,
         "explore_existing_files": _explorer.existing_files_tagged,
+        "ocr_total": _ocr_processor.total_files,
+        "ocr_processed": _ocr_processor.processed_files,
+        "ocr_success": _ocr_processor.ocr_success,
+        "ocr_failed": _ocr_processor.ocr_failed,
+        "ocr_current_file": _ocr_processor.current_file,
     }
 
 

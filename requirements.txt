@@ -13,3 +13,4 @@ openpyxl==3.1.5
 python-pptx==1.0.2
 langchain-text-splitters==0.3.4
 sse-starlette==2.2.1
+ocrmypdf

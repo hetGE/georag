@@ -22,8 +22,11 @@ class AcceptTagsRequest(BaseModel):
 async def start_exploring():
     """Start tag exploration on untagged processed files."""
     from backend.routers.processing import _processor
+    from backend.routers.ocr import _ocr_processor
     if _processor.is_running:
         return {"error": "Cannot explore while processing is running."}
+    if _ocr_processor.is_running:
+        return {"error": "Cannot explore while OCR is running."}
     if _explorer.is_running:
         return {"error": "Exploration already in progress."}
 
