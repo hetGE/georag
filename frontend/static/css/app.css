@@ -91,8 +91,10 @@ body.chat-streaming .lp-actions:not(:has(#lp-stop-btn))::after {
 }
 
 .nav-logo {
-    height: 20px;
+    height: 28px;
     width: auto;
+    cursor: pointer;
+    border-radius: 6px;
 }
 
 .nav-subtitle {
@@ -1574,4 +1576,118 @@ body:has(.lp-panel.open) .lp-toggle {
 .lp-explore-candidates::-webkit-scrollbar-thumb {
     background: var(--pico-muted-border-color);
     border-radius: 3px;
+}
+
+/* ===== About Modal ===== */
+
+#about-modal::backdrop {
+    background: rgba(0, 0, 0, 0.0);
+    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2px);
+}
+
+#about-modal {
+    border: none;
+    padding: 0;
+    background: rgba(0, 0, 0, 0.0);
+}
+
+.about-modal-content {
+    text-align: center;
+    padding: 1.25rem 1.25rem 1rem;
+    margin: 0;
+    max-height: 650px;
+    max-width: 650px;
+}
+
+.about-icon-wrap {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 0.75rem;
+}
+
+.about-icon {
+    height: 180px;
+    width: auto;
+    border-radius: 20px;
+}
+
+.about-title {
+    margin: 0 0 0.1rem;
+    font-size: 1.15rem;
+    font-weight: 700;
+    color: var(--pico-color);
+}
+
+.about-subtitle {
+    font-size: 0.7rem;
+    color: var(--pico-muted-color);
+    margin-bottom: 0.4rem;
+}
+
+.about-version {
+    font-size: 0.65rem;
+    color: var(--pico-muted-color);
+    margin-bottom: 0.75rem;
+}
+
+.about-brand {
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 0.25rem;
+    margin-bottom: 0.75rem;
+}
+
+.about-by {
+    font-size: 0.6rem;
+    color: var(--pico-muted-color);
+    line-height: 1;
+    padding-bottom: 0.3rem;
+}
+
+.about-hetge-logo {
+    height: 48px;
+    width: auto;
+}
+
+.about-social-label {
+    font-size: 0.65rem;
+    color: var(--pico-muted-color);
+    margin-bottom: 0.35rem;
+}
+
+.about-social-icons {
+    display: flex;
+    justify-content: center;
+    gap: 0.75rem;
+    margin-bottom: 0.5rem;
+}
+
+.about-social-icons a {
+    color: var(--pico-muted-color);
+    transition: color 0.15s;
+    text-decoration: none;
+}
+
+.about-social-icons a svg {
+    width: 18px;
+    height: 18px;
+}
+
+.about-social-icons a:hover {
+    color: var(--brand-color);
+}
+
+.about-divider {
+    border: none;
+    border-top: 1px solid var(--pico-muted-border-color);
+    margin: 0.5rem 0;
+}
+
+.about-copyright {
+    font-size: 0.6rem;
+    color: var(--pico-muted-color);
+    margin-bottom: 0;
 }
