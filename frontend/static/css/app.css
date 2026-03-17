@@ -594,6 +594,85 @@ nav ul:last-child li a.active:hover {
     min-width: 200px;
 }
 
+.content-search-label {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.8rem;
+    white-space: nowrap;
+    cursor: pointer;
+    margin-bottom: 0;
+    user-select: none;
+}
+
+.content-search-label input[type="checkbox"] {
+    margin: 0;
+    width: 32px;
+    height: 32px;
+    min-width: 32px;
+    appearance: auto;
+    -webkit-appearance: checkbox;
+    cursor: pointer;
+}
+
+/* Content search overlay spinner */
+.content-search-overlay {
+    display: none;
+    position: absolute;
+    inset: 0;
+    background: rgba(var(--card-background-color-rgb, 255,255,255), 0.8);
+    z-index: 10;
+    align-items: center;
+    justify-content: center;
+}
+
+.content-search-overlay.active {
+    display: flex;
+}
+
+.content-search-overlay .spinner-wheel {
+    width: 64px;
+    height: 64px;
+    animation: spin-wheel 1s steps(12) infinite;
+}
+
+.content-search-overlay .spinner-wheel .spoke {
+    fill: #2ecc71;
+    opacity: 0.25;
+}
+
+.content-search-overlay .spinner-wheel .spoke:nth-child(1)  { opacity: 1.0; }
+.content-search-overlay .spinner-wheel .spoke:nth-child(2)  { opacity: 0.94; }
+.content-search-overlay .spinner-wheel .spoke:nth-child(3)  { opacity: 0.87; }
+.content-search-overlay .spinner-wheel .spoke:nth-child(4)  { opacity: 0.75; }
+.content-search-overlay .spinner-wheel .spoke:nth-child(5)  { opacity: 0.63; }
+.content-search-overlay .spinner-wheel .spoke:nth-child(6)  { opacity: 0.5; }
+.content-search-overlay .spinner-wheel .spoke:nth-child(7)  { opacity: 0.44; }
+.content-search-overlay .spinner-wheel .spoke:nth-child(8)  { opacity: 0.37; }
+.content-search-overlay .spinner-wheel .spoke:nth-child(9)  { opacity: 0.31; }
+.content-search-overlay .spinner-wheel .spoke:nth-child(10) { opacity: 0.28; }
+.content-search-overlay .spinner-wheel .spoke:nth-child(11) { opacity: 0.26; }
+.content-search-overlay .spinner-wheel .spoke:nth-child(12) { opacity: 0.25; }
+
+@keyframes spin-wheel {
+    to { transform: rotate(360deg); }
+}
+
+.search-row.disabled {
+    pointer-events: none;
+    opacity: 0.5;
+}
+
+.relevance-score {
+    display: inline-block;
+    padding: 0.1rem 0.4rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+    background: #2ecc71;
+    color: #fff;
+}
+
 .search-row select {
     flex: 1 1 0;
     min-width: 0;

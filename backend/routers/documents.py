@@ -1,4 +1,5 @@
 """Document list, search, filter, pagination."""
+import logging
 import os
 import platform
 import subprocess
@@ -12,13 +13,18 @@ from backend.config import ENGINEERING_ROOT
 from backend.models.database import get_db
 from backend.models.schemas import File, Tag, FileTag
 from backend.models.pydantic_models import BatchTagRequest
+from backend.services.embedding_client import embed_text
+from backend.services.vector_store import search_file_paths
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["documents"])
 
 
 @router.get("/documents")
-def list_documents(
+async def list_documents(
     search: str = Query("", description="Search filename or path"),
+    search_contents: bool = Query(False, description="Also search file contents via embeddings"),
     extension: str = Query("", description="Filter by extension"),
     tag: str = Query("", description="Filter by tag name"),
     status: str = Query("", description="Filter by scan_status"),
@@ -28,7 +34,29 @@ def list_documents(
 ):
     query = db.query(File).options(joinedload(File.tags).joinedload(FileTag.tag))
 
-    if search:
+    file_scores = {}
+    if search and search_contents:
+        # Semantic content search: embed query, find matching files in ChromaDB
+        content_paths = []
+        try:
+            query_embedding = await embed_text(search)
+            # Search specific tag or all tags
+            if tag and tag != "__none__":
+                search_tags = [tag]
+            else:
+                search_tags = [t[0] for t in db.query(Tag.name).all()]
+            file_scores = search_file_paths(query_embedding, search_tags)
+            content_paths = list(file_scores.keys())
+            logger.info("Content search for '%s': %d files matched", search, len(content_paths))
+        except Exception as e:
+            logger.warning("Content search failed (LM Studio down?): %s", e)
+        # Match by filename/path OR by content similarity
+        query = query.filter(
+            (File.filename.ilike(f"%{search}%"))
+            | (File.relative_path.ilike(f"%{search}%"))
+            | (File.relative_path.in_(content_paths))
+        )
+    elif search:
         query = query.filter(
             (File.filename.ilike(f"%{search}%")) | (File.relative_path.ilike(f"%{search}%"))
         )
@@ -41,37 +69,47 @@ def list_documents(
     if status:
         query = query.filter(File.scan_status == status)
 
-    total = query.distinct().count()
-    files = (
-        query.distinct()
-        .order_by(File.relative_path)
-        .offset((page - 1) * per_page)
-        .limit(per_page)
-        .all()
-    )
+    if file_scores:
+        # Semantic search: fetch all matches, sort by relevance, paginate in Python
+        all_files = query.distinct().all()
+        all_files.sort(key=lambda f: (-file_scores.get(f.relative_path, -1), f.relative_path))
+        total = len(all_files)
+        files = all_files[(page - 1) * per_page : page * per_page]
+    else:
+        total = query.distinct().count()
+        files = (
+            query.distinct()
+            .order_by(File.relative_path)
+            .offset((page - 1) * per_page)
+            .limit(per_page)
+            .all()
+        )
+
+    def file_dict(f):
+        d = {
+            "id": f.id,
+            "relative_path": f.relative_path,
+            "filename": f.filename,
+            "extension": f.extension,
+            "size_bytes": f.size_bytes,
+            "parent_directory": f.parent_directory,
+            "scan_status": f.scan_status,
+            "chunk_count": f.chunk_count,
+            "tags": [
+                {"name": ft.tag.name, "display_name": ft.tag.display_name, "color": ft.tag.color}
+                for ft in f.tags
+            ],
+        }
+        if f.relative_path in file_scores:
+            d["relevance_score"] = round(file_scores[f.relative_path], 3)
+        return d
 
     return {
         "total": total,
         "page": page,
         "per_page": per_page,
         "pages": (total + per_page - 1) // per_page if per_page else 1,
-        "files": [
-            {
-                "id": f.id,
-                "relative_path": f.relative_path,
-                "filename": f.filename,
-                "extension": f.extension,
-                "size_bytes": f.size_bytes,
-                "parent_directory": f.parent_directory,
-                "scan_status": f.scan_status,
-                "chunk_count": f.chunk_count,
-                "tags": [
-                    {"name": ft.tag.name, "display_name": ft.tag.display_name, "color": ft.tag.color}
-                    for ft in f.tags
-                ],
-            }
-            for f in files
-        ],
+        "files": [file_dict(f) for f in files],
     }
 
 

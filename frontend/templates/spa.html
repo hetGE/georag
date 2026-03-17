@@ -107,7 +107,8 @@
         <!-- Controls -->
         <div class="doc-controls">
             <div class="search-row">
-                <input type="search" id="search-input" placeholder="Search files..." class="search-input">
+                <input type="search" id="search-input" placeholder="Search in file names..." class="search-input">
+                <label class="content-search-label" title="ENTER to trigger"><input type="checkbox" id="content-search-toggle"> Semantic Search</label>
                 <select id="ext-filter">
                     <option value="">All types</option>
                     <option value="pdf">PDF</option>
@@ -139,7 +140,23 @@
         </div>
 
         <!-- File Table -->
-        <div class="file-table-wrapper">
+        <div class="file-table-wrapper" style="position:relative;">
+            <div class="content-search-overlay" id="content-search-overlay">
+                <svg class="spinner-wheel" viewBox="0 0 100 100">
+                    <rect class="spoke" x="46" y="5"  width="8" height="22" rx="4" transform="rotate(0 50 50)"/>
+                    <rect class="spoke" x="46" y="5"  width="8" height="22" rx="4" transform="rotate(30 50 50)"/>
+                    <rect class="spoke" x="46" y="5"  width="8" height="22" rx="4" transform="rotate(60 50 50)"/>
+                    <rect class="spoke" x="46" y="5"  width="8" height="22" rx="4" transform="rotate(90 50 50)"/>
+                    <rect class="spoke" x="46" y="5"  width="8" height="22" rx="4" transform="rotate(120 50 50)"/>
+                    <rect class="spoke" x="46" y="5"  width="8" height="22" rx="4" transform="rotate(150 50 50)"/>
+                    <rect class="spoke" x="46" y="5"  width="8" height="22" rx="4" transform="rotate(180 50 50)"/>
+                    <rect class="spoke" x="46" y="5"  width="8" height="22" rx="4" transform="rotate(210 50 50)"/>
+                    <rect class="spoke" x="46" y="5"  width="8" height="22" rx="4" transform="rotate(240 50 50)"/>
+                    <rect class="spoke" x="46" y="5"  width="8" height="22" rx="4" transform="rotate(270 50 50)"/>
+                    <rect class="spoke" x="46" y="5"  width="8" height="22" rx="4" transform="rotate(300 50 50)"/>
+                    <rect class="spoke" x="46" y="5"  width="8" height="22" rx="4" transform="rotate(330 50 50)"/>
+                </svg>
+            </div>
             <table class="file-table">
                 <thead>
                     <tr>

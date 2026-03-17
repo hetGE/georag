@@ -82,6 +82,17 @@ def query_tags(query_embedding: list[float], tag_names: list[str], top_k: int | 
     return deduped
 
 
+def search_file_paths(query_embedding: list[float], tag_names: list[str], top_k_per_tag: int = 20) -> dict[str, float]:
+    """Search tag collections and return unique file_paths with their best similarity score."""
+    chunks = query_tags(query_embedding, tag_names, top_k=top_k_per_tag)
+    file_scores: dict[str, float] = {}
+    for c in chunks:
+        fp = c["file_path"]
+        if fp not in file_scores or c["score"] > file_scores[fp]:
+            file_scores[fp] = c["score"]
+    return file_scores
+
+
 def delete_collection(tag_name: str):
     """Delete an entire tag collection from ChromaDB."""
     try:

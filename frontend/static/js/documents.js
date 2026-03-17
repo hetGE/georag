@@ -15,9 +15,29 @@ async function initDocuments() {
     await loadStats();
     loadDocuments();
 
-    document.getElementById('search-input').addEventListener('input', () => {
+    const searchInput = document.getElementById('search-input');
+    const contentToggle = document.getElementById('content-search-toggle');
+
+    searchInput.addEventListener('input', () => {
+        if (contentToggle.checked) return; // wait for Enter in content mode
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => { currentPage = 1; loadDocuments(); }, 300);
+    });
+
+    searchInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' && contentToggle.checked) {
+            e.preventDefault();
+            currentPage = 1;
+            loadDocuments();
+        }
+    });
+
+    contentToggle.addEventListener('change', () => {
+        searchInput.placeholder = contentToggle.checked
+            ? 'Search in file names and contents... (ENTER to trigger)'
+            : 'Search in file names...';
+        currentPage = 1;
+        loadDocuments();
     });
 
     document.getElementById('ext-filter').addEventListener('change', () => { currentPage = 1; loadDocuments(); });
@@ -86,24 +106,54 @@ async function loadDocuments() {
     const tag = document.getElementById('tag-filter').value;
     const status = document.getElementById('status-filter').value;
 
+    const contentSearch = document.getElementById('content-search-toggle')?.checked || false;
+    const isContentQuery = contentSearch && search;
+
     const params = new URLSearchParams({page: currentPage, per_page: 50});
     if (search) params.set('search', search);
+    if (isContentQuery) params.set('search_contents', 'true');
     if (ext) params.set('extension', ext);
     if (tag) params.set('tag', tag);
     if (status) params.set('status', status);
 
-    const data = await apiGet(`/api/documents?${params}`);
-    lastLoadedFiles = data.files;
-    renderFileTable(data.files);
-    renderPagination(data);
-    updateMultiTagVisibility();
+    const overlay = document.getElementById('content-search-overlay');
+    const searchRow = document.querySelector('.search-row');
+
+    if (isContentQuery) {
+        overlay?.classList.add('active');
+        searchRow?.classList.add('disabled');
+    }
+
+    try {
+        const data = await apiGet(`/api/documents?${params}`);
+        lastLoadedFiles = data.files;
+        renderFileTable(data.files);
+        renderPagination(data);
+        updateMultiTagVisibility();
+    } finally {
+        overlay?.classList.remove('active');
+        searchRow?.classList.remove('disabled');
+    }
 }
 
 function renderFileTable(files) {
     const tbody = document.getElementById('file-list');
+    const hasRelevance = files.some(f => f.relevance_score != null);
+    const colCount = hasRelevance ? 9 : 8;
+
+    // Update header: add/remove Relevance column
+    const existingRelTh = document.getElementById('th-relevance');
+    if (hasRelevance && !existingRelTh) {
+        const th = document.createElement('th');
+        th.id = 'th-relevance';
+        th.textContent = 'Relevance';
+        document.querySelector('.file-table thead tr').appendChild(th);
+    } else if (!hasRelevance && existingRelTh) {
+        existingRelTh.remove();
+    }
 
     if (!files.length) {
-        tbody.innerHTML = '<tr><td colspan="8" class="center">No files found</td></tr>';
+        tbody.innerHTML = `<tr><td colspan="${colCount}" class="center">No files found</td></tr>`;
         return;
     }
 
@@ -113,6 +163,9 @@ function renderFileTable(files) {
             const abbr = t.display_name.split(/\s+/).map(w => w[0]).join('').toUpperCase();
             return `<span class="tag-mini" style="background:${t.color}" title="${escapeHtml(t.display_name)}">${abbr}</span>`;
         }).join('');
+        const scoreCell = hasRelevance
+            ? `<td>${f.relevance_score != null ? `<span class="relevance-score">${(f.relevance_score * 100).toFixed(0)}%</span>` : '-'}</td>`
+            : '';
 
         return `<tr>
             <td><input type="checkbox" class="file-cb" data-id="${f.id}" ${checked}></td>
@@ -123,6 +176,7 @@ function renderFileTable(files) {
             <td><span class="status-badge status-${f.scan_status}">${f.scan_status}</span></td>
             <td class="tag-cell">${tags || '-'}</td>
             <td>${f.chunk_count || 0}</td>
+            ${scoreCell}
         </tr>`;
     }).join('');
 
