@@ -65,6 +65,8 @@ const LibraryPanel = (() => {
 
     // --- Polling ---
 
+    let lastErrorCount = 0;
+
     async function checkStatus() {
         try {
             const status = await apiGet('/api/processing/onboarding-status');
@@ -83,6 +85,17 @@ const LibraryPanel = (() => {
             if (wasProcessing !== window.libraryIsProcessing) {
                 window.updateChatInputState?.();
             }
+
+            // Detect new LM Studio errors during processing/explore
+            const errors = status.errors || [];
+            if (errors.length > lastErrorCount) {
+                const newErrors = errors.slice(lastErrorCount);
+                const lmError = newErrors.find(e =>
+                    /connect|timeout|ConnectError|embed|model.*not.*loaded|No models loaded/i.test(e)
+                );
+                if (lmError) window.requireLmStudio();
+            }
+            lastErrorCount = errors.length;
         } catch {
             // API not available
         }
@@ -434,6 +447,7 @@ const LibraryPanel = (() => {
 
     async function handleStartProcessing() {
         if (window.chatIsStreaming?.()) return;
+        if (!(await window.requireLmStudio())) return;
         const btn = document.getElementById('lp-process-btn');
         btn.disabled = true;
         btn.setAttribute('aria-busy', 'true');
@@ -482,6 +496,7 @@ const LibraryPanel = (() => {
 
     async function handleProcessNew() {
         if (window.chatIsStreaming?.()) return;
+        if (!(await window.requireLmStudio())) return;
         const btn = document.getElementById('lp-action-process-new');
         btn.disabled = true;
         btn.setAttribute('aria-busy', 'true');
@@ -506,6 +521,7 @@ const LibraryPanel = (() => {
     async function confirmReprocessAll() {
         const dialog = document.getElementById('reprocess-confirm-dialog');
         dialog.close();
+        if (!(await window.requireLmStudio())) return;
         const btn = document.getElementById('lp-action-reprocess');
         if (btn) {
             btn.disabled = true;
@@ -529,6 +545,7 @@ const LibraryPanel = (() => {
 
     async function handleStartOCR() {
         if (window.chatIsStreaming?.()) return;
+        if (!(await window.requireLmStudio())) return;
         const btn = document.getElementById('lp-action-ocr');
         if (btn) {
             btn.disabled = true;
@@ -563,6 +580,7 @@ const LibraryPanel = (() => {
 
     async function handleStartExploring() {
         if (window.chatIsStreaming?.()) return;
+        if (!(await window.requireLmStudio())) return;
         const btn = document.getElementById('lp-action-explore');
         if (btn) {
             btn.disabled = true;

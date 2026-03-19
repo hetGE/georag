@@ -154,6 +154,7 @@ def onboarding_status(db: Session = Depends(get_db)):
         "ocr_success": _ocr_processor.ocr_success,
         "ocr_failed": _ocr_processor.ocr_failed,
         "ocr_current_file": _ocr_processor.current_file,
+        "errors": _processor.errors[-10:] + _explorer.errors[-10:],
     }
 
 

@@ -1659,6 +1659,85 @@ body:has(.lp-panel.open) .lp-toggle {
 
 /* ===== About Modal ===== */
 
+/* LM Studio Warning Modal */
+#lmstudio-warning-modal::backdrop {
+    background: rgba(0, 0, 0, 0.35);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+}
+
+#lmstudio-warning-modal {
+    border: none;
+    padding: 0;
+    background: transparent;
+}
+
+.lmstudio-warning-content {
+    text-align: center;
+    padding: 2rem 2rem 1.5rem;
+    margin: 0;
+    max-width: 480px;
+}
+
+.lmstudio-warning-icon {
+    margin-bottom: 1rem;
+}
+
+.lmstudio-warning-title {
+    margin: 0 0 0.5rem;
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: #e74c3c;
+}
+
+.lmstudio-warning-detail {
+    font-size: 0.85rem;
+    color: var(--pico-muted-color);
+    margin-bottom: 1rem;
+    font-style: italic;
+}
+
+.lmstudio-warning-info {
+    font-size: 0.8rem;
+    color: var(--pico-color);
+    margin-bottom: 0.5rem;
+    text-align: left;
+}
+
+.lmstudio-warning-list {
+    text-align: left;
+    font-size: 0.8rem;
+    color: var(--pico-muted-color);
+    margin-bottom: 1.5rem;
+    padding-left: 1.2rem;
+}
+
+.lmstudio-warning-list li {
+    margin-bottom: 0.2rem;
+}
+
+.lmstudio-warning-actions {
+    display: flex;
+    gap: 0.75rem;
+    justify-content: center;
+}
+
+.lmstudio-retry-btn {
+    background: #e74c3c;
+    border-color: #e74c3c;
+    color: #fff;
+    min-width: 160px;
+}
+
+.lmstudio-retry-btn:hover {
+    background: #c0392b;
+    border-color: #c0392b;
+}
+
+.lmstudio-dismiss-btn {
+    min-width: 120px;
+}
+
 #about-modal::backdrop {
     background: rgba(0, 0, 0, 0.0);
     backdrop-filter: blur(2px);

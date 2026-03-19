@@ -109,6 +109,9 @@ async function loadDocuments() {
     const contentSearch = document.getElementById('content-search-toggle')?.checked || false;
     const isContentQuery = contentSearch && search;
 
+    // Check LM Studio before semantic search
+    if (isContentQuery && !(await window.requireLmStudio())) return;
+
     const params = new URLSearchParams({page: currentPage, per_page: 50});
     if (search) params.set('search', search);
     if (isContentQuery) params.set('search_contents', 'true');
@@ -130,6 +133,8 @@ async function loadDocuments() {
         renderFileTable(data.files);
         renderPagination(data);
         updateMultiTagVisibility();
+    } catch (err) {
+        if (isContentQuery) window.requireLmStudio();
     } finally {
         overlay?.classList.remove('active');
         searchRow?.classList.remove('disabled');

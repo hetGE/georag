@@ -750,6 +750,9 @@ async function handleSubmit(e) {
     const message = input.value.trim();
     if (!message || isStreaming || remoteStreaming || window.libraryIsProcessing) return;
 
+    // Check LM Studio before sending
+    if (!(await window.requireLmStudio())) return;
+
     // Block submit if welcome state and no tags selected
     if (isWelcomeState && allTags.length > 0 && selectedTags.size === 0) return;
 
@@ -821,7 +824,11 @@ async function handleSubmit(e) {
                     try {
                         const data = JSON.parse(dataStr);
 
-                        if (data.token !== undefined) {
+                        if (data.error) {
+                            contentEl.textContent = 'Error: ' + data.error;
+                            // Check if it's an LM Studio connectivity issue
+                            window.requireLmStudio();
+                        } else if (data.token !== undefined) {
                             // Broadcast streaming status on first token
                             if (!broadcastedStart) {
                                 broadcastedStart = true;
@@ -854,6 +861,7 @@ async function handleSubmit(e) {
     } catch (err) {
         if (err.name !== 'AbortError') {
             contentEl.textContent = 'Error: ' + err.message;
+            window.requireLmStudio();
         }
     }
 

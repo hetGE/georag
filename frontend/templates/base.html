@@ -63,6 +63,32 @@
         </article>
     </dialog>
 
+    <!-- LM Studio Warning Modal -->
+    <dialog id="lmstudio-warning-modal">
+        <article class="lmstudio-warning-content">
+            <div class="lmstudio-warning-icon">
+                <svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="#e74c3c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+                    <line x1="12" y1="9" x2="12" y2="13"/>
+                    <line x1="12" y1="17" x2="12.01" y2="17"/>
+                </svg>
+            </div>
+            <h3 class="lmstudio-warning-title">LM Studio Not Available</h3>
+            <p class="lmstudio-warning-detail" id="lmstudio-warning-detail">Cannot connect to LM Studio on port 1234.</p>
+            <p class="lmstudio-warning-info">The following features require LM Studio to be running with a model loaded:</p>
+            <ul class="lmstudio-warning-list">
+                <li>Chat (RAG responses)</li>
+                <li>Semantic Search</li>
+                <li>Document Processing</li>
+                <li>Tag Exploration</li>
+            </ul>
+            <div class="lmstudio-warning-actions">
+                <button id="lmstudio-retry-btn" class="lmstudio-retry-btn">Retry Connection</button>
+                <button id="lmstudio-dismiss-btn" class="outline lmstudio-dismiss-btn">Dismiss</button>
+            </div>
+        </article>
+    </dialog>
+
     <!-- About Modal -->
     <dialog id="about-modal">
         <article class="about-modal-content">
@@ -96,6 +122,59 @@
         </article>
     </dialog>
 
+    <script>
+    // LM Studio connectivity check (global)
+    window.checkLmStudio = async function() {
+        try {
+            const res = await fetch('/api/health/lm-studio');
+            const data = await res.json();
+            return data;
+        } catch {
+            return { status: 'error', detail: 'Backend not reachable.' };
+        }
+    };
+
+    window.showLmStudioWarning = function(detail) {
+        const dlg = document.getElementById('lmstudio-warning-modal');
+        if (!dlg || dlg.open) return;
+        if (detail) document.getElementById('lmstudio-warning-detail').textContent = detail;
+        dlg.showModal();
+    };
+
+    // Returns true if LM Studio is OK, shows warning and returns false if not
+    window.requireLmStudio = async function() {
+        const result = await window.checkLmStudio();
+        if (result.status === 'ok') return true;
+        window.showLmStudioWarning(result.detail);
+        return false;
+    };
+
+    (function() {
+        const dlg = document.getElementById('lmstudio-warning-modal');
+        const retryBtn = document.getElementById('lmstudio-retry-btn');
+        const dismissBtn = document.getElementById('lmstudio-dismiss-btn');
+
+        retryBtn.addEventListener('click', async () => {
+            retryBtn.setAttribute('aria-busy', 'true');
+            retryBtn.disabled = true;
+            const result = await window.checkLmStudio();
+            retryBtn.setAttribute('aria-busy', 'false');
+            retryBtn.disabled = false;
+            if (result.status === 'ok') {
+                dlg.close();
+            } else {
+                document.getElementById('lmstudio-warning-detail').textContent = result.detail;
+            }
+        });
+
+        dismissBtn.addEventListener('click', () => dlg.close());
+
+        // Proactive check on page load
+        window.checkLmStudio().then(result => {
+            if (result.status !== 'ok') window.showLmStudioWarning(result.detail);
+        });
+    })();
+    </script>
     <script src="/static/js/marked.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
     <script src="/static/js/utils.js"></script>
