@@ -63,6 +63,31 @@ class FileTag(Base):
     )
 
 
+class WikiPage(Base):
+    __tablename__ = "wiki_pages"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    slug = Column(String, unique=True, nullable=False, index=True)
+    title = Column(String, nullable=False)
+    content = Column(Text, nullable=False, default="")
+    category = Column(String, default="general", index=True)  # entity, concept, source_summary, comparison, topic, index, log
+    summary = Column(Text)
+    source_files = Column(JSON, default=list)
+    backlinks = Column(JSON, default=list)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
+
+
+class WikiLog(Base):
+    __tablename__ = "wiki_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    operation = Column(String, nullable=False)  # ingest, query, lint, chat_growth
+    detail = Column(Text)
+    pages_affected = Column(JSON, default=list)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
 class Conversation(Base):
     __tablename__ = "conversations"
 

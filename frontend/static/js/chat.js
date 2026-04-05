@@ -853,6 +853,10 @@ async function handleSubmit(e) {
                         if (doneData.sources && doneData.sources.length) {
                             appendSources(assistantDiv, doneData.sources);
                         }
+                        // Wiki/RAG source indicator
+                        if (doneData.context_source && doneData.context_source !== 'none') {
+                            appendContextBadge(assistantDiv, doneData.context_source, doneData.wiki_pages_used);
+                        }
                     } catch {}
                 }
             }
@@ -936,6 +940,41 @@ function appendSources(messageDiv, sources) {
     });
 
     messageDiv.appendChild(sourcesEl);
+}
+
+function appendContextBadge(messageDiv, contextSource, wikiPagesUsed) {
+    const badgeEl = document.createElement('span');
+    badgeEl.className = `chat-source-badge ${contextSource}`;
+    const labels = { wiki: 'Wiki', rag: 'Documents', hybrid: 'Wiki + Docs' };
+    badgeEl.textContent = labels[contextSource] || contextSource;
+
+    // Insert badge into the message header area
+    const contentEl = messageDiv.querySelector('.message-content');
+    if (contentEl) {
+        contentEl.insertAdjacentElement('afterend', badgeEl);
+    }
+
+    // Show wiki page links if applicable
+    if (wikiPagesUsed && wikiPagesUsed.length > 0) {
+        const wikiLinksEl = document.createElement('div');
+        wikiLinksEl.className = 'chat-wiki-pages';
+        wikiLinksEl.innerHTML = 'Wiki: ' + wikiPagesUsed.map(p =>
+            `<a href="/wiki" data-slug="${escapeHtml(p.slug)}" title="${escapeHtml(p.title)}">${escapeHtml(p.title)}</a>`
+        ).join(', ');
+        wikiLinksEl.querySelectorAll('a').forEach(a => {
+            a.addEventListener('click', (e) => {
+                e.preventDefault();
+                // Navigate to wiki page
+                window.history.pushState({}, '', '/wiki');
+                window.dispatchEvent(new PopStateEvent('popstate'));
+                // After navigation, try to open the specific page
+                setTimeout(() => {
+                    document.dispatchEvent(new CustomEvent('wiki:navigate', { detail: { slug: a.dataset.slug } }));
+                }, 100);
+            });
+        });
+        messageDiv.appendChild(wikiLinksEl);
+    }
 }
 
 function scrollToBottom() {
