@@ -228,6 +228,46 @@ def get_stats(db: Session) -> dict:
     }
 
 
+def get_sync_status(db: Session) -> dict:
+    """Compute wiki-library sync status for the initialization UI."""
+    from backend.models.schemas import File
+    from backend.routers.processing import _processor
+
+    processed_count = db.query(File).filter(File.scan_status == "processed").count()
+    total_files = db.query(File).count()
+
+    # Last wiki ingest timestamp
+    last_ingest_log = (
+        db.query(WikiLog)
+        .filter(WikiLog.operation == "ingest")
+        .order_by(WikiLog.created_at.desc())
+        .first()
+    )
+    last_ingest_at = last_ingest_log.created_at if last_ingest_log else None
+
+    # Count files processed after last ingest
+    if last_ingest_at:
+        new_since_ingest = db.query(File).filter(
+            File.scan_status == "processed",
+            File.processed_at > last_ingest_at
+        ).count()
+    else:
+        new_since_ingest = processed_count
+
+    wiki_pages = db.query(WikiPage).count()
+
+    return {
+        "library_processed_files": processed_count,
+        "library_total_files": total_files,
+        "library_is_processing": _processor.is_running,
+        "wiki_total_pages": wiki_pages,
+        "wiki_ever_ingested": last_ingest_at is not None,
+        "last_ingest_at": last_ingest_at.isoformat() if last_ingest_at else None,
+        "files_since_last_ingest": new_since_ingest,
+        "wiki_ingest_running": _ingest_running,
+    }
+
+
 # ── Backlinks ─────────────────────────────────────────────────────────────
 
 def compute_backlinks(db: Session):

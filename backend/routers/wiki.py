@@ -229,5 +229,7 @@ async def get_log(limit: int = 50, db: Session = Depends(get_db)):
 
 @router.get("/wiki/stats")
 async def get_stats(db: Session = Depends(get_db)):
-    """Get wiki statistics."""
-    return wiki_service.get_stats(db)
+    """Get wiki statistics including library sync status."""
+    stats = wiki_service.get_stats(db)
+    sync = wiki_service.get_sync_status(db)
+    return {**stats, **sync}

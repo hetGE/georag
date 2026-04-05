@@ -1,4 +1,4 @@
-// Wiki page logic — page management, ingest, query, lint
+// Wiki page logic — page management, ingest, query, lint, library sync
 
 (function () {
     let wikiInitialized = false;
@@ -11,6 +11,8 @@
     let allTags = [];
     let selectedIngestTags = new Set();
     let ingestPollTimer = null;
+    let readinessPollTimer = null;
+    let lastSyncStats = null;
 
     // ── Initialization ───────────────────────────────────────────────────
 
@@ -21,7 +23,25 @@
             wikiInitialized = true;
         }
         loadPages();
+        updateWikiReadiness();
+        startReadinessPolling();
     });
+
+    // Stop readiness polling when navigating away from wiki
+    document.addEventListener('spa:pageshow', (e) => {
+        if (e.detail.page !== 'wiki') {
+            stopReadinessPolling();
+        }
+    });
+
+    // Listen for cross-tab library events
+    if (window.syncChannel) {
+        window.syncChannel.addEventListener('message', (e) => {
+            if (e.data.type === 'processing-started' || e.data.type === 'tags-changed') {
+                updateWikiReadiness();
+            }
+        });
+    }
 
     function initWiki() {
         // Category filters
@@ -69,6 +89,14 @@
         document.getElementById('wiki-query-close-btn').addEventListener('click', closeQueryResponse);
         document.getElementById('wiki-query-save-btn').addEventListener('click', saveQueryAsPage);
 
+        // Initialize Wiki button (ready state)
+        document.getElementById('wiki-init-btn')?.addEventListener('click', initializeWiki);
+
+        // Update Wiki button (populated state)
+        document.getElementById('wiki-update-btn')?.addEventListener('click', () => {
+            initializeWiki();
+        });
+
         // Ingest dialog
         document.querySelectorAll('.close-wiki-ingest').forEach(btn => {
             btn.addEventListener('click', () => document.getElementById('wiki-ingest-dialog').close());
@@ -96,6 +124,197 @@
         document.querySelectorAll('.close-wiki-log').forEach(btn => {
             btn.addEventListener('click', () => document.getElementById('wiki-log-dialog').close());
         });
+    }
+
+    // ── Wiki Readiness / State Machine ───────────────────────────────────
+
+    function startReadinessPolling() {
+        stopReadinessPolling();
+        readinessPollTimer = setInterval(updateWikiReadiness, 3000);
+    }
+
+    function stopReadinessPolling() {
+        if (readinessPollTimer) {
+            clearInterval(readinessPollTimer);
+            readinessPollTimer = null;
+        }
+    }
+
+    async function updateWikiReadiness() {
+        try {
+            const stats = await apiGet('/api/wiki/stats');
+            lastSyncStats = stats;
+            applyWikiState(stats);
+            updateIngestButtonBadge(stats);
+            updateActionButtonStates(stats);
+        } catch (e) {
+            // API not available yet
+        }
+    }
+
+    function applyWikiState(stats) {
+        // Hide all states first
+        document.querySelectorAll('#wiki-welcome .wiki-state').forEach(el => {
+            el.style.display = 'none';
+        });
+
+        // Only update welcome states if welcome is visible
+        // (don't override page view or query response)
+        const welcome = document.getElementById('wiki-welcome');
+        if (welcome.style.display === 'none') return;
+
+        if (stats.wiki_ingest_running) {
+            // Ingest is running — show progress
+            document.getElementById('wiki-state-ingesting').style.display = '';
+            pollInitProgress();
+        } else if (stats.library_total_files === 0) {
+            // No documents at all
+            document.getElementById('wiki-state-empty-library').style.display = '';
+        } else if (stats.library_is_processing) {
+            // Library is mid-processing
+            document.getElementById('wiki-state-processing').style.display = '';
+            updateProcessingProgress(stats);
+        } else if (stats.wiki_total_pages === 0 && !stats.wiki_ever_ingested) {
+            // Library done, wiki never initialized
+            document.getElementById('wiki-state-ready').style.display = '';
+            document.getElementById('wiki-ready-count').textContent =
+                stats.library_processed_files.toLocaleString();
+        } else {
+            // Wiki has pages — show populated state
+            document.getElementById('wiki-state-populated').style.display = '';
+            // Show update banner if new files since last ingest
+            const banner = document.getElementById('wiki-update-banner');
+            if (stats.files_since_last_ingest > 0) {
+                banner.style.display = '';
+                document.getElementById('wiki-update-count').textContent =
+                    stats.files_since_last_ingest.toLocaleString();
+            } else {
+                banner.style.display = 'none';
+            }
+        }
+    }
+
+    function updateProcessingProgress(stats) {
+        const bar = document.getElementById('wiki-lib-progress');
+        const text = document.getElementById('wiki-lib-progress-text');
+        if (stats.library_total_files > 0) {
+            const pct = Math.round((stats.library_processed_files / stats.library_total_files) * 100);
+            bar.value = pct;
+            text.textContent = `${stats.library_processed_files.toLocaleString()} / ${stats.library_total_files.toLocaleString()} files processed (${pct}%)`;
+        }
+    }
+
+    function updateIngestButtonBadge(stats) {
+        const ingestBtn = document.getElementById('wiki-ingest-btn');
+        if (stats.files_since_last_ingest > 0 && stats.wiki_ever_ingested) {
+            ingestBtn.innerHTML = `Ingest <span class="wiki-update-badge">${stats.files_since_last_ingest}</span>`;
+            ingestBtn.title = `${stats.files_since_last_ingest} new files since last ingest`;
+        } else {
+            ingestBtn.textContent = 'Ingest';
+            ingestBtn.title = 'Ingest from documents';
+        }
+    }
+
+    function updateActionButtonStates(stats) {
+        const isProcessing = stats.library_is_processing;
+        const ingestBtn = document.getElementById('wiki-ingest-btn');
+        const lintBtn = document.getElementById('wiki-lint-btn');
+
+        // Disable ingest during library processing
+        if (isProcessing) {
+            ingestBtn.disabled = true;
+            ingestBtn.title = 'Library is still processing documents...';
+            lintBtn.disabled = true;
+            lintBtn.title = 'Library is still processing documents...';
+        } else {
+            ingestBtn.disabled = false;
+            lintBtn.disabled = false;
+            lintBtn.title = 'Health check';
+        }
+    }
+
+    // ── Initialize Wiki (one-click ingest all) ───────────────────────────
+
+    async function initializeWiki() {
+        if (!await window.requireLmStudio()) return;
+
+        // Show ingesting state
+        document.querySelectorAll('#wiki-welcome .wiki-state').forEach(el => {
+            el.style.display = 'none';
+        });
+        document.getElementById('wiki-state-ingesting').style.display = '';
+        document.getElementById('wiki-init-progress-text').textContent = 'Starting wiki initialization...';
+        document.getElementById('wiki-init-progress-bar').value = 0;
+
+        try {
+            // Ingest all processed files (empty tag_names = all files)
+            await apiPost('/api/wiki/ingest', { tag_names: [], file_ids: [] });
+            pollInitProgress();
+        } catch (e) {
+            document.getElementById('wiki-init-progress-text').textContent =
+                'Error: ' + (e.message || 'Failed to start ingest');
+        }
+    }
+
+    function pollInitProgress() {
+        // Reuse the ingest poll timer mechanism but update inline progress
+        if (ingestPollTimer) clearInterval(ingestPollTimer);
+        ingestPollTimer = setInterval(async () => {
+            try {
+                const status = await apiGet('/api/wiki/ingest/status');
+
+                // Update inline progress in welcome area
+                const bar = document.getElementById('wiki-init-progress-bar');
+                const text = document.getElementById('wiki-init-progress-text');
+
+                if (bar && text) {
+                    if (status.total_sources > 0) {
+                        const pct = Math.round((status.processed_sources / status.total_sources) * 100);
+                        bar.value = pct;
+                        text.textContent = `${status.processed_sources}/${status.total_sources} sources processed. ` +
+                            `${status.pages_created} created, ${status.pages_updated} updated.` +
+                            (status.current_source ? ` Current: ${status.current_source}` : '');
+                    }
+                }
+
+                // Also update dialog progress if it's open
+                const dlgBar = document.getElementById('wiki-ingest-progress-bar');
+                const dlgText = document.getElementById('wiki-ingest-progress-text');
+                if (dlgBar && dlgText && status.total_sources > 0) {
+                    const pct = Math.round((status.processed_sources / status.total_sources) * 100);
+                    dlgBar.value = pct;
+                    dlgText.textContent = `${status.processed_sources}/${status.total_sources} sources processed. ` +
+                        `${status.pages_created} created, ${status.pages_updated} updated.` +
+                        (status.current_source ? ` Current: ${status.current_source}` : '');
+                }
+
+                if (!status.is_running) {
+                    clearInterval(ingestPollTimer);
+                    ingestPollTimer = null;
+
+                    // Update dialog button if open
+                    const dlgBtn = document.getElementById('wiki-ingest-start-btn');
+                    if (dlgBtn) {
+                        dlgBtn.disabled = false;
+                        dlgBtn.setAttribute('aria-busy', 'false');
+                        dlgBtn.textContent = 'Done!';
+                        if (dlgText) {
+                            dlgText.textContent = `Complete. ${status.pages_created} created, ${status.pages_updated} updated.`;
+                            if (status.errors && status.errors.length > 0) {
+                                dlgText.textContent += ` ${status.errors.length} errors.`;
+                            }
+                        }
+                        setTimeout(() => { dlgBtn.textContent = 'Start Ingest'; }, 2000);
+                    }
+
+                    // Refresh pages and readiness state
+                    loadPages();
+                    updateWikiReadiness();
+                }
+            } catch (e) {
+                console.error('Ingest poll error:', e);
+            }
+        }, 2000);
     }
 
     // ── Page List ────────────────────────────────────────────────────────
@@ -147,6 +366,7 @@
     async function updateStats() {
         try {
             const stats = await apiGet('/api/wiki/stats');
+            lastSyncStats = stats;
             const el = document.getElementById('wiki-stats');
             el.innerHTML = `<span class="secondary">${stats.total_pages} pages</span>`;
         } catch (e) { /* ignore */ }
@@ -359,6 +579,7 @@
             loadPage(currentPageSlug);
         } else {
             document.getElementById('wiki-welcome').style.display = '';
+            updateWikiReadiness();
         }
     }
 
@@ -380,7 +601,7 @@
         }
     }
 
-    // ── Ingest ───────────────────────────────────────────────────────────
+    // ── Ingest (Dialog) ──────────────────────────────────────────────────
 
     async function openIngestDialog() {
         if (!await window.requireLmStudio()) return;
@@ -431,51 +652,13 @@
             await apiPost('/api/wiki/ingest', {
                 tag_names: Array.from(selectedIngestTags),
             });
-            // Poll for status
-            pollIngestStatus();
+            // Poll for status (unified poller handles both inline + dialog)
+            pollInitProgress();
         } catch (e) {
             btn.disabled = false;
             btn.setAttribute('aria-busy', 'false');
             alert('Ingest failed: ' + e.message);
         }
-    }
-
-    function pollIngestStatus() {
-        if (ingestPollTimer) clearInterval(ingestPollTimer);
-        ingestPollTimer = setInterval(async () => {
-            try {
-                const status = await apiGet('/api/wiki/ingest/status');
-                const bar = document.getElementById('wiki-ingest-progress-bar');
-                const text = document.getElementById('wiki-ingest-progress-text');
-
-                if (status.total_sources > 0) {
-                    const pct = Math.round((status.processed_sources / status.total_sources) * 100);
-                    bar.value = pct;
-                    text.textContent = `${status.processed_sources}/${status.total_sources} sources processed. ` +
-                        `${status.pages_created} created, ${status.pages_updated} updated.` +
-                        (status.current_source ? ` Current: ${status.current_source}` : '');
-                }
-
-                if (!status.is_running) {
-                    clearInterval(ingestPollTimer);
-                    ingestPollTimer = null;
-                    const btn = document.getElementById('wiki-ingest-start-btn');
-                    btn.disabled = false;
-                    btn.setAttribute('aria-busy', 'false');
-                    btn.textContent = 'Done!';
-                    text.textContent = `Complete. ${status.pages_created} created, ${status.pages_updated} updated.`;
-                    if (status.errors && status.errors.length > 0) {
-                        text.textContent += ` ${status.errors.length} errors.`;
-                    }
-                    loadPages();
-                    setTimeout(() => {
-                        btn.textContent = 'Start Ingest';
-                    }, 2000);
-                }
-            } catch (e) {
-                console.error('Ingest poll error:', e);
-            }
-        }, 2000);
     }
 
     // ── Lint ──────────────────────────────────────────────────────────────
@@ -593,6 +776,7 @@
             document.getElementById('wiki-page-view').style.display = 'none';
             document.getElementById('wiki-welcome').style.display = '';
             loadPages();
+            updateWikiReadiness();
         } catch (e) {
             alert('Failed to delete page: ' + e.message);
         }
