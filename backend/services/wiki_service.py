@@ -13,6 +13,7 @@ from backend.config import (
     WIKI_COLLECTION_NAME, WIKI_INGEST_MAX_TOKENS,
     WIKI_INGEST_MAX_SOURCE_CHARS, WIKI_INGEST_MAX_INDEX_CHARS,
     WIKI_QUERY_MAX_CONTEXT_PAGES, WIKI_CHAT_THRESHOLD, WIKI_CHAT_TOP_K,
+    LLM_PARALLEL_SLOTS,
 )
 from backend.models.schemas import WikiPage, WikiLog
 from backend.models.database import SessionLocal
@@ -761,74 +762,93 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
 
         index_text = _get_index_text(db)
 
-        # Process one file per LLM call to stay within context limits
-        for i in range(0, len(files)):
+        # Process files in parallel batches (utilise LMStudio parallel slots)
+        for batch_start in range(0, len(files), LLM_PARALLEL_SLOTS):
             if _ingest_cancel:
                 break
 
-            f = files[i]
-            _ingest_status["current_source"] = f.filename
+            batch = files[batch_start:batch_start + LLM_PARALLEL_SLOTS]
+            batch_names = ", ".join(f.filename for f in batch)
+            _ingest_status["current_source"] = batch_names
+            logger.info("Wiki ingest batch: processing %d files [%s]",
+                        len(batch), batch_names)
 
-            # Determine which tag collections to search for this file's chunks
-            file_tag_names = tag_names if tag_names else [
-                ft.tag.name for ft in f.tags if ft.tag
-            ]
-            chunks = get_file_chunks_any_tag(f.relative_path, file_tag_names)
+            # Prepare source material and LLM messages for each file in the batch
+            capped_index = index_text[:WIKI_INGEST_MAX_INDEX_CHARS]
+            prompt = WIKI_INGEST_SYSTEM_PROMPT.format(index=capped_index)
 
-            source_material = ""
-            batch_source_files = []
-            if chunks:
-                pages_seen = []
-                for chunk in chunks:
-                    page = chunk.get("page", "")
-                    page_str = f" (page {page})" if page else ""
-                    addition = f"\n\n[Source: {f.filename}{page_str}]\n{chunk['text']}"
-                    if len(source_material) + len(addition) > WIKI_INGEST_MAX_SOURCE_CHARS:
-                        break
-                    source_material += addition
-                    if page and page not in pages_seen:
-                        pages_seen.append(page)
-                batch_source_files.append({
-                    "file_path": f.relative_path,
-                    "filename": f.filename,
-                    "pages": pages_seen,
-                })
-            else:
-                # Fallback to extracted text preview
-                text = f.extracted_text_preview or f.filename
-                source_material = f"\n\n[Source: {f.filename}]\n{text}"[:WIKI_INGEST_MAX_SOURCE_CHARS]
-                batch_source_files.append({
-                    "file_path": f.relative_path,
-                    "filename": f.filename,
-                    "pages": [],
-                })
+            prepared = []  # list of (file, messages, source_files)
+            for f in batch:
+                file_tag_names = tag_names if tag_names else [
+                    ft.tag.name for ft in f.tags if ft.tag
+                ]
+                chunks = get_file_chunks_any_tag(f.relative_path, file_tag_names)
 
-            # Call LLM
-            try:
-                capped_index = index_text[:WIKI_INGEST_MAX_INDEX_CHARS]
-                prompt = WIKI_INGEST_SYSTEM_PROMPT.format(index=capped_index)
+                source_material = ""
+                file_source_files = []
+                if chunks:
+                    pages_seen = []
+                    for chunk in chunks:
+                        page = chunk.get("page", "")
+                        page_str = f" (page {page})" if page else ""
+                        addition = f"\n\n[Source: {f.filename}{page_str}]\n{chunk['text']}"
+                        if len(source_material) + len(addition) > WIKI_INGEST_MAX_SOURCE_CHARS:
+                            break
+                        source_material += addition
+                        if page and page not in pages_seen:
+                            pages_seen.append(page)
+                    file_source_files.append({
+                        "file_path": f.relative_path,
+                        "filename": f.filename,
+                        "pages": pages_seen,
+                    })
+                else:
+                    text = f.extracted_text_preview or f.filename
+                    source_material = f"\n\n[Source: {f.filename}]\n{text}"[:WIKI_INGEST_MAX_SOURCE_CHARS]
+                    file_source_files.append({
+                        "file_path": f.relative_path,
+                        "filename": f.filename,
+                        "pages": [],
+                    })
+
                 messages = [
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": f"Process these source documents and create/update wiki pages:\n{source_material}"},
                 ]
+                prepared.append((f, messages, file_source_files))
 
-                response = await chat_completion(messages, max_tokens=WIKI_INGEST_MAX_TOKENS)
-                result = await _apply_llm_wiki_response(db, response, operation="ingest",
-                                                        source_files=batch_source_files)
-                _ingest_status["pages_created"] += result.get("created", 0)
-                _ingest_status["pages_updated"] += result.get("updated", 0)
+            # Fire LLM calls concurrently (one per parallel slot)
+            async def _llm_call(messages):
+                return await chat_completion(messages, max_tokens=WIKI_INGEST_MAX_TOKENS)
 
-                # Refresh index for next file
-                index_text = _get_index_text(db)
+            llm_results = await asyncio.gather(
+                *[_llm_call(msgs) for _, msgs, _ in prepared],
+                return_exceptions=True,
+            )
 
-            except Exception as e:
-                error_msg = f"File {already_done + i + 1}: {str(e)}"
-                _ingest_status["errors"].append(error_msg)
-                logger.warning("Wiki ingest batch error: %s", e)
+            # Apply results sequentially (SQLite write safety)
+            for (f, _, file_source_files), llm_response in zip(prepared, llm_results):
+                if isinstance(llm_response, Exception):
+                    error_msg = f"File '{f.filename}': {str(llm_response)}"
+                    _ingest_status["errors"].append(error_msg)
+                    logger.warning("Wiki ingest LLM error: %s", llm_response)
+                else:
+                    try:
+                        result = await _apply_llm_wiki_response(
+                            db, llm_response, operation="ingest",
+                            source_files=file_source_files)
+                        _ingest_status["pages_created"] += result.get("created", 0)
+                        _ingest_status["pages_updated"] += result.get("updated", 0)
+                    except Exception as e:
+                        error_msg = f"File '{f.filename}': {str(e)}"
+                        _ingest_status["errors"].append(error_msg)
+                        logger.warning("Wiki ingest apply error: %s", e)
 
-            # Track processed file for resume
-            _ingest_processed_file_ids.add(f.id)
-            _ingest_status["processed_sources"] = len(_ingest_processed_file_ids)
+                _ingest_processed_file_ids.add(f.id)
+                _ingest_status["processed_sources"] = len(_ingest_processed_file_ids)
+
+            # Refresh index once per batch for next batch's context
+            index_text = _get_index_text(db)
 
         # Rebuild index page and backlinks
         build_index_page(db)
