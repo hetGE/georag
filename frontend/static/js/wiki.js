@@ -170,7 +170,11 @@
     }
 
     // Expose for cross-component state updates (panel.js, chat.js)
-    window.updateWikiQueryState = updateQueryInputState;
+    window.updateWikiQueryState = function() {
+        updateQueryInputState();
+        // Also update action buttons (Rebuild/Health Check) since they are LLM-dependent
+        if (lastSyncStats) updateActionButtonStates(lastSyncStats);
+    };
 
     // ── Wiki Readiness / State Machine ───────────────────────────────────
 
@@ -263,20 +267,29 @@
     }
 
     function updateActionButtonStates(stats) {
-        const isProcessing = stats.library_is_processing;
         const ingestBtn = document.getElementById('wiki-ingest-btn');
         const lintBtn = document.getElementById('wiki-lint-btn');
 
-        // Disable ingest during library processing
-        if (isProcessing) {
+        const llmBusy = window.chatIsStreaming?.() || stats.library_is_processing || stats.wiki_ingest_running;
+
+        if (llmBusy) {
             ingestBtn.disabled = true;
-            ingestBtn.title = 'Library is still processing documents...';
             lintBtn.disabled = true;
-            lintBtn.title = 'Library is still processing documents...';
+            if (window.chatIsStreaming?.()) {
+                ingestBtn.title = 'Chat is streaming — wait for it to finish';
+                lintBtn.title = 'Chat is streaming — wait for it to finish';
+            } else if (stats.library_is_processing) {
+                ingestBtn.title = 'Library is still processing documents...';
+                lintBtn.title = 'Library is still processing documents...';
+            } else if (stats.wiki_ingest_running) {
+                ingestBtn.title = 'Wiki rebuild is already running...';
+                lintBtn.title = 'Wiki rebuild is already running...';
+            }
         } else {
             ingestBtn.disabled = false;
             lintBtn.disabled = false;
-            lintBtn.title = 'Health check';
+            ingestBtn.title = 'Rebuild wiki from tagged documents';
+            lintBtn.title = 'Run a health check on the wiki';
         }
     }
 

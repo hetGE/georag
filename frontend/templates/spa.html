@@ -341,7 +341,7 @@
                 <button aria-label="Close" rel="prev" class="close-wiki-ingest"></button>
                 <h3>Rebuild Wiki for Tag</h3>
             </header>
-            <p>Select tags to ingest documents from. The LLM will read processed documents and create/update wiki pages.</p>
+            <p>Select one or more tags below. The LLM will read all processed documents with those tags and create or update wiki pages — extracting key entities, concepts, and topics into interlinked knowledge pages.</p>
             <div id="wiki-ingest-tags" class="wiki-ingest-tags">
                 <!-- Populated by JS -->
             </div>
@@ -363,8 +363,9 @@
                 <button aria-label="Close" rel="prev" class="close-wiki-lint"></button>
                 <h3>Health Check</h3>
             </header>
+            <p class="secondary" style="margin-bottom:0.5rem;">The LLM analyses all wiki pages and identifies structural issues — orphan pages, missing cross-references, stale content, and knowledge gaps.</p>
             <div id="wiki-lint-content">
-                <p class="secondary">Running lint...</p>
+                <p class="secondary">Running health check...</p>
             </div>
             <footer>
                 <button class="outline close-wiki-lint">Close</button>
