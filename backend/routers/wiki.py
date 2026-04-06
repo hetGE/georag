@@ -233,3 +233,12 @@ async def get_stats(db: Session = Depends(get_db)):
     stats = wiki_service.get_stats(db)
     sync = wiki_service.get_sync_status(db)
     return {**stats, **sync}
+
+
+# ── Reset ─────────────────────────────────────────────────────────────────
+
+@router.delete("/wiki/reset")
+async def reset_wiki(db: Session = Depends(get_db)):
+    """Delete all wiki pages, logs, and vectors. Resets wiki to uninitialized state."""
+    wiki_service.reset_wiki(db)
+    return {"ok": True}

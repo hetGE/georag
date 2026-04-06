@@ -265,7 +265,30 @@ def get_sync_status(db: Session) -> dict:
         "last_ingest_at": last_ingest_at.isoformat() if last_ingest_at else None,
         "files_since_last_ingest": new_since_ingest,
         "wiki_ingest_running": _ingest_running,
+        "wiki_ingest_stopped": _ingest_status.get("was_stopped", False),
     }
+
+
+# ── Reset Wiki ─────────────────────────────────────────────────────────────
+
+def reset_wiki(db: Session):
+    """Delete all wiki pages, logs, vectors, and reset ingest state."""
+    # Delete all pages
+    db.query(WikiPage).delete()
+    db.query(WikiLog).delete()
+    db.commit()
+
+    # Clear wiki vector collection
+    try:
+        from backend.services.vector_store import _client
+        _client.delete_collection(WIKI_COLLECTION_NAME)
+    except Exception:
+        pass
+
+    # Clear ingest state
+    _reset_ingest_state()
+
+    logger.info("Wiki reset: all pages, logs, and vectors deleted")
 
 
 # ── Backlinks ─────────────────────────────────────────────────────────────
@@ -526,8 +549,13 @@ async def grow_wiki_from_chat(question: str, answer: str,
 # Ingest state
 _ingest_running = False
 _ingest_cancel = False
+_ingest_processed_file_ids: set = set()
+_ingest_last_tag_names: list = []
+_ingest_last_file_ids: list = []
 _ingest_status = {
     "is_running": False,
+    "phase": "idle",  # idle|ingesting|stopping|stopped|done
+    "was_stopped": False,
     "total_sources": 0,
     "processed_sources": 0,
     "pages_created": 0,
@@ -544,6 +572,23 @@ def get_ingest_status() -> dict:
 async def stop_ingest():
     global _ingest_cancel
     _ingest_cancel = True
+    _ingest_status["phase"] = "stopping"
+
+
+def _reset_ingest_state():
+    """Clear all ingest resume state."""
+    global _ingest_running, _ingest_cancel
+    _ingest_running = False
+    _ingest_cancel = False
+    _ingest_processed_file_ids.clear()
+    _ingest_last_tag_names.clear()
+    _ingest_last_file_ids.clear()
+    _ingest_status.update({
+        "is_running": False, "phase": "idle", "was_stopped": False,
+        "total_sources": 0, "processed_sources": 0,
+        "pages_created": 0, "pages_updated": 0,
+        "current_source": None, "errors": [],
+    })
 
 
 async def ingest_sources(db: Session, tag_names: list[str] = None, file_ids: list[int] = None):
@@ -553,16 +598,37 @@ async def ingest_sources(db: Session, tag_names: list[str] = None, file_ids: lis
     if _ingest_running:
         return {"error": "Ingest already running"}
 
+    tag_names = tag_names or []
+    file_ids = file_ids or []
+
+    # Detect resume vs fresh run
+    is_resume = (
+        _ingest_status["was_stopped"]
+        and tag_names == _ingest_last_tag_names
+        and file_ids == _ingest_last_file_ids
+    )
+
     _ingest_running = True
     _ingest_cancel = False
-    _ingest_status.update({
-        "is_running": True, "total_sources": 0, "processed_sources": 0,
-        "pages_created": 0, "pages_updated": 0, "current_source": None, "errors": [],
-    })
+    _ingest_status["is_running"] = True
+    _ingest_status["phase"] = "ingesting"
+    _ingest_status["was_stopped"] = False
+    _ingest_status["current_source"] = None
+
+    if not is_resume:
+        # Fresh run — clear resume state
+        _ingest_processed_file_ids.clear()
+        _ingest_status.update({
+            "total_sources": 0, "processed_sources": 0,
+            "pages_created": 0, "pages_updated": 0, "errors": [],
+        })
+
+    # Save params for potential resume
+    _ingest_last_tag_names[:] = tag_names
+    _ingest_last_file_ids[:] = file_ids
 
     try:
         from backend.models.schemas import File, FileTag, Tag
-        from backend.services.vector_store import query_tags as rag_query_tags
 
         # Gather source files
         query = db.query(File).filter(File.scan_status == "processed")
@@ -573,10 +639,16 @@ async def ingest_sources(db: Session, tag_names: list[str] = None, file_ids: lis
                 query.join(FileTag).join(Tag)
                 .filter(Tag.name.in_(tag_names))
             )
-        files = query.all()
+        all_files = query.all()
 
-        _ingest_status["total_sources"] = len(files)
-        logger.info("Wiki ingest: %d source files to process", len(files))
+        # Filter out already-processed files (for resume)
+        files = [f for f in all_files if f.id not in _ingest_processed_file_ids]
+
+        # Set total to reflect overall progress (already done + remaining)
+        already_done = len(_ingest_processed_file_ids)
+        _ingest_status["total_sources"] = already_done + len(files)
+        logger.info("Wiki ingest: %d source files to process (%d already done)",
+                     len(files), already_done)
 
         index_text = _get_index_text(db)
 
@@ -611,11 +683,13 @@ async def ingest_sources(db: Session, tag_names: list[str] = None, file_ids: lis
                 index_text = _get_index_text(db)
 
             except Exception as e:
-                error_msg = f"Batch {i // batch_size + 1}: {str(e)}"
+                error_msg = f"Batch {(already_done + i) // batch_size + 1}: {str(e)}"
                 _ingest_status["errors"].append(error_msg)
                 logger.warning("Wiki ingest batch error: %s", e)
 
-            _ingest_status["processed_sources"] += len(batch)
+            # Track processed files for resume
+            _ingest_processed_file_ids.update(f.id for f in batch)
+            _ingest_status["processed_sources"] = len(_ingest_processed_file_ids)
 
         # Rebuild index page and backlinks
         build_index_page(db)
@@ -630,10 +704,21 @@ async def ingest_sources(db: Session, tag_names: list[str] = None, file_ids: lis
         logger.error("Wiki ingest failed: %s", e)
         _ingest_status["errors"].append(str(e))
     finally:
+        was_cancelled = _ingest_cancel
         _ingest_running = False
         _ingest_cancel = False
         _ingest_status["is_running"] = False
         _ingest_status["current_source"] = None
+        if was_cancelled:
+            _ingest_status["phase"] = "stopped"
+            _ingest_status["was_stopped"] = True
+            # Keep _ingest_processed_file_ids for resume
+        else:
+            _ingest_status["phase"] = "done"
+            _ingest_status["was_stopped"] = False
+            _ingest_processed_file_ids.clear()
+            _ingest_last_tag_names.clear()
+            _ingest_last_file_ids.clear()
 
 
 async def query_wiki(db: Session, question: str, save_as_page: bool = False):

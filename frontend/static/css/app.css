@@ -2088,6 +2088,15 @@ body:has(.lp-panel.open) .lp-toggle {
     vertical-align: middle;
 }
 
+.wiki-reset-btn {
+    color: var(--pico-del-color) !important;
+    border-color: var(--pico-del-color) !important;
+}
+
+.wiki-reset-btn:hover {
+    background: rgba(var(--pico-del-color), 0.1) !important;
+}
+
 /* Wiki Page View */
 
 .wiki-page-header {

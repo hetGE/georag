@@ -228,6 +228,7 @@
                 <button id="wiki-ingest-btn" class="outline wiki-action-btn" title="Rebuild wiki from tagged documents">Rebuild Wiki for Tag</button>
                 <button id="wiki-lint-btn" class="outline wiki-action-btn" title="Health check">Health Check</button>
                 <button id="wiki-new-btn" class="outline wiki-action-btn" title="Create a manual wiki page">+ Manual Entry</button>
+                <button id="wiki-reset-btn" class="outline wiki-action-btn wiki-reset-btn" title="Delete all wiki pages and reset">Reset Wiki</button>
             </div>
             <div class="wiki-categories" id="wiki-categories">
                 <button class="wiki-cat-btn selected" data-category="">All</button>
@@ -281,6 +282,15 @@
                         <h2>Building Wiki...</h2>
                         <progress id="wiki-init-progress-bar" value="0" max="100"></progress>
                         <p id="wiki-init-progress-text" class="secondary">Starting ingest...</p>
+                        <button id="wiki-init-stop-btn" class="outline secondary" style="margin-top:0.5rem;">Stop</button>
+                    </div>
+
+                    <!-- State: Wiki Ingest Stopped / Paused -->
+                    <div id="wiki-state-stopped" class="wiki-state" style="display:none;">
+                        <h2>Wiki Build Paused</h2>
+                        <progress id="wiki-stopped-progress-bar" value="0" max="100"></progress>
+                        <p id="wiki-stopped-progress-text" class="secondary"></p>
+                        <button id="wiki-resume-btn" class="wiki-init-cta" style="margin-top:0.5rem;">Resume</button>
                     </div>
 
                     <!-- State: Wiki Populated -->
@@ -351,6 +361,7 @@
             </div>
             <footer>
                 <button class="secondary outline close-wiki-ingest">Cancel</button>
+                <button id="wiki-ingest-stop-btn" class="outline secondary" style="display:none;">Stop</button>
                 <button id="wiki-ingest-start-btn">Start Rebuild</button>
             </footer>
         </article>
@@ -427,6 +438,19 @@
             </div>
             <footer>
                 <button class="outline close-wiki-log">Close</button>
+            </footer>
+        </article>
+    </dialog>
+
+    <!-- Reset Wiki Confirm Dialog -->
+    <dialog id="wiki-reset-dialog">
+        <article>
+            <header>Reset Wiki?</header>
+            <p>This will <strong>permanently delete all wiki pages</strong>, clear the wiki search index, and reset the wiki to an uninitialized state.</p>
+            <p>This action cannot be undone.</p>
+            <footer>
+                <button class="secondary outline wiki-reset-cancel-btn">Cancel</button>
+                <button class="wiki-reset-confirm-btn" style="background:var(--pico-del-color);border-color:var(--pico-del-color);">Reset Wiki</button>
             </footer>
         </article>
     </dialog>
