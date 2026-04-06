@@ -115,6 +115,8 @@
         document.querySelectorAll('.close-wiki-lint').forEach(btn => {
             btn.addEventListener('click', () => document.getElementById('wiki-lint-dialog').close());
         });
+        document.getElementById('wiki-lint-apply-btn').addEventListener('click', applyLintFixes);
+        document.getElementById('wiki-lint-stop-btn').addEventListener('click', stopLintFix);
 
         // New page dialog
         document.querySelectorAll('.close-wiki-new-page').forEach(btn => {
@@ -946,12 +948,16 @@
 
     // ── Lint ──────────────────────────────────────────────────────────────
 
+    let lintFixPollTimer = null;
+
     async function runLint() {
         if (!await window.requireLmStudio()) return;
 
         const dlg = document.getElementById('wiki-lint-dialog');
         const content = document.getElementById('wiki-lint-content');
         content.innerHTML = '<p class="secondary">Running health check...</p>';
+        document.getElementById('wiki-lint-apply-btn').style.display = 'none';
+        document.getElementById('wiki-lint-stop-btn').style.display = 'none';
         dlg.showModal();
 
         try {
@@ -964,54 +970,201 @@
 
     function renderLintResults(result) {
         const content = document.getElementById('wiki-lint-content');
+        const applyBtn = document.getElementById('wiki-lint-apply-btn');
+        const stopBtn = document.getElementById('wiki-lint-stop-btn');
+        applyBtn.style.display = 'none';
+        stopBtn.style.display = 'none';
+
         if (result.error) {
             content.innerHTML = `<p class="secondary">${escapeHtml(result.error)}</p>`;
             return;
         }
 
         let html = '';
+        let hasItems = false;
+
+        // Select all toggle
+        html += '<label style="margin-bottom:0.5rem;display:inline-block"><input type="checkbox" id="wiki-lint-select-all"> <strong>Select All</strong></label>';
 
         if (result.orphan_pages && result.orphan_pages.length > 0) {
-            html += '<h4>Orphan Pages (no inbound links)</h4><ul>';
+            hasItems = true;
+            html += '<h4>Orphan Pages (no inbound links)</h4><ul style="list-style:none;padding-left:0">';
             result.orphan_pages.forEach(s => {
-                html += `<li><a href="#" class="wikilink" data-slug="${escapeHtml(s)}">${escapeHtml(s)}</a></li>`;
+                html += `<li><label><input type="checkbox" class="lint-fix-cb" data-fix-type="orphan_pages" data-value="${escapeHtml(s)}"> <a href="#" class="wikilink" data-slug="${escapeHtml(s)}">${escapeHtml(s)}</a></label></li>`;
             });
             html += '</ul>';
         }
 
         if (result.missing_pages && result.missing_pages.length > 0) {
-            html += '<h4>Missing Pages (referenced but don\'t exist)</h4><ul>';
-            result.missing_pages.forEach(t => { html += `<li>${escapeHtml(t)}</li>`; });
+            hasItems = true;
+            html += '<h4>Missing Pages (referenced but don\'t exist)</h4><ul style="list-style:none;padding-left:0">';
+            result.missing_pages.forEach(t => {
+                html += `<li><label><input type="checkbox" class="lint-fix-cb" data-fix-type="missing_pages" data-value="${escapeHtml(t)}"> ${escapeHtml(t)}</label></li>`;
+            });
             html += '</ul>';
         }
 
         if (result.stale_pages && result.stale_pages.length > 0) {
-            html += '<h4>Stale Pages (may need updating)</h4><ul>';
+            hasItems = true;
+            html += '<h4>Stale Pages (may need updating)</h4><ul style="list-style:none;padding-left:0">';
             result.stale_pages.forEach(s => {
-                html += `<li><a href="#" class="wikilink" data-slug="${escapeHtml(s)}">${escapeHtml(s)}</a></li>`;
+                html += `<li><label><input type="checkbox" class="lint-fix-cb" data-fix-type="stale_pages" data-value="${escapeHtml(s)}"> <a href="#" class="wikilink" data-slug="${escapeHtml(s)}">${escapeHtml(s)}</a></label></li>`;
             });
             html += '</ul>';
         }
 
         if (result.missing_crossrefs && result.missing_crossrefs.length > 0) {
-            html += '<h4>Missing Cross-References</h4><ul>';
+            hasItems = true;
+            html += '<h4>Missing Cross-References</h4><ul style="list-style:none;padding-left:0">';
             result.missing_crossrefs.forEach(r => {
-                html += `<li>${escapeHtml(r.from_slug)} should link to ${escapeHtml(r.should_link_to)}</li>`;
+                const val = escapeHtml(JSON.stringify({from_slug: r.from_slug, should_link_to: r.should_link_to}));
+                html += `<li><label><input type="checkbox" class="lint-fix-cb" data-fix-type="missing_crossrefs" data-value="${val}"> ${escapeHtml(r.from_slug)} &rarr; ${escapeHtml(r.should_link_to)}</label></li>`;
             });
             html += '</ul>';
         }
 
         if (result.suggested_pages && result.suggested_pages.length > 0) {
-            html += '<h4>Suggested New Pages</h4><ul>';
-            result.suggested_pages.forEach(t => { html += `<li>${escapeHtml(t)}</li>`; });
+            hasItems = true;
+            html += '<h4>Suggested New Pages</h4><ul style="list-style:none;padding-left:0">';
+            result.suggested_pages.forEach(t => {
+                html += `<li><label><input type="checkbox" class="lint-fix-cb" data-fix-type="suggested_pages" data-value="${escapeHtml(t)}"> ${escapeHtml(t)}</label></li>`;
+            });
             html += '</ul>';
         }
 
-        if (!html) {
-            html = '<p class="secondary">Wiki looks healthy! No issues found.</p>';
+        if (!hasItems) {
+            content.innerHTML = '<p class="secondary">Wiki looks healthy! No issues found.</p>';
+            return;
         }
 
         content.innerHTML = html;
+
+        // Wire up select all toggle
+        const selectAll = document.getElementById('wiki-lint-select-all');
+        selectAll.addEventListener('change', () => {
+            content.querySelectorAll('.lint-fix-cb').forEach(cb => { cb.checked = selectAll.checked; });
+            updateApplyBtnState();
+        });
+
+        // Wire up individual checkboxes to update button state
+        content.querySelectorAll('.lint-fix-cb').forEach(cb => {
+            cb.addEventListener('change', updateApplyBtnState);
+        });
+
+        // Show apply button (disabled initially)
+        applyBtn.style.display = '';
+        applyBtn.disabled = true;
+    }
+
+    function updateApplyBtnState() {
+        const checked = document.querySelectorAll('.lint-fix-cb:checked').length;
+        const applyBtn = document.getElementById('wiki-lint-apply-btn');
+        applyBtn.disabled = checked === 0;
+        applyBtn.textContent = checked > 0 ? `Apply Selected Fixes (${checked})` : 'Apply Selected Fixes';
+    }
+
+    async function applyLintFixes() {
+        const payload = {
+            orphan_pages: [],
+            missing_pages: [],
+            stale_pages: [],
+            missing_crossrefs: [],
+            suggested_pages: [],
+        };
+
+        document.querySelectorAll('.lint-fix-cb:checked').forEach(cb => {
+            const type = cb.dataset.fixType;
+            const val = cb.dataset.value;
+            if (type === 'missing_crossrefs') {
+                payload.missing_crossrefs.push(JSON.parse(val));
+            } else {
+                payload[type].push(val);
+            }
+        });
+
+        const total = Object.values(payload).reduce((s, a) => s + a.length, 0);
+        if (total === 0) return;
+
+        const content = document.getElementById('wiki-lint-content');
+        const applyBtn = document.getElementById('wiki-lint-apply-btn');
+        const stopBtn = document.getElementById('wiki-lint-stop-btn');
+
+        applyBtn.style.display = 'none';
+        stopBtn.style.display = '';
+
+        content.innerHTML =
+            '<p class="secondary">Applying fixes...</p>' +
+            '<progress id="wiki-lint-fix-bar" value="0" max="100"></progress>' +
+            '<p id="wiki-lint-fix-text" class="secondary" style="margin-top:0.5rem">Starting...</p>';
+
+        try {
+            await apiPost('/api/wiki/lint/apply', payload);
+            pollLintFixProgress();
+        } catch (e) {
+            content.innerHTML = `<p>Error: ${escapeHtml(e.message || 'Failed to start fixes')}</p>`;
+            stopBtn.style.display = 'none';
+        }
+    }
+
+    function pollLintFixProgress() {
+        if (lintFixPollTimer) clearInterval(lintFixPollTimer);
+        lintFixPollTimer = setInterval(async () => {
+            try {
+                const status = await apiGet('/api/wiki/lint/apply/status');
+                const bar = document.getElementById('wiki-lint-fix-bar');
+                const text = document.getElementById('wiki-lint-fix-text');
+                if (!bar || !text) return;
+
+                const pct = status.total_fixes > 0
+                    ? Math.round((status.processed_fixes / status.total_fixes) * 100) : 0;
+                bar.value = pct;
+
+                const progressMsg = status.total_fixes > 0
+                    ? `${status.processed_fixes}/${status.total_fixes} fixes processed. ` +
+                      `${status.pages_created} created, ${status.pages_updated} updated.` +
+                      (status.current_fix ? ` Current: ${status.current_fix}` : '')
+                    : 'Starting...';
+                text.textContent = progressMsg;
+
+                if (status.phase === 'done' || status.phase === 'stopped') {
+                    clearInterval(lintFixPollTimer);
+                    lintFixPollTimer = null;
+                    document.getElementById('wiki-lint-stop-btn').style.display = 'none';
+
+                    let summary = status.phase === 'stopped'
+                        ? '<p><strong>Fixes stopped.</strong></p>'
+                        : '<p><strong>Fixes applied successfully.</strong></p>';
+                    summary += `<p>Created ${status.pages_created} pages, updated ${status.pages_updated} pages.</p>`;
+                    if (status.errors && status.errors.length > 0) {
+                        summary += '<details><summary>Errors (' + status.errors.length + ')</summary><ul>';
+                        status.errors.forEach(e => { summary += `<li>${escapeHtml(e)}</li>`; });
+                        summary += '</ul></details>';
+                    }
+                    summary += '<button id="wiki-lint-rerun-btn" class="outline" style="margin-top:0.5rem">Re-run Health Check</button>';
+
+                    const content = document.getElementById('wiki-lint-content');
+                    content.innerHTML = summary;
+
+                    document.getElementById('wiki-lint-rerun-btn').addEventListener('click', () => {
+                        document.getElementById('wiki-lint-dialog').close();
+                        runLint();
+                    });
+
+                    loadPages();
+                    updateWikiReadiness();
+                }
+            } catch (e) {
+                console.error('Lint fix poll error:', e);
+            }
+        }, 1500);
+    }
+
+    async function stopLintFix() {
+        try {
+            await apiPost('/api/wiki/lint/apply/stop');
+        } catch (e) {
+            console.error('Failed to stop lint fix:', e);
+        }
     }
 
     // ── New Page ─────────────────────────────────────────────────────────

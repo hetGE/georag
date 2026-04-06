@@ -12,6 +12,7 @@ from backend.models.database import get_db
 from backend.models.pydantic_models import (
     WikiPageCreate, WikiPageUpdate, WikiPageResponse,
     WikiIngestRequest, WikiQueryRequest, WikiLogResponse,
+    WikiLintFixRequest,
 )
 from backend.services import wiki_service
 
@@ -220,6 +221,31 @@ async def query_wiki(request: WikiQueryRequest, db: Session = Depends(get_db)):
 async def lint_wiki(db: Session = Depends(get_db)):
     """Run wiki health check."""
     return await wiki_service.lint_wiki(db)
+
+
+@router.post("/wiki/lint/apply")
+async def apply_lint_fixes(request: WikiLintFixRequest):
+    """Apply selected health check fixes. Runs as background task."""
+    status = wiki_service.get_lint_fix_status()
+    if status["is_running"]:
+        raise HTTPException(status_code=409, detail="Lint fix already running")
+    if wiki_service._ingest_running:
+        raise HTTPException(status_code=409, detail="Wiki ingest is running — try again later")
+    asyncio.create_task(wiki_service.apply_lint_fixes(request.model_dump()))
+    return {"ok": True, "message": "Lint fix started"}
+
+
+@router.get("/wiki/lint/apply/status")
+async def lint_fix_status():
+    """Get current lint fix operation status."""
+    return wiki_service.get_lint_fix_status()
+
+
+@router.post("/wiki/lint/apply/stop")
+async def stop_lint_fix():
+    """Stop running lint fix."""
+    await wiki_service.stop_lint_fix()
+    return {"ok": True}
 
 
 # ── Log ───────────────────────────────────────────────────────────────────

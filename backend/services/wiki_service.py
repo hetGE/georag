@@ -87,6 +87,33 @@ Respond with ONLY valid JSON:
   "suggested_pages": ["titles for new pages that would fill knowledge gaps"]
 }}"""
 
+WIKI_LINT_FIX_PROMPT = """\
+You are a wiki maintainer for a geotechnical engineering knowledge base.
+Apply the requested fix to the wiki pages below.
+
+## Current Wiki Pages
+{wiki_context}
+
+## Fix Required
+{fix_description}
+
+## Rules
+- Use [[Wiki Links]] to cross-reference related pages.
+- Write clear, technical, well-structured markdown content.
+- When updating a page, return the FULL updated content (not just the diff).
+- Use categories: entity, concept, topic, source_summary, comparison.
+- Only modify pages explicitly requested. Do not create or update pages beyond the fix scope.
+
+Respond with ONLY valid JSON:
+{{
+  "pages_to_create": [
+    {{"title": "...", "category": "...", "content": "...", "summary": "one-line summary"}}
+  ],
+  "pages_to_update": [
+    {{"slug": "existing-page-slug", "content": "full updated content", "summary": "updated summary"}}
+  ]
+}}"""
+
 WIKI_CHAT_GROWTH_PROMPT = """\
 You are a wiki maintainer. A user asked a question and the answer was synthesized from raw source documents.
 Distill this Q&A exchange into wiki page creates/updates to capture the knowledge for future reference.
@@ -287,6 +314,7 @@ def get_sync_status(db: Session) -> dict:
         "files_since_last_ingest": new_since_ingest,
         "wiki_ingest_running": _ingest_running,
         "wiki_ingest_stopped": _ingest_status.get("was_stopped", False),
+        "wiki_lint_fix_running": _lint_fix_running,
         "wiki_covered_files": covered_count,
         "wiki_pending_files": pending_count,
     }
@@ -622,6 +650,31 @@ def get_ingest_status() -> dict:
     return dict(_ingest_status)
 
 
+# Lint fix state (mirrors ingest state pattern)
+_lint_fix_running = False
+_lint_fix_cancel = False
+_lint_fix_status = {
+    "is_running": False,
+    "phase": "idle",  # idle|fixing|stopping|done
+    "total_fixes": 0,
+    "processed_fixes": 0,
+    "pages_created": 0,
+    "pages_updated": 0,
+    "current_fix": None,
+    "errors": [],
+}
+
+
+def get_lint_fix_status() -> dict:
+    return dict(_lint_fix_status)
+
+
+async def stop_lint_fix():
+    global _lint_fix_cancel
+    _lint_fix_cancel = True
+    _lint_fix_status["phase"] = "stopping"
+
+
 async def stop_ingest():
     global _ingest_cancel
     _ingest_cancel = True
@@ -650,6 +703,8 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
 
     if _ingest_running:
         return {"error": "Ingest already running"}
+    if _lint_fix_running:
+        return {"error": "Lint fix is running — try again later"}
 
     tag_names = tag_names or []
     file_ids = file_ids or []
@@ -888,6 +943,298 @@ async def lint_wiki(db: Session) -> dict:
 
     add_log_entry(db, "lint", f"Lint completed. Found issues in response.", [])
     return result
+
+
+async def apply_lint_fixes(fixes: dict):
+    """Apply selected health check fixes via LLM. Runs as a background task."""
+    global _lint_fix_running, _lint_fix_cancel
+
+    if _lint_fix_running:
+        return
+    if _ingest_running:
+        return
+
+    _lint_fix_running = True
+    _lint_fix_cancel = False
+
+    # Count total fix items
+    total = (
+        len(fixes.get("missing_crossrefs", []))
+        + len(fixes.get("missing_pages", []))
+        + len(fixes.get("suggested_pages", []))
+        + len(fixes.get("orphan_pages", []))
+        + len(fixes.get("stale_pages", []))
+    )
+
+    _lint_fix_status.update({
+        "is_running": True,
+        "phase": "fixing",
+        "total_fixes": total,
+        "processed_fixes": 0,
+        "pages_created": 0,
+        "pages_updated": 0,
+        "current_fix": None,
+        "errors": [],
+    })
+
+    db = SessionLocal()
+    try:
+        # 1. Missing cross-references (LLM inserts wikilinks naturally)
+        for ref in fixes.get("missing_crossrefs", []):
+            if _lint_fix_cancel:
+                break
+            from_slug = ref.get("from_slug", "")
+            should_link_to = ref.get("should_link_to", "")
+            _lint_fix_status["current_fix"] = f"Cross-ref: {from_slug} → {should_link_to}"
+            try:
+                page = get_page(db, from_slug)
+                if not page:
+                    _lint_fix_status["errors"].append(f"Page '{from_slug}' not found, skipping crossref")
+                    _lint_fix_status["processed_fixes"] += 1
+                    continue
+
+                # Build context: full content of source page + summary of target
+                target_page = None
+                all_pages = get_all_pages(db)
+                for p in all_pages:
+                    if p.title.lower() == should_link_to.lower() or p.slug == should_link_to:
+                        target_page = p
+                        break
+                target_info = f"'{should_link_to}' (existing page: {target_page.summary})" if target_page else f"'{should_link_to}'"
+
+                wiki_context = f"### {page.title} (slug: {page.slug})\n{page.content}"
+                fix_desc = (
+                    f"Insert a [[{should_link_to}]] wikilink into the page '{page.title}' (slug: {page.slug}) "
+                    f"at the most contextually appropriate location. The link target is {target_info}. "
+                    f"Return the full updated page content with the wikilink naturally integrated."
+                )
+
+                prompt = WIKI_LINT_FIX_PROMPT.format(wiki_context=wiki_context, fix_description=fix_desc)
+                response = await chat_completion(
+                    [{"role": "system", "content": prompt}],
+                    max_tokens=4096,
+                )
+                result = await _apply_llm_wiki_response(db, response, operation="lint_fix")
+                _lint_fix_status["pages_created"] += result.get("created", 0)
+                _lint_fix_status["pages_updated"] += result.get("updated", 0)
+            except Exception as e:
+                _lint_fix_status["errors"].append(f"Cross-ref {from_slug} → {should_link_to}: {e}")
+                logger.warning("Lint fix crossref error: %s", e)
+            _lint_fix_status["processed_fixes"] += 1
+
+        # 2. Missing pages (LLM creates pages referenced but not existing)
+        for title in fixes.get("missing_pages", []):
+            if _lint_fix_cancel:
+                break
+            _lint_fix_status["current_fix"] = f"Create missing: {title}"
+            try:
+                # Find pages that reference this title
+                all_pages = get_all_pages(db)
+                referencing = [p for p in all_pages if f"[[{title}]]" in p.content]
+                wiki_context = _get_index_text(db)
+                if referencing:
+                    wiki_context += "\n\n## Pages referencing this topic\n"
+                    for p in referencing[:5]:
+                        wiki_context += f"\n### {p.title} (slug: {p.slug})\n{p.content}\n"
+
+                fix_desc = (
+                    f"Create a new wiki page titled '{title}'. This page is referenced by existing pages "
+                    f"via [[{title}]] links but does not exist yet. Write comprehensive, technical content "
+                    f"based on the context from referencing pages."
+                )
+
+                prompt = WIKI_LINT_FIX_PROMPT.format(wiki_context=wiki_context, fix_description=fix_desc)
+                response = await chat_completion(
+                    [{"role": "system", "content": prompt}],
+                    max_tokens=4096,
+                )
+                result = await _apply_llm_wiki_response(db, response, operation="lint_fix")
+                _lint_fix_status["pages_created"] += result.get("created", 0)
+                _lint_fix_status["pages_updated"] += result.get("updated", 0)
+            except Exception as e:
+                _lint_fix_status["errors"].append(f"Missing page '{title}': {e}")
+                logger.warning("Lint fix missing page error: %s", e)
+            _lint_fix_status["processed_fixes"] += 1
+
+        # 3. Suggested pages (LLM creates new pages to fill knowledge gaps)
+        for title in fixes.get("suggested_pages", []):
+            if _lint_fix_cancel:
+                break
+            _lint_fix_status["current_fix"] = f"Create suggested: {title}"
+            try:
+                wiki_context = _get_index_text(db)
+                # Add summaries of related pages for context
+                all_pages = get_all_pages(db)
+                wiki_context += "\n\n## Existing page summaries\n"
+                for p in all_pages[:20]:
+                    if p.slug != "index":
+                        wiki_context += f"- **{p.title}**: {p.summary or 'no summary'}\n"
+
+                fix_desc = (
+                    f"Create a new wiki page titled '{title}' to fill a knowledge gap in the wiki. "
+                    f"Write comprehensive, technical content that complements existing pages. "
+                    f"Cross-reference related existing pages using [[Wiki Links]]."
+                )
+
+                prompt = WIKI_LINT_FIX_PROMPT.format(wiki_context=wiki_context, fix_description=fix_desc)
+                response = await chat_completion(
+                    [{"role": "system", "content": prompt}],
+                    max_tokens=4096,
+                )
+                result = await _apply_llm_wiki_response(db, response, operation="lint_fix")
+                _lint_fix_status["pages_created"] += result.get("created", 0)
+                _lint_fix_status["pages_updated"] += result.get("updated", 0)
+            except Exception as e:
+                _lint_fix_status["errors"].append(f"Suggested page '{title}': {e}")
+                logger.warning("Lint fix suggested page error: %s", e)
+            _lint_fix_status["processed_fixes"] += 1
+
+        # 4. Orphan pages (LLM adds links from related pages)
+        for orphan_slug in fixes.get("orphan_pages", []):
+            if _lint_fix_cancel:
+                break
+            _lint_fix_status["current_fix"] = f"Fix orphan: {orphan_slug}"
+            try:
+                orphan = get_page(db, orphan_slug)
+                if not orphan:
+                    _lint_fix_status["errors"].append(f"Orphan page '{orphan_slug}' not found")
+                    _lint_fix_status["processed_fixes"] += 1
+                    continue
+
+                # Build context: orphan page + summaries of all other pages
+                all_pages = get_all_pages(db)
+                wiki_context = f"### {orphan.title} (slug: {orphan.slug}, category: {orphan.category})\n"
+                wiki_context += f"Summary: {orphan.summary or 'none'}\n"
+                wiki_context += f"Content:\n{orphan.content}\n"
+                wiki_context += "\n## Other wiki pages\n"
+                for p in all_pages:
+                    if p.slug != orphan_slug and p.slug != "index":
+                        wiki_context += (
+                            f"\n### {p.title} (slug: {p.slug})\n"
+                            f"Summary: {p.summary or 'none'}\n"
+                            f"Content:\n{p.content}\n"
+                        )
+
+                fix_desc = (
+                    f"The page '{orphan.title}' (slug: {orphan.slug}) is an orphan — no other pages link to it. "
+                    f"Find the most relevant existing pages and update them to include [[{orphan.title}]] links "
+                    f"at contextually appropriate locations. Update 1-3 pages that are most topically related."
+                )
+
+                prompt = WIKI_LINT_FIX_PROMPT.format(wiki_context=wiki_context, fix_description=fix_desc)
+                response = await chat_completion(
+                    [{"role": "system", "content": prompt}],
+                    max_tokens=4096,
+                )
+                result = await _apply_llm_wiki_response(db, response, operation="lint_fix")
+                _lint_fix_status["pages_created"] += result.get("created", 0)
+                _lint_fix_status["pages_updated"] += result.get("updated", 0)
+            except Exception as e:
+                _lint_fix_status["errors"].append(f"Orphan '{orphan_slug}': {e}")
+                logger.warning("Lint fix orphan error: %s", e)
+            _lint_fix_status["processed_fixes"] += 1
+
+        # 5. Stale pages (LLM refreshes with wiki + source context)
+        for stale_slug in fixes.get("stale_pages", []):
+            if _lint_fix_cancel:
+                break
+            _lint_fix_status["current_fix"] = f"Refresh stale: {stale_slug}"
+            try:
+                page = get_page(db, stale_slug)
+                if not page:
+                    _lint_fix_status["errors"].append(f"Stale page '{stale_slug}' not found")
+                    _lint_fix_status["processed_fixes"] += 1
+                    continue
+
+                # Build context: page content + related pages via links/backlinks
+                linked_titles = _WIKILINK_RE.findall(page.content)
+                backlinks = page.backlinks or []
+                all_pages = get_all_pages(db)
+                related_slugs = set(backlinks)
+                for p in all_pages:
+                    if p.title in linked_titles:
+                        related_slugs.add(p.slug)
+
+                wiki_context = f"### Current page: {page.title} (slug: {page.slug}, category: {page.category})\n"
+                wiki_context += f"Summary: {page.summary or 'none'}\n"
+                wiki_context += f"Content:\n{page.content}\n"
+
+                if related_slugs:
+                    wiki_context += "\n## Related wiki pages\n"
+                    for p in all_pages:
+                        if p.slug in related_slugs and p.slug != stale_slug:
+                            wiki_context += f"\n### {p.title} (slug: {p.slug})\n{p.content}\n"
+
+                # Try to include original source material
+                source_material = ""
+                if page.source_files:
+                    from backend.models.schemas import File, FileTag, Tag
+                    for sf in page.source_files[:3]:
+                        file_path = sf.get("file_path", "")
+                        if not file_path:
+                            continue
+                        # Find file and its tags to look up chunks
+                        file_record = db.query(File).filter(File.relative_path == file_path).first()
+                        if not file_record:
+                            continue
+                        file_tag_names = [ft.tag.name for ft in file_record.tags if ft.tag]
+                        chunks = get_file_chunks_any_tag(file_path, file_tag_names)
+                        for chunk in chunks[:5]:
+                            chunk_page = chunk.get("page", "")
+                            page_str = f" (page {chunk_page})" if chunk_page else ""
+                            source_material += f"\n[Source: {sf.get('filename', file_path)}{page_str}]\n{chunk['text']}\n"
+                            if len(source_material) > 6000:
+                                break
+                        if len(source_material) > 6000:
+                            break
+
+                if source_material:
+                    wiki_context += f"\n## Original source material\n{source_material}"
+
+                fix_desc = (
+                    f"Refresh and improve the wiki page '{page.title}' (slug: {page.slug}). "
+                    f"The page has been flagged as potentially stale or needing updates. "
+                    f"Using the related wiki pages and original source material provided, "
+                    f"rewrite the page with improved, up-to-date content. "
+                    f"Maintain the same slug. Keep existing [[Wiki Links]] and add new ones where appropriate."
+                )
+
+                prompt = WIKI_LINT_FIX_PROMPT.format(wiki_context=wiki_context, fix_description=fix_desc)
+                response = await chat_completion(
+                    [{"role": "system", "content": prompt}],
+                    max_tokens=4096,
+                )
+                result = await _apply_llm_wiki_response(db, response, operation="lint_fix")
+                _lint_fix_status["pages_created"] += result.get("created", 0)
+                _lint_fix_status["pages_updated"] += result.get("updated", 0)
+            except Exception as e:
+                _lint_fix_status["errors"].append(f"Stale '{stale_slug}': {e}")
+                logger.warning("Lint fix stale page error: %s", e)
+            _lint_fix_status["processed_fixes"] += 1
+
+        # Final cleanup
+        compute_backlinks(db)
+        build_index_page(db)
+
+        add_log_entry(db, "lint_fix",
+                      f"Applied fixes. Created {_lint_fix_status['pages_created']}, "
+                      f"updated {_lint_fix_status['pages_updated']} pages.",
+                      [])
+
+    except Exception as e:
+        logger.error("Lint fix failed: %s", e)
+        _lint_fix_status["errors"].append(str(e))
+    finally:
+        db.close()
+        was_cancelled = _lint_fix_cancel
+        _lint_fix_running = False
+        _lint_fix_cancel = False
+        _lint_fix_status["is_running"] = False
+        _lint_fix_status["current_fix"] = None
+        if was_cancelled:
+            _lint_fix_status["phase"] = "stopped"
+        else:
+            _lint_fix_status["phase"] = "done"
 
 
 # ── Internal Helpers ──────────────────────────────────────────────────────
