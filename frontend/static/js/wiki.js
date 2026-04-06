@@ -292,10 +292,10 @@
     function updateIngestButtonBadge(stats) {
         const ingestBtn = document.getElementById('wiki-ingest-btn');
         if (stats.files_since_last_ingest > 0 && stats.wiki_ever_ingested) {
-            ingestBtn.innerHTML = `Rebuild Wiki for Tag <span class="wiki-update-badge">${stats.files_since_last_ingest}</span>`;
+            ingestBtn.innerHTML = `Rebuild for Tag <span class="wiki-update-badge">${stats.files_since_last_ingest}</span>`;
             ingestBtn.title = `${stats.files_since_last_ingest} new files since last ingest`;
         } else {
-            ingestBtn.textContent = 'Rebuild Wiki for Tag';
+            ingestBtn.textContent = 'Rebuild for Tag';
             ingestBtn.title = 'Rebuild wiki from tagged documents';
         }
     }
