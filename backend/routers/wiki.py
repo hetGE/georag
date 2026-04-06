@@ -177,6 +177,19 @@ async def stop_ingest():
     return {"ok": True}
 
 
+@router.post("/wiki/ingest/pending")
+async def start_pending_ingest(db: Session = Depends(get_db)):
+    """Start ingest for processed files not yet covered by any wiki page."""
+    status = wiki_service.get_ingest_status()
+    if status["is_running"]:
+        raise HTTPException(status_code=409, detail="Ingest already running")
+    pending_ids = wiki_service.get_pending_file_ids(db)
+    if not pending_ids:
+        return {"ok": True, "message": "No pending files", "count": 0}
+    asyncio.create_task(wiki_service.ingest_sources(file_ids=pending_ids))
+    return {"ok": True, "message": f"Ingest started for {len(pending_ids)} pending files", "count": len(pending_ids)}
+
+
 # ── Query ─────────────────────────────────────────────────────────────────
 
 @router.post("/wiki/query")

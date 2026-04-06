@@ -266,6 +266,17 @@ def get_sync_status(db: Session) -> dict:
 
     wiki_pages = db.query(WikiPage).count()
 
+    # Compute persistent coverage: which processed files appear in any wiki page's source_files
+    all_processed_files = db.query(File).filter(File.scan_status == "processed").all()
+    covered_paths = set()
+    for page in db.query(WikiPage).all():
+        for sf in (page.source_files or []):
+            path = sf.get("file_path", "") if isinstance(sf, dict) else str(sf)
+            if path:
+                covered_paths.add(path)
+    covered_count = sum(1 for f in all_processed_files if f.relative_path in covered_paths)
+    pending_count = processed_count - covered_count
+
     return {
         "library_processed_files": processed_count,
         "library_total_files": total_files,
@@ -276,7 +287,22 @@ def get_sync_status(db: Session) -> dict:
         "files_since_last_ingest": new_since_ingest,
         "wiki_ingest_running": _ingest_running,
         "wiki_ingest_stopped": _ingest_status.get("was_stopped", False),
+        "wiki_covered_files": covered_count,
+        "wiki_pending_files": pending_count,
     }
+
+
+def get_pending_file_ids(db: Session) -> list[int]:
+    """Return IDs of processed files not yet covered by any wiki page."""
+    from backend.models.schemas import File
+    all_processed = db.query(File).filter(File.scan_status == "processed").all()
+    covered_paths = set()
+    for page in db.query(WikiPage).all():
+        for sf in (page.source_files or []):
+            path = sf.get("file_path", "") if isinstance(sf, dict) else str(sf)
+            if path:
+                covered_paths.add(path)
+    return [f.id for f in all_processed if f.relative_path not in covered_paths]
 
 
 # ── Reset Wiki ─────────────────────────────────────────────────────────────

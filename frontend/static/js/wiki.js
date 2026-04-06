@@ -99,10 +99,11 @@
             initializeWiki();
         });
 
-        // Stop/Resume buttons
+        // Stop/Resume/Pending buttons
         document.getElementById('wiki-init-stop-btn')?.addEventListener('click', stopIngest);
         document.getElementById('wiki-ingest-stop-btn')?.addEventListener('click', stopIngest);
         document.getElementById('wiki-resume-btn')?.addEventListener('click', resumeIngest);
+        document.getElementById('wiki-process-pending-btn')?.addEventListener('click', processPendingFiles);
 
         // Ingest dialog
         document.querySelectorAll('.close-wiki-ingest').forEach(btn => {
@@ -262,6 +263,19 @@
             } else {
                 banner.style.display = 'none';
             }
+            // Show coverage stats if there are pending files
+            const coverageDiv = document.getElementById('wiki-coverage-stats');
+            if (coverageDiv) {
+                if (stats.wiki_pending_files > 0) {
+                    coverageDiv.style.display = '';
+                    document.getElementById('wiki-covered-count').textContent =
+                        (stats.wiki_covered_files ?? 0).toLocaleString();
+                    document.getElementById('wiki-pending-count').textContent =
+                        stats.wiki_pending_files.toLocaleString();
+                } else {
+                    coverageDiv.style.display = 'none';
+                }
+            }
         }
     }
 
@@ -305,6 +319,7 @@
         const lintBtn = document.getElementById('wiki-lint-btn');
         const newBtn = document.getElementById('wiki-new-btn');
         const resetBtn = document.getElementById('wiki-reset-btn');
+        const pendingBtn = document.getElementById('wiki-process-pending-btn');
 
         const llmBusy = window.chatIsStreaming?.() || stats.library_is_processing || stats.wiki_ingest_running;
 
@@ -313,6 +328,7 @@
             lintBtn.disabled = true;
             newBtn.disabled = true;
             resetBtn.disabled = true;
+            if (pendingBtn) pendingBtn.disabled = true;
             if (window.chatIsStreaming?.()) {
                 ingestBtn.title = 'Chat is streaming — wait for it to finish';
                 lintBtn.title = 'Chat is streaming — wait for it to finish';
@@ -334,6 +350,7 @@
             lintBtn.disabled = false;
             newBtn.disabled = false;
             resetBtn.disabled = false;
+            if (pendingBtn) pendingBtn.disabled = false;
             ingestBtn.title = 'Rebuild wiki from tagged documents';
             lintBtn.title = 'Run a health check on the wiki';
             newBtn.title = 'Create a manual wiki page';
@@ -395,6 +412,25 @@
         } catch (e) {
             document.getElementById('wiki-init-progress-text').textContent =
                 'Error: ' + (e.message || 'Failed to resume ingest');
+        }
+    }
+
+    async function processPendingFiles() {
+        if (!await window.requireLmStudio()) return;
+
+        document.querySelectorAll('#wiki-welcome .wiki-state').forEach(el => {
+            el.style.display = 'none';
+        });
+        document.getElementById('wiki-state-ingesting').style.display = '';
+        document.getElementById('wiki-init-progress-text').textContent = 'Starting ingest for pending files...';
+        document.getElementById('wiki-init-progress-bar').value = 0;
+
+        try {
+            await apiPost('/api/wiki/ingest/pending');
+            pollInitProgress();
+        } catch (e) {
+            document.getElementById('wiki-init-progress-text').textContent =
+                'Error: ' + (e.message || 'Failed to start ingest');
         }
     }
 
