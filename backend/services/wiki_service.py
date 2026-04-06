@@ -13,6 +13,7 @@ from backend.config import (
     WIKI_COLLECTION_NAME, WIKI_INGEST_MAX_TOKENS,
     WIKI_INGEST_MAX_SOURCE_CHARS, WIKI_INGEST_MAX_INDEX_CHARS,
     WIKI_QUERY_MAX_CONTEXT_PAGES, WIKI_CHAT_THRESHOLD, WIKI_CHAT_TOP_K,
+    LLM_PARALLEL_SLOTS,
 )
 from backend.models.schemas import WikiPage, WikiLog
 from backend.models.database import SessionLocal
@@ -85,6 +86,33 @@ Respond with ONLY valid JSON:
   "stale_pages": ["slugs that may need updating"],
   "missing_crossrefs": [{{"from_slug": "...", "should_link_to": "..."}}],
   "suggested_pages": ["titles for new pages that would fill knowledge gaps"]
+}}"""
+
+WIKI_LINT_FIX_PROMPT = """\
+You are a wiki maintainer for a geotechnical engineering knowledge base.
+Apply the requested fix to the wiki pages below.
+
+## Current Wiki Pages
+{wiki_context}
+
+## Fix Required
+{fix_description}
+
+## Rules
+- Use [[Wiki Links]] to cross-reference related pages.
+- Write clear, technical, well-structured markdown content.
+- When updating a page, return the FULL updated content (not just the diff).
+- Use categories: entity, concept, topic, source_summary, comparison.
+- Only modify pages explicitly requested. Do not create or update pages beyond the fix scope.
+
+Respond with ONLY valid JSON:
+{{
+  "pages_to_create": [
+    {{"title": "...", "category": "...", "content": "...", "summary": "one-line summary"}}
+  ],
+  "pages_to_update": [
+    {{"slug": "existing-page-slug", "content": "full updated content", "summary": "updated summary"}}
+  ]
 }}"""
 
 WIKI_CHAT_GROWTH_PROMPT = """\
@@ -287,6 +315,7 @@ def get_sync_status(db: Session) -> dict:
         "files_since_last_ingest": new_since_ingest,
         "wiki_ingest_running": _ingest_running,
         "wiki_ingest_stopped": _ingest_status.get("was_stopped", False),
+        "wiki_lint_fix_running": _lint_fix_running,
         "wiki_covered_files": covered_count,
         "wiki_pending_files": pending_count,
     }
@@ -622,6 +651,31 @@ def get_ingest_status() -> dict:
     return dict(_ingest_status)
 
 
+# Lint fix state (mirrors ingest state pattern)
+_lint_fix_running = False
+_lint_fix_cancel = False
+_lint_fix_status = {
+    "is_running": False,
+    "phase": "idle",  # idle|fixing|stopping|done
+    "total_fixes": 0,
+    "processed_fixes": 0,
+    "pages_created": 0,
+    "pages_updated": 0,
+    "current_fix": None,
+    "errors": [],
+}
+
+
+def get_lint_fix_status() -> dict:
+    return dict(_lint_fix_status)
+
+
+async def stop_lint_fix():
+    global _lint_fix_cancel
+    _lint_fix_cancel = True
+    _lint_fix_status["phase"] = "stopping"
+
+
 async def stop_ingest():
     global _ingest_cancel
     _ingest_cancel = True
@@ -650,31 +704,20 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
 
     if _ingest_running:
         return {"error": "Ingest already running"}
+    if _lint_fix_running:
+        return {"error": "Lint fix is running — try again later"}
 
     tag_names = tag_names or []
     file_ids = file_ids or []
 
-    # Detect resume vs fresh run
-    is_resume = (
-        _ingest_status["was_stopped"]
-        and tag_names == _ingest_last_tag_names
-        and file_ids == _ingest_last_file_ids
-    )
-
     _ingest_running = True
     _ingest_cancel = False
-    _ingest_status["is_running"] = True
-    _ingest_status["phase"] = "ingesting"
-    _ingest_status["was_stopped"] = False
-    _ingest_status["current_source"] = None
-
-    if not is_resume:
-        # Fresh run — clear resume state
-        _ingest_processed_file_ids.clear()
-        _ingest_status.update({
-            "total_sources": 0, "processed_sources": 0,
-            "pages_created": 0, "pages_updated": 0, "errors": [],
-        })
+    _ingest_processed_file_ids.clear()
+    _ingest_status.update({
+        "is_running": True, "phase": "ingesting", "was_stopped": False,
+        "current_source": None, "total_sources": 0, "processed_sources": 0,
+        "pages_created": 0, "pages_updated": 0, "errors": [],
+    })
 
     # Save params for potential resume
     _ingest_last_tag_names[:] = tag_names
@@ -695,85 +738,108 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
             )
         all_files = query.all()
 
-        # Filter out already-processed files (for resume)
-        files = [f for f in all_files if f.id not in _ingest_processed_file_ids]
+        # Skip files already covered by existing wiki pages (persistent resume)
+        covered_paths = set()
+        for page in db.query(WikiPage).all():
+            for sf in (page.source_files or []):
+                path = sf.get("file_path", "") if isinstance(sf, dict) else str(sf)
+                if path:
+                    covered_paths.add(path)
+        files = [f for f in all_files if f.relative_path not in covered_paths]
 
-        # Set total to reflect overall progress (already done + remaining)
-        already_done = len(_ingest_processed_file_ids)
-        _ingest_status["total_sources"] = already_done + len(files)
-        logger.info("Wiki ingest: %d source files to process (%d already done)",
-                     len(files), already_done)
+        _ingest_status["total_sources"] = len(files)
+        logger.info("Wiki ingest: %d files to process (%d already covered by wiki pages)",
+                     len(files), len(all_files) - len(files))
 
         index_text = _get_index_text(db)
 
-        # Process one file per LLM call to stay within context limits
-        for i in range(0, len(files)):
+        # Process files in parallel batches (utilise LMStudio parallel slots)
+        for batch_start in range(0, len(files), LLM_PARALLEL_SLOTS):
             if _ingest_cancel:
                 break
 
-            f = files[i]
-            _ingest_status["current_source"] = f.filename
+            batch = files[batch_start:batch_start + LLM_PARALLEL_SLOTS]
+            batch_names = ", ".join(f.filename for f in batch)
+            _ingest_status["current_source"] = batch_names
+            logger.info("Wiki ingest batch: processing %d files [%s]",
+                        len(batch), batch_names)
 
-            # Determine which tag collections to search for this file's chunks
-            file_tag_names = tag_names if tag_names else [
-                ft.tag.name for ft in f.tags if ft.tag
-            ]
-            chunks = get_file_chunks_any_tag(f.relative_path, file_tag_names)
+            # Prepare source material and LLM messages for each file in the batch
+            capped_index = index_text[:WIKI_INGEST_MAX_INDEX_CHARS]
+            prompt = WIKI_INGEST_SYSTEM_PROMPT.format(index=capped_index)
 
-            source_material = ""
-            batch_source_files = []
-            if chunks:
-                pages_seen = []
-                for chunk in chunks:
-                    page = chunk.get("page", "")
-                    page_str = f" (page {page})" if page else ""
-                    addition = f"\n\n[Source: {f.filename}{page_str}]\n{chunk['text']}"
-                    if len(source_material) + len(addition) > WIKI_INGEST_MAX_SOURCE_CHARS:
-                        break
-                    source_material += addition
-                    if page and page not in pages_seen:
-                        pages_seen.append(page)
-                batch_source_files.append({
-                    "file_path": f.relative_path,
-                    "filename": f.filename,
-                    "pages": pages_seen,
-                })
-            else:
-                # Fallback to extracted text preview
-                text = f.extracted_text_preview or f.filename
-                source_material = f"\n\n[Source: {f.filename}]\n{text}"[:WIKI_INGEST_MAX_SOURCE_CHARS]
-                batch_source_files.append({
-                    "file_path": f.relative_path,
-                    "filename": f.filename,
-                    "pages": [],
-                })
+            prepared = []  # list of (file, messages, source_files)
+            for f in batch:
+                file_tag_names = tag_names if tag_names else [
+                    ft.tag.name for ft in f.tags if ft.tag
+                ]
+                chunks = get_file_chunks_any_tag(f.relative_path, file_tag_names)
 
-            # Call LLM
-            try:
-                capped_index = index_text[:WIKI_INGEST_MAX_INDEX_CHARS]
-                prompt = WIKI_INGEST_SYSTEM_PROMPT.format(index=capped_index)
+                source_material = ""
+                file_source_files = []
+                if chunks:
+                    pages_seen = []
+                    for chunk in chunks:
+                        page = chunk.get("page", "")
+                        page_str = f" (page {page})" if page else ""
+                        addition = f"\n\n[Source: {f.filename}{page_str}]\n{chunk['text']}"
+                        if len(source_material) + len(addition) > WIKI_INGEST_MAX_SOURCE_CHARS:
+                            break
+                        source_material += addition
+                        if page and page not in pages_seen:
+                            pages_seen.append(page)
+                    file_source_files.append({
+                        "file_path": f.relative_path,
+                        "filename": f.filename,
+                        "pages": pages_seen,
+                    })
+                else:
+                    text = f.extracted_text_preview or f.filename
+                    source_material = f"\n\n[Source: {f.filename}]\n{text}"[:WIKI_INGEST_MAX_SOURCE_CHARS]
+                    file_source_files.append({
+                        "file_path": f.relative_path,
+                        "filename": f.filename,
+                        "pages": [],
+                    })
+
                 messages = [
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": f"Process these source documents and create/update wiki pages:\n{source_material}"},
                 ]
+                prepared.append((f, messages, file_source_files))
 
-                response = await chat_completion(messages, max_tokens=WIKI_INGEST_MAX_TOKENS)
-                result = await _apply_llm_wiki_response(db, response, operation="ingest",
-                                                        source_files=batch_source_files)
-                _ingest_status["pages_created"] += result.get("created", 0)
-                _ingest_status["pages_updated"] += result.get("updated", 0)
+            # Fire LLM calls concurrently (one per parallel slot)
+            async def _llm_call(messages):
+                return await chat_completion(messages, max_tokens=WIKI_INGEST_MAX_TOKENS)
 
-                # Refresh index for next file
-                index_text = _get_index_text(db)
+            llm_results = await asyncio.gather(
+                *[_llm_call(msgs) for _, msgs, _ in prepared],
+                return_exceptions=True,
+            )
 
-            except Exception as e:
-                error_msg = f"File {already_done + i + 1}: {str(e)}"
-                _ingest_status["errors"].append(error_msg)
-                logger.warning("Wiki ingest batch error: %s", e)
+            # Apply results sequentially (SQLite write safety)
+            for (f, _, file_source_files), llm_response in zip(prepared, llm_results):
+                if isinstance(llm_response, Exception):
+                    error_msg = f"File '{f.filename}': {str(llm_response)}"
+                    _ingest_status["errors"].append(error_msg)
+                    logger.warning("Wiki ingest LLM error: %s", llm_response)
+                else:
+                    try:
+                        result = await _apply_llm_wiki_response(
+                            db, llm_response, operation="ingest",
+                            source_files=file_source_files)
+                        _ingest_status["pages_created"] += result.get("created", 0)
+                        _ingest_status["pages_updated"] += result.get("updated", 0)
+                    except Exception as e:
+                        error_msg = f"File '{f.filename}': {str(e)}"
+                        _ingest_status["errors"].append(error_msg)
+                        logger.warning("Wiki ingest apply error: %s", e)
 
-            # Track processed file for resume
-            _ingest_processed_file_ids.add(f.id)
-            _ingest_status["processed_sources"] = len(_ingest_processed_file_ids)
+                _ingest_processed_file_ids.add(f.id)
+                _ingest_status["processed_sources"] = len(_ingest_processed_file_ids)
+
+            # Refresh index once per batch for next batch's context
+            index_text = _get_index_text(db)
 
         # Rebuild index page and backlinks
         build_index_page(db)
@@ -794,16 +860,8 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
         _ingest_cancel = False
         _ingest_status["is_running"] = False
         _ingest_status["current_source"] = None
-        if was_cancelled:
-            _ingest_status["phase"] = "stopped"
-            _ingest_status["was_stopped"] = True
-            # Keep _ingest_processed_file_ids for resume
-        else:
-            _ingest_status["phase"] = "done"
-            _ingest_status["was_stopped"] = False
-            _ingest_processed_file_ids.clear()
-            _ingest_last_tag_names.clear()
-            _ingest_last_file_ids.clear()
+        _ingest_status["phase"] = "stopped" if was_cancelled else "done"
+        _ingest_status["was_stopped"] = was_cancelled
 
 
 async def query_wiki(db: Session, question: str, save_as_page: bool = False):
@@ -888,6 +946,298 @@ async def lint_wiki(db: Session) -> dict:
 
     add_log_entry(db, "lint", f"Lint completed. Found issues in response.", [])
     return result
+
+
+async def apply_lint_fixes(fixes: dict):
+    """Apply selected health check fixes via LLM. Runs as a background task."""
+    global _lint_fix_running, _lint_fix_cancel
+
+    if _lint_fix_running:
+        return
+    if _ingest_running:
+        return
+
+    _lint_fix_running = True
+    _lint_fix_cancel = False
+
+    # Count total fix items
+    total = (
+        len(fixes.get("missing_crossrefs", []))
+        + len(fixes.get("missing_pages", []))
+        + len(fixes.get("suggested_pages", []))
+        + len(fixes.get("orphan_pages", []))
+        + len(fixes.get("stale_pages", []))
+    )
+
+    _lint_fix_status.update({
+        "is_running": True,
+        "phase": "fixing",
+        "total_fixes": total,
+        "processed_fixes": 0,
+        "pages_created": 0,
+        "pages_updated": 0,
+        "current_fix": None,
+        "errors": [],
+    })
+
+    db = SessionLocal()
+    try:
+        # 1. Missing cross-references (LLM inserts wikilinks naturally)
+        for ref in fixes.get("missing_crossrefs", []):
+            if _lint_fix_cancel:
+                break
+            from_slug = ref.get("from_slug", "")
+            should_link_to = ref.get("should_link_to", "")
+            _lint_fix_status["current_fix"] = f"Cross-ref: {from_slug} → {should_link_to}"
+            try:
+                page = get_page(db, from_slug)
+                if not page:
+                    _lint_fix_status["errors"].append(f"Page '{from_slug}' not found, skipping crossref")
+                    _lint_fix_status["processed_fixes"] += 1
+                    continue
+
+                # Build context: full content of source page + summary of target
+                target_page = None
+                all_pages = get_all_pages(db)
+                for p in all_pages:
+                    if p.title.lower() == should_link_to.lower() or p.slug == should_link_to:
+                        target_page = p
+                        break
+                target_info = f"'{should_link_to}' (existing page: {target_page.summary})" if target_page else f"'{should_link_to}'"
+
+                wiki_context = f"### {page.title} (slug: {page.slug})\n{page.content}"
+                fix_desc = (
+                    f"Insert a [[{should_link_to}]] wikilink into the page '{page.title}' (slug: {page.slug}) "
+                    f"at the most contextually appropriate location. The link target is {target_info}. "
+                    f"Return the full updated page content with the wikilink naturally integrated."
+                )
+
+                prompt = WIKI_LINT_FIX_PROMPT.format(wiki_context=wiki_context, fix_description=fix_desc)
+                response = await chat_completion(
+                    [{"role": "system", "content": prompt}],
+                    max_tokens=4096,
+                )
+                result = await _apply_llm_wiki_response(db, response, operation="lint_fix")
+                _lint_fix_status["pages_created"] += result.get("created", 0)
+                _lint_fix_status["pages_updated"] += result.get("updated", 0)
+            except Exception as e:
+                _lint_fix_status["errors"].append(f"Cross-ref {from_slug} → {should_link_to}: {e}")
+                logger.warning("Lint fix crossref error: %s", e)
+            _lint_fix_status["processed_fixes"] += 1
+
+        # 2. Missing pages (LLM creates pages referenced but not existing)
+        for title in fixes.get("missing_pages", []):
+            if _lint_fix_cancel:
+                break
+            _lint_fix_status["current_fix"] = f"Create missing: {title}"
+            try:
+                # Find pages that reference this title
+                all_pages = get_all_pages(db)
+                referencing = [p for p in all_pages if f"[[{title}]]" in p.content]
+                wiki_context = _get_index_text(db)
+                if referencing:
+                    wiki_context += "\n\n## Pages referencing this topic\n"
+                    for p in referencing[:5]:
+                        wiki_context += f"\n### {p.title} (slug: {p.slug})\n{p.content}\n"
+
+                fix_desc = (
+                    f"Create a new wiki page titled '{title}'. This page is referenced by existing pages "
+                    f"via [[{title}]] links but does not exist yet. Write comprehensive, technical content "
+                    f"based on the context from referencing pages."
+                )
+
+                prompt = WIKI_LINT_FIX_PROMPT.format(wiki_context=wiki_context, fix_description=fix_desc)
+                response = await chat_completion(
+                    [{"role": "system", "content": prompt}],
+                    max_tokens=4096,
+                )
+                result = await _apply_llm_wiki_response(db, response, operation="lint_fix")
+                _lint_fix_status["pages_created"] += result.get("created", 0)
+                _lint_fix_status["pages_updated"] += result.get("updated", 0)
+            except Exception as e:
+                _lint_fix_status["errors"].append(f"Missing page '{title}': {e}")
+                logger.warning("Lint fix missing page error: %s", e)
+            _lint_fix_status["processed_fixes"] += 1
+
+        # 3. Suggested pages (LLM creates new pages to fill knowledge gaps)
+        for title in fixes.get("suggested_pages", []):
+            if _lint_fix_cancel:
+                break
+            _lint_fix_status["current_fix"] = f"Create suggested: {title}"
+            try:
+                wiki_context = _get_index_text(db)
+                # Add summaries of related pages for context
+                all_pages = get_all_pages(db)
+                wiki_context += "\n\n## Existing page summaries\n"
+                for p in all_pages[:20]:
+                    if p.slug != "index":
+                        wiki_context += f"- **{p.title}**: {p.summary or 'no summary'}\n"
+
+                fix_desc = (
+                    f"Create a new wiki page titled '{title}' to fill a knowledge gap in the wiki. "
+                    f"Write comprehensive, technical content that complements existing pages. "
+                    f"Cross-reference related existing pages using [[Wiki Links]]."
+                )
+
+                prompt = WIKI_LINT_FIX_PROMPT.format(wiki_context=wiki_context, fix_description=fix_desc)
+                response = await chat_completion(
+                    [{"role": "system", "content": prompt}],
+                    max_tokens=4096,
+                )
+                result = await _apply_llm_wiki_response(db, response, operation="lint_fix")
+                _lint_fix_status["pages_created"] += result.get("created", 0)
+                _lint_fix_status["pages_updated"] += result.get("updated", 0)
+            except Exception as e:
+                _lint_fix_status["errors"].append(f"Suggested page '{title}': {e}")
+                logger.warning("Lint fix suggested page error: %s", e)
+            _lint_fix_status["processed_fixes"] += 1
+
+        # 4. Orphan pages (LLM adds links from related pages)
+        for orphan_slug in fixes.get("orphan_pages", []):
+            if _lint_fix_cancel:
+                break
+            _lint_fix_status["current_fix"] = f"Fix orphan: {orphan_slug}"
+            try:
+                orphan = get_page(db, orphan_slug)
+                if not orphan:
+                    _lint_fix_status["errors"].append(f"Orphan page '{orphan_slug}' not found")
+                    _lint_fix_status["processed_fixes"] += 1
+                    continue
+
+                # Build context: orphan page + summaries of all other pages
+                all_pages = get_all_pages(db)
+                wiki_context = f"### {orphan.title} (slug: {orphan.slug}, category: {orphan.category})\n"
+                wiki_context += f"Summary: {orphan.summary or 'none'}\n"
+                wiki_context += f"Content:\n{orphan.content}\n"
+                wiki_context += "\n## Other wiki pages\n"
+                for p in all_pages:
+                    if p.slug != orphan_slug and p.slug != "index":
+                        wiki_context += (
+                            f"\n### {p.title} (slug: {p.slug})\n"
+                            f"Summary: {p.summary or 'none'}\n"
+                            f"Content:\n{p.content}\n"
+                        )
+
+                fix_desc = (
+                    f"The page '{orphan.title}' (slug: {orphan.slug}) is an orphan — no other pages link to it. "
+                    f"Find the most relevant existing pages and update them to include [[{orphan.title}]] links "
+                    f"at contextually appropriate locations. Update 1-3 pages that are most topically related."
+                )
+
+                prompt = WIKI_LINT_FIX_PROMPT.format(wiki_context=wiki_context, fix_description=fix_desc)
+                response = await chat_completion(
+                    [{"role": "system", "content": prompt}],
+                    max_tokens=4096,
+                )
+                result = await _apply_llm_wiki_response(db, response, operation="lint_fix")
+                _lint_fix_status["pages_created"] += result.get("created", 0)
+                _lint_fix_status["pages_updated"] += result.get("updated", 0)
+            except Exception as e:
+                _lint_fix_status["errors"].append(f"Orphan '{orphan_slug}': {e}")
+                logger.warning("Lint fix orphan error: %s", e)
+            _lint_fix_status["processed_fixes"] += 1
+
+        # 5. Stale pages (LLM refreshes with wiki + source context)
+        for stale_slug in fixes.get("stale_pages", []):
+            if _lint_fix_cancel:
+                break
+            _lint_fix_status["current_fix"] = f"Refresh stale: {stale_slug}"
+            try:
+                page = get_page(db, stale_slug)
+                if not page:
+                    _lint_fix_status["errors"].append(f"Stale page '{stale_slug}' not found")
+                    _lint_fix_status["processed_fixes"] += 1
+                    continue
+
+                # Build context: page content + related pages via links/backlinks
+                linked_titles = _WIKILINK_RE.findall(page.content)
+                backlinks = page.backlinks or []
+                all_pages = get_all_pages(db)
+                related_slugs = set(backlinks)
+                for p in all_pages:
+                    if p.title in linked_titles:
+                        related_slugs.add(p.slug)
+
+                wiki_context = f"### Current page: {page.title} (slug: {page.slug}, category: {page.category})\n"
+                wiki_context += f"Summary: {page.summary or 'none'}\n"
+                wiki_context += f"Content:\n{page.content}\n"
+
+                if related_slugs:
+                    wiki_context += "\n## Related wiki pages\n"
+                    for p in all_pages:
+                        if p.slug in related_slugs and p.slug != stale_slug:
+                            wiki_context += f"\n### {p.title} (slug: {p.slug})\n{p.content}\n"
+
+                # Try to include original source material
+                source_material = ""
+                if page.source_files:
+                    from backend.models.schemas import File, FileTag, Tag
+                    for sf in page.source_files[:3]:
+                        file_path = sf.get("file_path", "")
+                        if not file_path:
+                            continue
+                        # Find file and its tags to look up chunks
+                        file_record = db.query(File).filter(File.relative_path == file_path).first()
+                        if not file_record:
+                            continue
+                        file_tag_names = [ft.tag.name for ft in file_record.tags if ft.tag]
+                        chunks = get_file_chunks_any_tag(file_path, file_tag_names)
+                        for chunk in chunks[:5]:
+                            chunk_page = chunk.get("page", "")
+                            page_str = f" (page {chunk_page})" if chunk_page else ""
+                            source_material += f"\n[Source: {sf.get('filename', file_path)}{page_str}]\n{chunk['text']}\n"
+                            if len(source_material) > 6000:
+                                break
+                        if len(source_material) > 6000:
+                            break
+
+                if source_material:
+                    wiki_context += f"\n## Original source material\n{source_material}"
+
+                fix_desc = (
+                    f"Refresh and improve the wiki page '{page.title}' (slug: {page.slug}). "
+                    f"The page has been flagged as potentially stale or needing updates. "
+                    f"Using the related wiki pages and original source material provided, "
+                    f"rewrite the page with improved, up-to-date content. "
+                    f"Maintain the same slug. Keep existing [[Wiki Links]] and add new ones where appropriate."
+                )
+
+                prompt = WIKI_LINT_FIX_PROMPT.format(wiki_context=wiki_context, fix_description=fix_desc)
+                response = await chat_completion(
+                    [{"role": "system", "content": prompt}],
+                    max_tokens=4096,
+                )
+                result = await _apply_llm_wiki_response(db, response, operation="lint_fix")
+                _lint_fix_status["pages_created"] += result.get("created", 0)
+                _lint_fix_status["pages_updated"] += result.get("updated", 0)
+            except Exception as e:
+                _lint_fix_status["errors"].append(f"Stale '{stale_slug}': {e}")
+                logger.warning("Lint fix stale page error: %s", e)
+            _lint_fix_status["processed_fixes"] += 1
+
+        # Final cleanup
+        compute_backlinks(db)
+        build_index_page(db)
+
+        add_log_entry(db, "lint_fix",
+                      f"Applied fixes. Created {_lint_fix_status['pages_created']}, "
+                      f"updated {_lint_fix_status['pages_updated']} pages.",
+                      [])
+
+    except Exception as e:
+        logger.error("Lint fix failed: %s", e)
+        _lint_fix_status["errors"].append(str(e))
+    finally:
+        db.close()
+        was_cancelled = _lint_fix_cancel
+        _lint_fix_running = False
+        _lint_fix_cancel = False
+        _lint_fix_status["is_running"] = False
+        _lint_fix_status["current_fix"] = None
+        if was_cancelled:
+            _lint_fix_status["phase"] = "stopped"
+        else:
+            _lint_fix_status["phase"] = "done"
 
 
 # ── Internal Helpers ──────────────────────────────────────────────────────

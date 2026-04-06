@@ -136,6 +136,14 @@ class WikiQueryRequest(BaseModel):
     save_as_page: bool = False
 
 
+class WikiLintFixRequest(BaseModel):
+    orphan_pages: list[str] = []
+    missing_pages: list[str] = []
+    stale_pages: list[str] = []
+    missing_crossrefs: list[dict] = []
+    suggested_pages: list[str] = []
+
+
 class WikiLogResponse(BaseModel):
     id: int
     operation: str
