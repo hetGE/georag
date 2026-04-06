@@ -710,27 +710,14 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
     tag_names = tag_names or []
     file_ids = file_ids or []
 
-    # Detect resume vs fresh run
-    is_resume = (
-        _ingest_status["was_stopped"]
-        and tag_names == _ingest_last_tag_names
-        and file_ids == _ingest_last_file_ids
-    )
-
     _ingest_running = True
     _ingest_cancel = False
-    _ingest_status["is_running"] = True
-    _ingest_status["phase"] = "ingesting"
-    _ingest_status["was_stopped"] = False
-    _ingest_status["current_source"] = None
-
-    if not is_resume:
-        # Fresh run — clear resume state
-        _ingest_processed_file_ids.clear()
-        _ingest_status.update({
-            "total_sources": 0, "processed_sources": 0,
-            "pages_created": 0, "pages_updated": 0, "errors": [],
-        })
+    _ingest_processed_file_ids.clear()
+    _ingest_status.update({
+        "is_running": True, "phase": "ingesting", "was_stopped": False,
+        "current_source": None, "total_sources": 0, "processed_sources": 0,
+        "pages_created": 0, "pages_updated": 0, "errors": [],
+    })
 
     # Save params for potential resume
     _ingest_last_tag_names[:] = tag_names
@@ -751,14 +738,18 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
             )
         all_files = query.all()
 
-        # Filter out already-processed files (for resume)
-        files = [f for f in all_files if f.id not in _ingest_processed_file_ids]
+        # Skip files already covered by existing wiki pages (persistent resume)
+        covered_paths = set()
+        for page in db.query(WikiPage).all():
+            for sf in (page.source_files or []):
+                path = sf.get("file_path", "") if isinstance(sf, dict) else str(sf)
+                if path:
+                    covered_paths.add(path)
+        files = [f for f in all_files if f.relative_path not in covered_paths]
 
-        # Set total to reflect overall progress (already done + remaining)
-        already_done = len(_ingest_processed_file_ids)
-        _ingest_status["total_sources"] = already_done + len(files)
-        logger.info("Wiki ingest: %d source files to process (%d already done)",
-                     len(files), already_done)
+        _ingest_status["total_sources"] = len(files)
+        logger.info("Wiki ingest: %d files to process (%d already covered by wiki pages)",
+                     len(files), len(all_files) - len(files))
 
         index_text = _get_index_text(db)
 
@@ -869,16 +860,8 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
         _ingest_cancel = False
         _ingest_status["is_running"] = False
         _ingest_status["current_source"] = None
-        if was_cancelled:
-            _ingest_status["phase"] = "stopped"
-            _ingest_status["was_stopped"] = True
-            # Keep _ingest_processed_file_ids for resume
-        else:
-            _ingest_status["phase"] = "done"
-            _ingest_status["was_stopped"] = False
-            _ingest_processed_file_ids.clear()
-            _ingest_last_tag_names.clear()
-            _ingest_last_file_ids.clear()
+        _ingest_status["phase"] = "stopped" if was_cancelled else "done"
+        _ingest_status["was_stopped"] = was_cancelled
 
 
 async def query_wiki(db: Session, question: str, save_as_page: bool = False):
