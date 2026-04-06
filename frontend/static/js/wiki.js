@@ -254,11 +254,11 @@
     function updateIngestButtonBadge(stats) {
         const ingestBtn = document.getElementById('wiki-ingest-btn');
         if (stats.files_since_last_ingest > 0 && stats.wiki_ever_ingested) {
-            ingestBtn.innerHTML = `Ingest <span class="wiki-update-badge">${stats.files_since_last_ingest}</span>`;
+            ingestBtn.innerHTML = `Rebuild Wiki for Tag <span class="wiki-update-badge">${stats.files_since_last_ingest}</span>`;
             ingestBtn.title = `${stats.files_since_last_ingest} new files since last ingest`;
         } else {
-            ingestBtn.textContent = 'Ingest';
-            ingestBtn.title = 'Ingest from documents';
+            ingestBtn.textContent = 'Rebuild Wiki for Tag';
+            ingestBtn.title = 'Rebuild wiki from tagged documents';
         }
     }
 
@@ -351,7 +351,7 @@
                                 dlgText.textContent += ` ${status.errors.length} errors.`;
                             }
                         }
-                        setTimeout(() => { dlgBtn.textContent = 'Start Ingest'; }, 2000);
+                        setTimeout(() => { dlgBtn.textContent = 'Start Rebuild'; }, 2000);
                     }
 
                     // Refresh pages and readiness state
