@@ -216,10 +216,254 @@
         </dialog>
     </div>
 </div>
+<!-- Wiki Page -->
+<div id="page-wiki" class="spa-page" style="display:none">
+    <div class="wiki-layout">
+        <!-- Sidebar -->
+        <aside class="wiki-sidebar">
+            <div class="wiki-toolbar">
+                <input type="search" id="wiki-search-input" placeholder="Search wiki..." class="wiki-search-input">
+            </div>
+            <div class="wiki-actions">
+                <button id="wiki-ingest-btn" class="outline wiki-action-btn" title="Rebuild wiki from tagged documents">Rebuild for Tag</button>
+                <button id="wiki-lint-btn" class="outline wiki-action-btn" title="Health check">Health Check</button>
+                <button id="wiki-new-btn" class="outline wiki-action-btn" title="Create a manual wiki page">+ Manual Entry</button>
+                <button id="wiki-reset-btn" class="outline wiki-action-btn wiki-reset-btn" title="Delete all wiki pages and reset">Reset Wiki</button>
+            </div>
+            <div class="wiki-categories" id="wiki-categories">
+                <button class="wiki-cat-btn selected" data-category="">All</button>
+                <button class="wiki-cat-btn" data-category="entity">Entities</button>
+                <button class="wiki-cat-btn" data-category="concept">Concepts</button>
+                <button class="wiki-cat-btn" data-category="topic">Topics</button>
+                <button class="wiki-cat-btn" data-category="source_summary">Sources</button>
+                <button class="wiki-cat-btn" data-category="comparison">Comparisons</button>
+                <button class="wiki-cat-btn" data-category="index">Index</button>
+            </div>
+            <div class="wiki-stats" id="wiki-stats">
+                <span class="secondary">0 pages</span>
+            </div>
+            <div class="wiki-page-list" id="wiki-page-list">
+                <p class="secondary" style="padding:1rem;font-size:0.85rem;">No wiki pages yet. Use <strong>Rebuild for Tag</strong> to build from your documents, or <strong>+ Manual Entry</strong> to create manually.</p>
+            </div>
+        </aside>
+
+        <!-- Main Content -->
+        <div class="wiki-main">
+            <!-- Page Viewer -->
+            <div class="wiki-viewer" id="wiki-viewer">
+                <div class="wiki-welcome" id="wiki-welcome">
+                    <!-- State: Empty Library -->
+                    <div id="wiki-state-empty-library" class="wiki-state" style="display:none;">
+                        <h2>Wiki</h2>
+                        <p class="secondary">No documents in the library yet. Open the <strong>Library</strong> panel to scan and process your documents first.</p>
+                        <p class="secondary" style="font-size:0.82rem;">Once your documents are processed, you can initialize the wiki to build a knowledge base.</p>
+                    </div>
+
+                    <!-- State: Library Processing -->
+                    <div id="wiki-state-processing" class="wiki-state" style="display:none;">
+                        <h2>Wiki</h2>
+                        <p class="secondary">Your document library is being processed...</p>
+                        <progress id="wiki-lib-progress" value="0" max="100"></progress>
+                        <p id="wiki-lib-progress-text" class="secondary"></p>
+                        <button id="wiki-init-btn-disabled" class="wiki-init-cta" disabled>Initialize Wiki</button>
+                        <p class="secondary" style="font-size:0.82rem;">The wiki will be ready to initialize once document processing completes.</p>
+                    </div>
+
+                    <!-- State: Ready to Initialize -->
+                    <div id="wiki-state-ready" class="wiki-state" style="display:none;">
+                        <h2>Wiki</h2>
+                        <p class="secondary"><strong id="wiki-ready-count">0</strong> processed documents are ready to become your knowledge base.</p>
+                        <button id="wiki-init-btn" class="wiki-init-cta">Initialize Wiki</button>
+                        <p class="secondary" style="font-size:0.82rem;">The LLM will read your documents and build interlinked wiki pages with cross-references.</p>
+                    </div>
+
+                    <!-- State: Wiki Ingest In Progress -->
+                    <div id="wiki-state-ingesting" class="wiki-state" style="display:none;">
+                        <h2>Building Wiki...</h2>
+                        <progress id="wiki-init-progress-bar" value="0" max="100"></progress>
+                        <p id="wiki-init-progress-text" class="secondary">Starting ingest...</p>
+                        <button id="wiki-init-stop-btn" class="outline secondary" style="margin-top:0.5rem;">Stop</button>
+                    </div>
+
+                    <!-- State: Wiki Ingest Stopped / Paused -->
+                    <div id="wiki-state-stopped" class="wiki-state" style="display:none;">
+                        <h2>Wiki Build Paused</h2>
+                        <progress id="wiki-stopped-progress-bar" value="0" max="100"></progress>
+                        <p id="wiki-stopped-progress-text" class="secondary"></p>
+                        <button id="wiki-resume-btn" class="wiki-init-cta" style="margin-top:0.5rem;">Resume</button>
+                    </div>
+
+                    <!-- State: Wiki Populated -->
+                    <div id="wiki-state-populated" class="wiki-state" style="display:none;">
+                        <h2>Wiki</h2>
+                        <p class="secondary">Your LLM-maintained knowledge base. Select a page from the sidebar or ask a question below.</p>
+                        <div id="wiki-update-banner" class="wiki-update-banner" style="display:none;">
+                            <p><strong id="wiki-update-count">0</strong> new documents processed since last wiki ingest.</p>
+                            <button id="wiki-update-btn" class="outline">Update Wiki</button>
+                        </div>
+                        <div class="wiki-welcome-actions">
+                            <p class="secondary"><strong>Rebuild for Tag</strong> — Build wiki pages from your processed documents</p>
+                            <p class="secondary"><strong>Ask</strong> — Ask questions and get answers from compiled wiki knowledge</p>
+                            <p class="secondary"><strong>Health Check</strong> — Check for orphans, contradictions, and gaps</p>
+                        </div>
+                    </div>
+                </div>
+                <div class="wiki-page-view" id="wiki-page-view" style="display:none;">
+                    <div class="wiki-page-header">
+                        <h2 id="wiki-page-title"></h2>
+                        <div class="wiki-page-meta" id="wiki-page-meta"></div>
+                        <div class="wiki-page-actions">
+                            <button id="wiki-delete-btn" class="outline wiki-small-btn" title="Delete page">Delete</button>
+                        </div>
+                    </div>
+                    <div class="wiki-page-content" id="wiki-page-content"></div>
+                    <div class="wiki-page-backlinks" id="wiki-page-backlinks" style="display:none;">
+                        <h4>Backlinks</h4>
+                        <div id="wiki-backlinks-list"></div>
+                    </div>
+                    <div class="wiki-page-references" id="wiki-page-references" style="display:none;">
+                        <h4>References</h4>
+                        <div id="wiki-references-list"></div>
+                    </div>
+                </div>
+                <!-- Query Response Area -->
+                <div class="wiki-query-response" id="wiki-query-response" style="display:none;">
+                    <div class="wiki-query-header">
+                        <h3 id="wiki-query-question"></h3>
+                        <button id="wiki-query-save-btn" class="outline wiki-small-btn" title="Save as wiki page" style="display:none;">Save as Page</button>
+                        <button id="wiki-query-close-btn" class="outline wiki-small-btn">Close</button>
+                    </div>
+                    <div class="wiki-query-content" id="wiki-query-content"></div>
+                    <div class="wiki-query-sources" id="wiki-query-sources" style="display:none;"></div>
+                </div>
+            </div>
+
+            <!-- Query Bar -->
+            <div class="wiki-query-bar">
+                <form id="wiki-query-form" class="wiki-query-form">
+                    <textarea id="wiki-query-input" placeholder="Ask the wiki a question..." rows="1"></textarea>
+                    <button type="submit" id="wiki-query-btn">Ask</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Ingest Dialog -->
+    <dialog id="wiki-ingest-dialog">
+        <article>
+            <header>
+                <button aria-label="Close" rel="prev" class="close-wiki-ingest"></button>
+                <h3>Rebuild for Tag</h3>
+            </header>
+            <p>Select one or more tags below. The LLM will read all processed documents with those tags and create or update wiki pages — extracting key entities, concepts, and topics into interlinked knowledge pages.</p>
+            <div id="wiki-ingest-tags" class="wiki-ingest-tags">
+                <!-- Populated by JS -->
+            </div>
+            <div id="wiki-ingest-progress" style="display:none;">
+                <progress id="wiki-ingest-progress-bar" value="0" max="100"></progress>
+                <p id="wiki-ingest-progress-text" class="secondary"></p>
+            </div>
+            <footer>
+                <button class="secondary outline close-wiki-ingest">Cancel</button>
+                <button id="wiki-ingest-stop-btn" class="outline secondary" style="display:none;">Stop</button>
+                <button id="wiki-ingest-start-btn">Start Rebuild</button>
+            </footer>
+        </article>
+    </dialog>
+
+    <!-- Lint Results Dialog -->
+    <dialog id="wiki-lint-dialog">
+        <article>
+            <header>
+                <button aria-label="Close" rel="prev" class="close-wiki-lint"></button>
+                <h3>Health Check</h3>
+            </header>
+            <p class="secondary" style="margin-bottom:0.5rem;">The LLM analyses all wiki pages and identifies structural issues — orphan pages, missing cross-references, stale content, and knowledge gaps.</p>
+            <div id="wiki-lint-content">
+                <p class="secondary">Running health check...</p>
+            </div>
+            <footer>
+                <button class="outline close-wiki-lint">Close</button>
+            </footer>
+        </article>
+    </dialog>
+
+    <!-- New Page Dialog -->
+    <dialog id="wiki-new-page-dialog">
+        <article>
+            <header>
+                <button aria-label="Close" rel="prev" class="close-wiki-new-page"></button>
+                <h3>Create Wiki Page</h3>
+            </header>
+            <label>Title
+                <input type="text" id="wiki-new-title" placeholder="Page title">
+            </label>
+            <label>Category
+                <select id="wiki-new-category">
+                    <option value="general">General</option>
+                    <option value="entity">Entity</option>
+                    <option value="concept">Concept</option>
+                    <option value="topic">Topic</option>
+                    <option value="source_summary">Source Summary</option>
+                    <option value="comparison">Comparison</option>
+                </select>
+            </label>
+            <label>Content (Markdown)
+                <textarea id="wiki-new-content" rows="8" placeholder="Write markdown content..."></textarea>
+            </label>
+            <footer>
+                <button class="secondary outline close-wiki-new-page">Cancel</button>
+                <button id="wiki-new-create-btn">Create</button>
+            </footer>
+        </article>
+    </dialog>
+
+    <!-- Delete Confirm Dialog -->
+    <dialog id="wiki-delete-dialog">
+        <article>
+            <header>Delete Wiki Page?</header>
+            <p>This will permanently delete this wiki page and its vector embeddings.</p>
+            <footer>
+                <button class="secondary outline dialog-cancel">Cancel</button>
+                <button class="dialog-confirm wiki-delete-confirm-btn">Delete</button>
+            </footer>
+        </article>
+    </dialog>
+
+    <!-- Wiki Log Dialog -->
+    <dialog id="wiki-log-dialog">
+        <article style="max-width:700px;">
+            <header>
+                <button aria-label="Close" rel="prev" class="close-wiki-log"></button>
+                <h3>Wiki Log</h3>
+            </header>
+            <div id="wiki-log-content">
+                <p class="secondary">Loading...</p>
+            </div>
+            <footer>
+                <button class="outline close-wiki-log">Close</button>
+            </footer>
+        </article>
+    </dialog>
+
+    <!-- Reset Wiki Confirm Dialog -->
+    <dialog id="wiki-reset-dialog">
+        <article>
+            <header>Reset Wiki?</header>
+            <p>This will <strong>permanently delete all wiki pages</strong>, clear the wiki search index, and reset the wiki to an uninitialized state.</p>
+            <p>This action cannot be undone.</p>
+            <footer>
+                <button class="secondary outline wiki-reset-cancel-btn">Cancel</button>
+                <button class="wiki-reset-confirm-btn" style="background:var(--pico-del-color);border-color:var(--pico-del-color);">Reset Wiki</button>
+            </footer>
+        </article>
+    </dialog>
+</div>
 {% endblock %}
 
 {% block scripts %}
 <script src="/static/js/chat.js"></script>
 <script src="/static/js/documents.js"></script>
+<script src="/static/js/wiki.js"></script>
 <script src="/static/js/router.js"></script>
 {% endblock %}

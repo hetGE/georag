@@ -117,3 +117,37 @@ def get_collection_count(tag_name: str) -> int:
         return collection.count()
     except Exception:
         return 0
+
+
+def get_chunks_for_file(tag_name: str, file_path: str) -> list[dict]:
+    """Retrieve all stored chunks for a file from a tag's collection, sorted by chunk_index."""
+    try:
+        collection = _client.get_collection(_collection_name(tag_name))
+        results = collection.get(
+            where={"file_path": file_path},
+            include=["documents", "metadatas"],
+        )
+    except Exception:
+        return []
+
+    chunks = []
+    for idx in range(len(results["ids"])):
+        meta = results["metadatas"][idx] if results["metadatas"] else {}
+        chunks.append({
+            "text": results["documents"][idx],
+            "page": meta.get("page", ""),
+            "chunk_index": meta.get("chunk_index", 0),
+            "file_path": meta.get("file_path", file_path),
+            "filename": meta.get("filename", ""),
+        })
+    chunks.sort(key=lambda c: c["chunk_index"])
+    return chunks
+
+
+def get_file_chunks_any_tag(file_path: str, tag_names: list[str]) -> list[dict]:
+    """Try each tag collection until chunks are found for the given file_path."""
+    for tag_name in tag_names:
+        chunks = get_chunks_for_file(tag_name, file_path)
+        if chunks:
+            return chunks
+    return []

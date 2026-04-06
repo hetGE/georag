@@ -91,3 +91,57 @@ class ProcessingStatus(BaseModel):
     failed_files: int = 0
     current_file: Optional[str] = None
     errors: list[str] = []
+
+
+# Wiki models
+
+class WikiPageResponse(BaseModel):
+    id: int
+    slug: str
+    title: str
+    content: str
+    category: str
+    summary: Optional[str]
+    source_files: list
+    backlinks: list
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class WikiPageCreate(BaseModel):
+    title: str
+    content: str
+    category: str = "general"
+    summary: Optional[str] = None
+    source_files: list = []
+
+
+class WikiPageUpdate(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+    category: Optional[str] = None
+    summary: Optional[str] = None
+
+
+class WikiIngestRequest(BaseModel):
+    tag_names: list[str] = []
+    file_ids: list[int] = []
+
+
+class WikiQueryRequest(BaseModel):
+    question: str
+    save_as_page: bool = False
+
+
+class WikiLogResponse(BaseModel):
+    id: int
+    operation: str
+    detail: Optional[str]
+    pages_affected: list
+    created_at: datetime
+
+    class Config:
+        from_attributes = True

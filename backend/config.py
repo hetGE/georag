@@ -58,6 +58,13 @@ SUPPORTED_EXTENSIONS = {
     "mp4", "avi", "mov", "mkv",
 }
 
+# Wiki settings
+WIKI_COLLECTION_NAME = "wiki"
+WIKI_INGEST_MAX_TOKENS = 4096
+WIKI_QUERY_MAX_CONTEXT_PAGES = 5
+WIKI_CHAT_THRESHOLD = 0.7  # Min similarity score to use wiki instead of RAG
+WIKI_CHAT_TOP_K = 5  # Max wiki pages to retrieve for chat
+
 # OCR settings (requires system prerequisite: brew install tesseract)
 OCR_LANGUAGES = ["eng"]
 

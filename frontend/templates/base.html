@@ -27,6 +27,7 @@
         </ul>
         <ul>
             <li><a href="/" class="{% if active_page == 'chat' %}active{% endif %}">Chat</a></li>
+            <li><a href="/wiki" class="{% if active_page == 'wiki' %}active{% endif %}">Wiki</a></li>
             <li><a href="/documents" class="{% if active_page == 'documents' %}active{% endif %}">Documents</a></li>
         </ul>
     </nav>
@@ -78,6 +79,7 @@
             <p class="lmstudio-warning-info">The following features require LM Studio to be running with a model loaded:</p>
             <ul class="lmstudio-warning-list">
                 <li>Chat (RAG responses)</li>
+                <li>Wiki (Ingest, Query, Lint)</li>
                 <li>Semantic Search</li>
                 <li>Document Processing</li>
                 <li>Tag Exploration</li>

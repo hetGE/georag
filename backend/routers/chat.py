@@ -15,6 +15,7 @@ from backend.models.pydantic_models import ChatRequest
 from backend.services.llm_client import stream_chat_response
 from backend.services.vector_store import query_tags
 from backend.services.embedding_client import embed_text
+from backend.services import wiki_service
 from backend.config import MAX_CONTEXT_CHUNKS, CONVERSATION_HISTORY_TURNS
 
 router = APIRouter(tags=["chat"])
@@ -80,14 +81,47 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     db.add(user_msg)
     db.commit()
 
-    # RAG retrieval
+    # Two-tier retrieval: Wiki-first, then RAG fallback
     chunks = []
     sources = []
-    if request.tag_names:
+    wiki_pages_used = []
+    context_source = "none"  # "wiki", "rag", or "hybrid"
+    query_embedding = None
+
+    # Step 1: Embed query (needed for both wiki and RAG search)
+    try:
+        logger.info("Chat: embedding query (%d chars)", len(request.message))
+        t0 = time.time()
+        query_embedding = await embed_text(request.message)
+        logger.info("Chat: query embedded in %.1fs", time.time() - t0)
+    except Exception as e:
+        logger.warning("Chat: embedding failed: %s", e)
+
+    # Step 2: Wiki-first search
+    wiki_context_text = ""
+    if query_embedding:
         try:
-            logger.info("Chat RAG: embedding query (%d chars) for tags %s", len(request.message), request.tag_names)
+            wiki_result = await wiki_service.search_wiki_for_chat(query_embedding)
+            if wiki_result["pages"]:
+                wiki_pages_used = [
+                    {"slug": p["slug"], "title": p["title"], "score": p["score"]}
+                    for p in wiki_result["pages"]
+                ]
+                wiki_parts = []
+                for p in wiki_result["pages"]:
+                    wiki_parts.append(f"[Wiki: {p['title']}]\n{p['content']}")
+                wiki_context_text = "\n\n---\n\n".join(wiki_parts)
+                if wiki_result["sufficient"]:
+                    context_source = "wiki"
+                    logger.info("Chat: wiki sufficient — %d pages, best score %.3f",
+                                len(wiki_pages_used), wiki_pages_used[0]["score"])
+        except Exception as e:
+            logger.warning("Chat: wiki search failed (will fall back to RAG): %s", e)
+
+    # Step 3: RAG fallback (if wiki insufficient and tags are selected)
+    if context_source != "wiki" and request.tag_names and query_embedding:
+        try:
             t0 = time.time()
-            query_embedding = await embed_text(request.message)
             chunks = query_tags(query_embedding, request.tag_names, top_k=request.top_k_per_tag)
             max_ctx = request.max_context_chunks or MAX_CONTEXT_CHUNKS
             chunks = chunks[:max_ctx]
@@ -96,25 +130,47 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                  "page": c.get("page", ""), "score": c.get("score", 0)}
                 for c in chunks
             ]
-            logger.info("Chat RAG: retrieved %d chunks in %.1fs", len(chunks), time.time() - t0)
-            for s in sources[:5]:
-                logger.info("  Source: %s (score=%.3f)", s["filename"], s["score"])
+            context_source = "hybrid" if wiki_context_text else "rag"
+            logger.info("Chat RAG: retrieved %d chunks in %.1fs (mode: %s)",
+                        len(chunks), time.time() - t0, context_source)
         except Exception as e:
             logger.warning("Chat RAG: retrieval failed: %s", e)
-            pass  # Continue without RAG context if embedding fails
+            if wiki_context_text:
+                context_source = "wiki"
 
     # Build messages for LLM
-    system_prompt = (
-        "You are GeoRAG, a geotechnical engineering assistant. "
-        "Answer questions using the provided document context when available. "
-        "Cite sources using [Source N] notation. "
-        "If the context doesn't contain relevant information, say so and answer from general knowledge. "
-        "Be precise and technical."
-    )
-
-    context_text = build_context_prompt(chunks)
-    if context_text:
-        system_prompt += f"\n\n## Document Context\n\n{context_text}"
+    if context_source == "wiki":
+        system_prompt = (
+            "You are GeoRAG, a geotechnical engineering assistant. "
+            "The following wiki pages contain compiled knowledge relevant to the question. "
+            "Use them to answer. Cite wiki pages using [Wiki: Page Title] notation. "
+            "If the wiki pages don't fully cover the question, say so and answer from general knowledge. "
+            "Be precise and technical."
+            f"\n\n## Wiki Context\n\n{wiki_context_text}"
+        )
+    elif context_source == "hybrid":
+        rag_context = build_context_prompt(chunks)
+        system_prompt = (
+            "You are GeoRAG, a geotechnical engineering assistant. "
+            "You have two knowledge sources: compiled Wiki pages and raw Document chunks. "
+            "Prefer wiki knowledge when available — it's curated and reliable. "
+            "Supplement with document context where the wiki has gaps. "
+            "Cite wiki pages as [Wiki: Page Title] and documents as [Source N]. "
+            "Be precise and technical."
+            f"\n\n## Wiki Context\n\n{wiki_context_text}"
+            f"\n\n## Document Context\n\n{rag_context}"
+        )
+    else:
+        system_prompt = (
+            "You are GeoRAG, a geotechnical engineering assistant. "
+            "Answer questions using the provided document context when available. "
+            "Cite sources using [Source N] notation. "
+            "If the context doesn't contain relevant information, say so and answer from general knowledge. "
+            "Be precise and technical."
+        )
+        context_text = build_context_prompt(chunks)
+        if context_text:
+            system_prompt += f"\n\n## Document Context\n\n{context_text}"
 
     # Get conversation history
     history = (
@@ -179,12 +235,26 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 "data": json.dumps({
                     "conversation_id": conv_id,
                     "sources": sources,
+                    "context_source": context_source,
+                    "wiki_pages_used": wiki_pages_used,
                 }),
             }
             yield done_data
             # Push done to mirror listeners
             for q in _chat_listeners:
                 q.put_nowait(done_data)
+
+            # Wiki growth: after RAG/hybrid answers, grow the wiki in the background
+            if context_source in ("rag", "hybrid") and assistant_content.strip() and chunks:
+                try:
+                    asyncio.create_task(
+                        wiki_service.grow_wiki_from_chat(
+                            request.message, assistant_content, chunks, request.tag_names or []
+                        )
+                    )
+                    logger.info("Chat: wiki growth task started in background")
+                except Exception as e:
+                    logger.warning("Chat: wiki growth task failed to start: %s", e)
         finally:
             _chat_streaming = False
             _chat_conversation_id = None
