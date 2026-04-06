@@ -244,6 +244,7 @@ async function markSelectedAsNew() {
     }
     await apiPost('/api/documents/batch/mark-new', { file_ids: ids });
     selectedFileIds.clear();
+    loadStats();
     loadDocuments();
 }
 
@@ -255,6 +256,7 @@ async function markSelectedAsSkipped() {
     }
     await apiPost('/api/documents/batch/mark-skipped', { file_ids: ids });
     selectedFileIds.clear();
+    loadStats();
     loadDocuments();
 }
 
