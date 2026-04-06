@@ -212,6 +212,7 @@ const LibraryPanel = (() => {
             ${already > 0 ? `<p class="lp-stats">${already.toLocaleString()} already processed.</p>` : ''}
             ${status.total_tags_assigned > 0 ? `<p class="lp-stats">${status.total_tags_assigned.toLocaleString()} tags assigned.</p>` : ''}
             ${status.failed_files > 0 ? `<p class="lp-stats">${status.failed_files.toLocaleString()} can't be read (failed).</p>` : ''}
+            ${status.ocr_failed_pdfs > 0 ? `<p class="lp-stats">${status.ocr_failed_pdfs.toLocaleString()} PDF${status.ocr_failed_pdfs !== 1 ? 's' : ''} still unreadable after OCR, no extractable text.</p>` : ''}
             ${status.skipped_files > 0 ? `<p class="lp-stats">${status.skipped_files.toLocaleString()} skipped.</p>` : ''}
             <div class="lp-actions">
                 <button id="lp-process-btn"${busy ? ' disabled' : ''}>${label}</button>
@@ -268,6 +269,7 @@ const LibraryPanel = (() => {
             <p class="lp-stats">${status.processed_files.toLocaleString()} processed. No new files to process, press Scan to find new ones.</p>
             ${status.total_tags_assigned > 0 ? `<p class="lp-stats">${status.total_tags_assigned.toLocaleString()} tags assigned.</p>` : ''}
             ${status.failed_files > 0 ? `<p class="lp-stats">${status.failed_files.toLocaleString()} can't be read (failed).</p>` : ''}
+            ${status.ocr_failed_pdfs > 0 ? `<p class="lp-stats">${status.ocr_failed_pdfs.toLocaleString()} PDF${status.ocr_failed_pdfs !== 1 ? 's' : ''} still unreadable after OCR, no extractable text.</p>` : ''}
             ${status.skipped_files > 0 ? `<p class="lp-stats">${status.skipped_files.toLocaleString()} skipped.</p>` : ''}
             ${tagLine}
         </div>`;

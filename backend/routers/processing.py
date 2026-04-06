@@ -103,6 +103,11 @@ def onboarding_status(db: Session = Depends(get_db)):
         File.scan_status == "failed", File.extension == "pdf"
     ).count()
 
+    # Count PDFs that OCR was attempted but text still couldn't be extracted
+    ocr_failed_pdfs = db.query(File).filter(
+        File.scan_status == "ocr_failed", File.extension == "pdf"
+    ).count()
+
     if total_files == 0:
         phase = "not_started"
     elif _processor.is_running and _processor._stop_flag:
@@ -134,6 +139,7 @@ def onboarding_status(db: Session = Depends(get_db)):
         "processed_files": processed_files,
         "failed_files": failed_files,
         "failed_pdfs": failed_pdfs,
+        "ocr_failed_pdfs": ocr_failed_pdfs,
         "skipped_files": skipped_files,
         "is_processing": _processor.is_running,
         "dismissed": dismissed,

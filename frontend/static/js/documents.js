@@ -178,7 +178,7 @@ function renderFileTable(files) {
             <td>${f.extension || '-'}</td>
             <td>${formatBytes(f.size_bytes)}</td>
             <td title="${escapeHtml(f.parent_directory || '')}">${truncatePath(f.parent_directory)}</td>
-            <td><span class="status-badge status-${f.scan_status}">${f.scan_status}</span></td>
+            <td><span class="status-badge status-${f.scan_status === 'ocr_failed' ? 'failed' : f.scan_status}">${f.scan_status === 'ocr_failed' ? 'Failed' : f.scan_status}</span></td>
             <td class="tag-cell">${tags || '-'}</td>
             <td>${f.chunk_count || 0}</td>
             ${scoreCell}

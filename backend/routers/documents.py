@@ -66,7 +66,10 @@ async def list_documents(
         query = query.filter(~File.tags.any())
     elif tag:
         query = query.join(File.tags).join(FileTag.tag).filter(Tag.name == tag)
-    if status:
+    if status == "failed":
+        # "Failed" filter covers both regular failures and OCR-specific failures
+        query = query.filter(File.scan_status.in_(["failed", "ocr_failed"]))
+    elif status:
         query = query.filter(File.scan_status == status)
 
     if file_scores:
@@ -121,6 +124,9 @@ def document_stats(db: Session = Depends(get_db)):
         .group_by(File.scan_status)
         .all()
     )
+    # Fold ocr_failed into failed so the summary and filter stay consistent
+    if "ocr_failed" in by_status:
+        by_status["failed"] = by_status.get("failed", 0) + by_status.pop("ocr_failed")
     by_ext = dict(
         db.query(File.extension, func.count(File.id))
         .group_by(File.extension)
