@@ -29,6 +29,18 @@
         startReadinessPolling();
     });
 
+    // Re-clicking the wiki nav link while already on wiki returns to welcome screen
+    document.addEventListener('click', (e) => {
+        const link = e.target.closest('nav a[href="/wiki"]');
+        if (!link) return;
+        if (document.body.dataset.activePage !== 'wiki') return;
+        currentPageSlug = null;
+        document.getElementById('wiki-page-view').style.display = 'none';
+        document.getElementById('wiki-query-response').style.display = 'none';
+        document.getElementById('wiki-welcome').style.display = '';
+        updateWikiReadiness();
+    });
+
     // Stop readiness polling when navigating away from wiki
     document.addEventListener('spa:pageshow', (e) => {
         if (e.detail.page !== 'wiki') {
