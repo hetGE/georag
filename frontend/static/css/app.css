@@ -2210,6 +2210,34 @@ a.wikilink:hover {
     font-size: 0.8rem;
 }
 
+.wiki-page-references {
+    margin-top: 1rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid var(--pico-muted-border-color);
+}
+
+.wiki-page-references h4 {
+    font-size: 0.85rem;
+    color: var(--pico-muted-color);
+    margin-bottom: 0.5rem;
+}
+
+.wiki-ref-item {
+    padding: 0.15rem 0;
+    font-size: 0.8rem;
+    font-family: monospace;
+}
+
+.wiki-ref-link {
+    color: var(--pico-primary);
+    cursor: pointer;
+    text-decoration: underline;
+}
+
+.wiki-ref-link:hover {
+    color: var(--brand-color);
+}
+
 /* Wiki Query Bar */
 
 .wiki-query-bar {

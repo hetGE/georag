@@ -17,7 +17,7 @@ from backend.models.schemas import WikiPage, WikiLog
 from backend.models.database import SessionLocal
 from backend.services.chunker import chunk_text
 from backend.services.embedding_client import embed_text, embed_batch
-from backend.services.vector_store import get_or_create_collection, add_chunks
+from backend.services.vector_store import get_or_create_collection, add_chunks, get_file_chunks_any_tag
 from backend.services.llm_client import chat_completion, stream_chat_response
 
 logger = logging.getLogger(__name__)
@@ -29,11 +29,12 @@ _WIKILINK_RE = re.compile(r"\[\[(.+?)\]\]")
 
 WIKI_INGEST_SYSTEM_PROMPT = """\
 You are a wiki maintainer for a geotechnical engineering knowledge base.
-You are given source material extracted from engineering documents. Your job is to:
+You are given source material extracted from engineering documents. Each source chunk is annotated as [Source: filename (page N)]. Your job is to:
 1. Identify key entities, concepts, and topics in the source material.
 2. Create new wiki pages or update existing ones with the extracted knowledge.
 3. Use [[Wiki Links]] to cross-reference related pages.
 4. Write clear, technical, well-structured markdown content.
+5. Include inline citations using [Source: filename (page N)] notation when presenting specific data, values, or findings from the source material.
 
 ## Existing Wiki Pages
 {index}
@@ -43,15 +44,19 @@ You are given source material extracted from engineering documents. Your job is 
 - Use categories: entity, concept, topic, source_summary, comparison.
 - Cross-reference related pages using [[Page Title]] syntax.
 - Include specific data, values, and findings — not vague summaries.
+- Cite sources inline: when you include a specific fact, value, or finding, add [Source: filename (page N)] after it.
 - If a page already exists on a topic, update it rather than creating a duplicate.
+- Include a "source_files" array in each page entry listing which documents were referenced.
 
 Respond with ONLY valid JSON in this format:
 {{
   "pages_to_create": [
-    {{"title": "...", "category": "...", "content": "...", "summary": "one-line summary"}}
+    {{"title": "...", "category": "...", "content": "...", "summary": "one-line summary",
+      "source_files": [{{"filename": "...", "file_path": "...", "pages": ["1", "3"]}}]}}
   ],
   "pages_to_update": [
-    {{"slug": "existing-page-slug", "content": "full updated content", "summary": "updated summary"}}
+    {{"slug": "existing-page-slug", "content": "full updated content", "summary": "updated summary",
+      "source_files": [{{"filename": "...", "file_path": "...", "pages": ["1", "3"]}}]}}
   ]
 }}"""
 
@@ -102,14 +107,18 @@ Rules:
 - Prefer updating existing pages over creating new ones when the topic overlaps.
 - Use [[Wiki Links]] for cross-references.
 - Categories: entity, concept, topic, source_summary, comparison.
+- Cite sources inline: when you include a specific fact or finding, add [Source: filename (page N)] after it.
+- Include a "source_files" array in each page entry listing which documents were referenced.
 
 Respond with ONLY valid JSON:
 {{
   "pages_to_create": [
-    {{"title": "...", "category": "...", "content": "...", "summary": "one-line summary"}}
+    {{"title": "...", "category": "...", "content": "...", "summary": "one-line summary",
+      "source_files": [{{"filename": "...", "file_path": "...", "pages": ["1", "3"]}}]}}
   ],
   "pages_to_update": [
-    {{"slug": "existing-page-slug", "content": "full updated content", "summary": "updated summary"}}
+    {{"slug": "existing-page-slug", "content": "full updated content", "summary": "updated summary",
+      "source_files": [{{"filename": "...", "file_path": "...", "pages": ["1", "3"]}}]}}
   ],
   "skip_reason": "optional — if no wiki updates are warranted, explain why"
 }}"""
@@ -517,11 +526,27 @@ async def grow_wiki_from_chat(question: str, answer: str,
 
         index_text = _get_index_text(db)
 
-        # Format source chunks
+        # Format source chunks with page info
         source_text = ""
+        file_pages_map: dict[str, dict] = {}  # file_path -> {filename, pages}
         for i, chunk in enumerate(source_chunks[:8], 1):
             source = chunk.get("filename", chunk.get("file_path", "unknown"))
-            source_text += f"\n[Source {i}: {source}]\n{chunk['text']}\n"
+            page = chunk.get("page", "")
+            page_str = f" (page {page})" if page else ""
+            source_text += f"\n[Source {i}: {source}{page_str}]\n{chunk['text']}\n"
+
+            # Aggregate source files
+            fp = chunk.get("file_path", "")
+            if fp:
+                if fp not in file_pages_map:
+                    file_pages_map[fp] = {"filename": chunk.get("filename", ""), "pages": []}
+                if page and page not in file_pages_map[fp]["pages"]:
+                    file_pages_map[fp]["pages"].append(page)
+
+        chat_source_files = [
+            {"file_path": fp, "filename": info["filename"], "pages": info["pages"]}
+            for fp, info in file_pages_map.items()
+        ]
 
         prompt = WIKI_CHAT_GROWTH_PROMPT.format(
             question=question,
@@ -535,7 +560,8 @@ async def grow_wiki_from_chat(question: str, answer: str,
             max_tokens=WIKI_INGEST_MAX_TOKENS,
         )
 
-        await _apply_llm_wiki_response(db, response, operation="chat_growth")
+        await _apply_llm_wiki_response(db, response, operation="chat_growth",
+                                        source_files=chat_source_files)
         logger.info("Wiki growth complete in %.1fs", time.time() - t0)
 
     except Exception as e:
@@ -659,12 +685,40 @@ async def ingest_sources(db: Session, tag_names: list[str] = None, file_ids: lis
                 break
 
             batch = files[i:i + batch_size]
-            # Build source material from extracted text previews
+            # Build source material from chunks with page annotations
             source_material = ""
+            batch_source_files = []
             for f in batch:
                 _ingest_status["current_source"] = f.filename
-                text = f.extracted_text_preview or f.filename
-                source_material += f"\n\n### Source: {f.filename}\nPath: {f.relative_path}\n\n{text}"
+                # Determine which tag collections to search for this file's chunks
+                file_tag_names = tag_names if tag_names else [
+                    ft.tag.name for ft in f.tags if ft.tag
+                ]
+                chunks = get_file_chunks_any_tag(f.relative_path, file_tag_names)
+
+                if chunks:
+                    # Format with page annotations like the chat system
+                    pages_seen = []
+                    for chunk in chunks:
+                        page = chunk.get("page", "")
+                        page_str = f" (page {page})" if page else ""
+                        source_material += f"\n\n[Source: {f.filename}{page_str}]\n{chunk['text']}"
+                        if page and page not in pages_seen:
+                            pages_seen.append(page)
+                    batch_source_files.append({
+                        "file_path": f.relative_path,
+                        "filename": f.filename,
+                        "pages": pages_seen,
+                    })
+                else:
+                    # Fallback to extracted text preview
+                    text = f.extracted_text_preview or f.filename
+                    source_material += f"\n\n[Source: {f.filename}]\n{text}"
+                    batch_source_files.append({
+                        "file_path": f.relative_path,
+                        "filename": f.filename,
+                        "pages": [],
+                    })
 
             # Call LLM
             try:
@@ -675,7 +729,8 @@ async def ingest_sources(db: Session, tag_names: list[str] = None, file_ids: lis
                 ]
 
                 response = await chat_completion(messages, max_tokens=WIKI_INGEST_MAX_TOKENS)
-                result = await _apply_llm_wiki_response(db, response, operation="ingest")
+                result = await _apply_llm_wiki_response(db, response, operation="ingest",
+                                                        source_files=batch_source_files)
                 _ingest_status["pages_created"] += result.get("created", 0)
                 _ingest_status["pages_updated"] += result.get("updated", 0)
 
@@ -755,7 +810,9 @@ async def query_wiki(db: Session, question: str, save_as_page: bool = False):
     saved_slug = None
     if save_as_page and answer.strip():
         title = question[:80] + ("..." if len(question) > 80 else "")
-        page = create_page(db, title, answer, category="topic", summary=question[:200])
+        transitive_sources = _collect_transitive_sources(db, pages_used)
+        page = create_page(db, title, answer, category="topic",
+                           summary=question[:200], source_files=transitive_sources)
         await embed_wiki_page(page)
         saved_slug = page.slug
 
@@ -823,7 +880,35 @@ def _parse_json_response(text: str) -> dict:
     raise ValueError(f"No JSON found in response: {text[:200]}")
 
 
-async def _apply_llm_wiki_response(db: Session, response: str, operation: str) -> dict:
+def _merge_source_files(existing: list, new: list) -> list:
+    """Merge two source_files lists, deduplicating by file_path and merging pages."""
+    by_path: dict[str, dict] = {}
+    for sf in (existing or []) + (new or []):
+        if not isinstance(sf, dict):
+            continue
+        fp = sf.get("file_path", "")
+        if not fp:
+            continue
+        if fp not in by_path:
+            by_path[fp] = {"file_path": fp, "filename": sf.get("filename", ""), "pages": []}
+        for p in sf.get("pages", []):
+            if p and p not in by_path[fp]["pages"]:
+                by_path[fp]["pages"].append(p)
+    return list(by_path.values())
+
+
+def _collect_transitive_sources(db: Session, pages_used: list[dict]) -> list[dict]:
+    """Collect and merge source_files from wiki pages used in a query (transitive references)."""
+    all_sources: list[dict] = []
+    for pu in pages_used:
+        page = get_page(db, pu["slug"])
+        if page and page.source_files:
+            all_sources.extend(page.source_files)
+    return _merge_source_files([], all_sources)
+
+
+async def _apply_llm_wiki_response(db: Session, response: str, operation: str,
+                                    source_files: list[dict] = None) -> dict:
     """Parse LLM JSON response and create/update wiki pages."""
     try:
         data = _parse_json_response(response)
@@ -846,12 +931,15 @@ async def _apply_llm_wiki_response(db: Session, response: str, operation: str) -
             title = page_data.get("title", "").strip()
             if not title:
                 continue
+            # Use per-page source_files from LLM if present, else batch-level fallback
+            page_sources = page_data.get("source_files") or source_files or []
             page = create_page(
                 db,
                 title=title,
                 content=page_data.get("content", ""),
                 category=page_data.get("category", "general"),
                 summary=page_data.get("summary", ""),
+                source_files=page_sources,
             )
             await embed_wiki_page(page)
             affected_slugs.append(page.slug)
@@ -867,10 +955,18 @@ async def _apply_llm_wiki_response(db: Session, response: str, operation: str) -
             slug = page_data.get("slug", "").strip()
             if not slug:
                 continue
+            # Merge new sources with existing page sources
+            new_sources = page_data.get("source_files") or source_files or []
+            existing_page = get_page(db, slug)
+            merged_sources = _merge_source_files(
+                existing_page.source_files if existing_page else [],
+                new_sources,
+            )
             page = update_page(
                 db, slug,
                 content=page_data.get("content"),
                 summary=page_data.get("summary"),
+                source_files=merged_sources,
             )
             if page:
                 await remove_wiki_page_vectors(slug)

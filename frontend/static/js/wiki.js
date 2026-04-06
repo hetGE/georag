@@ -615,6 +615,33 @@
         } else {
             backlinksEl.style.display = 'none';
         }
+
+        // Source References
+        const refsEl = document.getElementById('wiki-page-references');
+        const refsList = document.getElementById('wiki-references-list');
+        if (page.source_files && page.source_files.length > 0) {
+            refsEl.style.display = '';
+            refsList.innerHTML = '';
+            page.source_files.forEach((src, idx) => {
+                const item = document.createElement('div');
+                item.className = 'wiki-ref-item';
+                const link = document.createElement('a');
+                link.className = 'wiki-ref-link';
+                const pages = src.pages && src.pages.length
+                    ? ` (p.${src.pages.join(', ')})`
+                    : '';
+                link.textContent = `[${idx + 1}] ${src.filename || src.file_path}${pages}`;
+                link.href = '#';
+                link.addEventListener('click', (e) => {
+                    e.preventDefault();
+                    apiPost('/api/documents/open-by-path', { file_path: src.file_path });
+                });
+                item.appendChild(link);
+                refsList.appendChild(item);
+            });
+        } else {
+            refsEl.style.display = 'none';
+        }
     }
 
     function renderWikiMarkdown(content) {

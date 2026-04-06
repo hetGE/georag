@@ -116,7 +116,7 @@ class WikiPageCreate(BaseModel):
     content: str
     category: str = "general"
     summary: Optional[str] = None
-    source_files: list[str] = []
+    source_files: list = []
 
 
 class WikiPageUpdate(BaseModel):
