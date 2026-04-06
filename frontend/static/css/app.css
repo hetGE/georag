@@ -1861,8 +1861,8 @@ body:has(.lp-panel.open) .lp-toggle {
 }
 
 .wiki-sidebar {
-    width: 280px;
-    min-width: 280px;
+    width: 560px;
+    min-width: 560px;
     border-right: 1px solid var(--pico-muted-border-color);
     display: flex;
     flex-direction: column;
