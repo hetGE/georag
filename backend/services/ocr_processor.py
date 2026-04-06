@@ -74,20 +74,74 @@ class OCRProcessor:
                         self._ocr_single_file, abs_path
                     )
                     if success:
-                        # Reset file so normal pipeline will re-process it
-                        file_rec.scan_status = "new"
-                        file_rec.extracted_text_preview = None
-                        file_rec.chunk_count = None
-                        db.commit()
-                        self.ocr_success += 1
-                        logger.info("OCR success: %s", file_rec.filename)
+                        # Verify the OCR'd PDF is now actually extractable before
+                        # resetting to "new" — without this check, files that already
+                        # had an OCR layer (PriorOcrFoundError) or whose OCR output
+                        # pdfplumber still can't read would loop forever.
+                        from backend.services.extractors.pdf_extractor import extract_pdf
+                        try:
+                            extracted = await asyncio.to_thread(extract_pdf, str(abs_path))
+                        except Exception:
+                            extracted = ""
+
+                        if extracted and extracted.strip():
+                            file_rec.scan_status = "new"
+                            file_rec.extracted_text_preview = None
+                            file_rec.chunk_count = None
+                            db.commit()
+                            self.ocr_success += 1
+                            logger.info("OCR success + text verified: %s", file_rec.filename)
+                        else:
+                            # All pages were skipped (existing text layer) but
+                            # pdfplumber still can't read anything — the text
+                            # layer is fake/corrupt.  Rasterise every page and
+                            # re-OCR from scratch.
+                            logger.info(
+                                "No extractable text after skip_text OCR, "
+                                "retrying with force_ocr: %s",
+                                file_rec.filename,
+                            )
+                            success2 = await asyncio.to_thread(
+                                self._ocr_single_file, abs_path, force_ocr=True
+                            )
+                            if success2:
+                                try:
+                                    extracted2 = await asyncio.to_thread(
+                                        extract_pdf, str(abs_path)
+                                    )
+                                except Exception:
+                                    extracted2 = ""
+                            else:
+                                extracted2 = ""
+
+                            if extracted2 and extracted2.strip():
+                                file_rec.scan_status = "new"
+                                file_rec.extracted_text_preview = None
+                                file_rec.chunk_count = None
+                                db.commit()
+                                self.ocr_success += 1
+                                logger.info(
+                                    "OCR force success + text verified: %s",
+                                    file_rec.filename,
+                                )
+                            else:
+                                # Even force OCR couldn't produce readable text
+                                file_rec.scan_status = "ocr_failed"
+                                db.commit()
+                                self.ocr_failed += 1
+                                msg = f"{file_rec.filename}: OCR applied but still no extractable text"
+                                self.errors.append(msg)
+                                logger.warning("OCR: %s", msg)
                     else:
                         self.ocr_failed += 1
                 except Exception as e:
                     self.ocr_failed += 1
-                    err_msg = f"{file_rec.filename}: {e}"
+                    detail = str(e) or type(e).__name__
+                    err_msg = f"{file_rec.filename}: {detail}"
                     self.errors.append(err_msg)
-                    logger.warning("OCR failed: %s", err_msg)
+                    file_rec.scan_status = "ocr_failed"
+                    db.commit()
+                    logger.warning("OCR failed: %s", err_msg, exc_info=True)
 
                 self.processed_files += 1
 
@@ -104,37 +158,93 @@ class OCRProcessor:
             self.is_running = False
             db.close()
 
-    def _ocr_single_file(self, abs_path):
-        """Synchronous OCR of a single PDF. Returns True on success."""
+    def _repair_pdf(self, src_path) -> str:
+        """Re-encode a PDF with pymupdf to fix corrupted content streams.
+
+        Returns the path to the repaired temp file.  Caller must delete it.
+        """
+        import fitz  # pymupdf
+
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as f:
+            repaired_path = f.name
+
+        doc = fitz.open(str(src_path))
+        # garbage=4  → merge duplicate streams
+        # deflate=True → re-compress all streams (fixes corrupt zlib data)
+        # clean=True  → sanitise content streams
+        doc.save(repaired_path, garbage=4, deflate=True, clean=True)
+        doc.close()
+        logger.info("Repaired PDF %s → %s", src_path.name, repaired_path)
+        return repaired_path
+
+    def _ocr_single_file(self, abs_path, force_ocr=False):
+        """Synchronous OCR of a single PDF. Returns True on success.
+
+        force_ocr=True rasterises every page and re-OCRs from scratch,
+        bypassing any existing (possibly fake/corrupt) text layer.
+        """
+        import os
         import ocrmypdf
 
         # OCR to a temp file, then move over the original (atomic-ish)
         with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
             tmp_path = tmp.name
 
-        try:
-            ocrmypdf.ocr(
-                abs_path,
-                tmp_path,
+        repaired_path = None
+
+        def _run_ocr(input_path, **extra):
+            kwargs = dict(
                 language="+".join(OCR_LANGUAGES),
-                skip_text=True,      # handle mixed PDFs (some pages already have text)
-                optimize=1,
+                optimize=0,       # disable image optimisation (requires ghostscript)
                 progress_bar=False,
             )
+            if force_ocr:
+                kwargs["force_ocr"] = True   # rasterise all pages, ignore existing text
+            else:
+                kwargs["skip_text"] = True   # handle mixed PDFs (some pages already have text)
+            kwargs.update(extra)
+            ocrmypdf.ocr(input_path, tmp_path, **kwargs)
+
+        try:
+            try:
+                _run_ocr(abs_path)
+            except ocrmypdf.exceptions.DigitalSignatureError:
+                # PDF is digitally signed — ocrmypdf refuses to modify it by default.
+                # invalidate_digital_signatures=True lets it proceed; the existing
+                # signature becomes invalid (which is acceptable here).
+                logger.info(
+                    "Digital signature detected in %s — retrying with signature invalidation",
+                    abs_path.name,
+                )
+                _run_ocr(abs_path, invalidate_digital_signatures=True)
+            except ocrmypdf.exceptions.InputFileError:
+                # PDF has corrupted internal structure (e.g. bad content stream).
+                # Re-encode with pymupdf to normalise streams, then retry.
+                logger.info(
+                    "Corrupt PDF detected in %s — attempting repair with pymupdf",
+                    abs_path.name,
+                )
+                repaired_path = self._repair_pdf(abs_path)
+                _run_ocr(repaired_path)
+
             shutil.move(tmp_path, abs_path)
             return True
         except ocrmypdf.exceptions.PriorOcrFoundError:
             # Already has OCR — treat as success, just reset status
             try:
-                import os
                 os.unlink(tmp_path)
             except OSError:
                 pass
             return True
         except Exception:
             try:
-                import os
                 os.unlink(tmp_path)
             except OSError:
                 pass
             raise
+        finally:
+            if repaired_path:
+                try:
+                    os.unlink(repaired_path)
+                except OSError:
+                    pass
