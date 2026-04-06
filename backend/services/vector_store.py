@@ -2,12 +2,16 @@
 import logging
 
 import chromadb
+from chromadb.config import Settings
 
 from backend.config import CHROMA_DIR, EMBEDDING_DIM, TOP_K_PER_TAG
 
 logger = logging.getLogger(__name__)
 
-_client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+_client = chromadb.PersistentClient(
+    path=str(CHROMA_DIR),
+    settings=Settings(anonymized_telemetry=False),
+)
 
 
 def _collection_name(tag_name: str) -> str:

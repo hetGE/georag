@@ -58,6 +58,8 @@ async def chat_completion(messages: list[dict], max_tokens: int = 1024) -> str:
         "temperature": 0.2,
         "max_tokens": max_tokens,
     })
+    if response.is_error:
+        logger.error("LLM request failed: %s — %s", response.status_code, response.text)
     response.raise_for_status()
     data = response.json()
     result = data["choices"][0]["message"]["content"]

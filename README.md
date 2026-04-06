@@ -158,7 +158,7 @@ This is small (~260 MB) and runs on any machine.
 
 | Setting | Set It To | Why |
 |---------|----------|-----|
-| Context Length | 4096 to 8192 | Gives enough room for document context + conversation |
+| Context Length | 50000+ | Required for Wiki ingest (each file can use up to ~36K tokens); 8192 is sufficient for chat-only use |
 | GPU Offload | Max layers | Much faster answers |
 | Temperature | 0.1 to 0.3 | Keeps answers factual and grounded |
 | Max Concurrent Predictions | 2 to 3 | Lets embedding and chat run at the same time |
@@ -332,7 +332,7 @@ LM Studio isn't running or the server isn't started. Open LM Studio, go to the D
 ### Chat gives empty or broken responses
 - Make sure a **chat model** is loaded in LM Studio (not just the embedding model)
 - The model name in `backend/config.py` must match what LM Studio shows
-- Try increasing the context length to 4096+
+- Try increasing the context length — 8192+ for chat, 50000+ if using Wiki ingest
 
 ### Processing fails on embeddings
 - Make sure the **nomic-embed-text-v1.5** model is loaded in LM Studio

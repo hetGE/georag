@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from backend.config import (
     WIKI_COLLECTION_NAME, WIKI_INGEST_MAX_TOKENS,
+    WIKI_INGEST_MAX_SOURCE_CHARS, WIKI_INGEST_MAX_INDEX_CHARS,
     WIKI_QUERY_MAX_CONTEXT_PAGES, WIKI_CHAT_THRESHOLD, WIKI_CHAT_TOP_K,
 )
 from backend.models.schemas import WikiPage, WikiLog
@@ -617,7 +618,7 @@ def _reset_ingest_state():
     })
 
 
-async def ingest_sources(db: Session, tag_names: list[str] = None, file_ids: list[int] = None):
+async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None):
     """Ingest source documents into the wiki via LLM."""
     global _ingest_running, _ingest_cancel, _ingest_status
 
@@ -653,6 +654,7 @@ async def ingest_sources(db: Session, tag_names: list[str] = None, file_ids: lis
     _ingest_last_tag_names[:] = tag_names
     _ingest_last_file_ids[:] = file_ids
 
+    db = SessionLocal()
     try:
         from backend.models.schemas import File, FileTag, Tag
 
@@ -678,51 +680,52 @@ async def ingest_sources(db: Session, tag_names: list[str] = None, file_ids: lis
 
         index_text = _get_index_text(db)
 
-        # Process files in batches of 5
-        batch_size = 5
-        for i in range(0, len(files), batch_size):
+        # Process one file per LLM call to stay within context limits
+        for i in range(0, len(files)):
             if _ingest_cancel:
                 break
 
-            batch = files[i:i + batch_size]
-            # Build source material from chunks with page annotations
+            f = files[i]
+            _ingest_status["current_source"] = f.filename
+
+            # Determine which tag collections to search for this file's chunks
+            file_tag_names = tag_names if tag_names else [
+                ft.tag.name for ft in f.tags if ft.tag
+            ]
+            chunks = get_file_chunks_any_tag(f.relative_path, file_tag_names)
+
             source_material = ""
             batch_source_files = []
-            for f in batch:
-                _ingest_status["current_source"] = f.filename
-                # Determine which tag collections to search for this file's chunks
-                file_tag_names = tag_names if tag_names else [
-                    ft.tag.name for ft in f.tags if ft.tag
-                ]
-                chunks = get_file_chunks_any_tag(f.relative_path, file_tag_names)
-
-                if chunks:
-                    # Format with page annotations like the chat system
-                    pages_seen = []
-                    for chunk in chunks:
-                        page = chunk.get("page", "")
-                        page_str = f" (page {page})" if page else ""
-                        source_material += f"\n\n[Source: {f.filename}{page_str}]\n{chunk['text']}"
-                        if page and page not in pages_seen:
-                            pages_seen.append(page)
-                    batch_source_files.append({
-                        "file_path": f.relative_path,
-                        "filename": f.filename,
-                        "pages": pages_seen,
-                    })
-                else:
-                    # Fallback to extracted text preview
-                    text = f.extracted_text_preview or f.filename
-                    source_material += f"\n\n[Source: {f.filename}]\n{text}"
-                    batch_source_files.append({
-                        "file_path": f.relative_path,
-                        "filename": f.filename,
-                        "pages": [],
-                    })
+            if chunks:
+                pages_seen = []
+                for chunk in chunks:
+                    page = chunk.get("page", "")
+                    page_str = f" (page {page})" if page else ""
+                    addition = f"\n\n[Source: {f.filename}{page_str}]\n{chunk['text']}"
+                    if len(source_material) + len(addition) > WIKI_INGEST_MAX_SOURCE_CHARS:
+                        break
+                    source_material += addition
+                    if page and page not in pages_seen:
+                        pages_seen.append(page)
+                batch_source_files.append({
+                    "file_path": f.relative_path,
+                    "filename": f.filename,
+                    "pages": pages_seen,
+                })
+            else:
+                # Fallback to extracted text preview
+                text = f.extracted_text_preview or f.filename
+                source_material = f"\n\n[Source: {f.filename}]\n{text}"[:WIKI_INGEST_MAX_SOURCE_CHARS]
+                batch_source_files.append({
+                    "file_path": f.relative_path,
+                    "filename": f.filename,
+                    "pages": [],
+                })
 
             # Call LLM
             try:
-                prompt = WIKI_INGEST_SYSTEM_PROMPT.format(index=index_text)
+                capped_index = index_text[:WIKI_INGEST_MAX_INDEX_CHARS]
+                prompt = WIKI_INGEST_SYSTEM_PROMPT.format(index=capped_index)
                 messages = [
                     {"role": "system", "content": prompt},
                     {"role": "user", "content": f"Process these source documents and create/update wiki pages:\n{source_material}"},
@@ -734,16 +737,16 @@ async def ingest_sources(db: Session, tag_names: list[str] = None, file_ids: lis
                 _ingest_status["pages_created"] += result.get("created", 0)
                 _ingest_status["pages_updated"] += result.get("updated", 0)
 
-                # Refresh index for next batch
+                # Refresh index for next file
                 index_text = _get_index_text(db)
 
             except Exception as e:
-                error_msg = f"Batch {(already_done + i) // batch_size + 1}: {str(e)}"
+                error_msg = f"File {already_done + i + 1}: {str(e)}"
                 _ingest_status["errors"].append(error_msg)
                 logger.warning("Wiki ingest batch error: %s", e)
 
-            # Track processed files for resume
-            _ingest_processed_file_ids.update(f.id for f in batch)
+            # Track processed file for resume
+            _ingest_processed_file_ids.add(f.id)
             _ingest_status["processed_sources"] = len(_ingest_processed_file_ids)
 
         # Rebuild index page and backlinks
@@ -759,6 +762,7 @@ async def ingest_sources(db: Session, tag_names: list[str] = None, file_ids: lis
         logger.error("Wiki ingest failed: %s", e)
         _ingest_status["errors"].append(str(e))
     finally:
+        db.close()
         was_cancelled = _ingest_cancel
         _ingest_running = False
         _ingest_cancel = False

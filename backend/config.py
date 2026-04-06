@@ -1,6 +1,10 @@
 """Configuration - all paths resolved relative to this file's location."""
+import os
 import sys
 from pathlib import Path
+
+# Disable ChromaDB telemetry before it is imported anywhere
+os.environ["ANONYMIZED_TELEMETRY"] = "False"
 
 if getattr(sys, "frozen", False):
     # PyInstaller EXE: data lives next to the EXE, bundled resources in _MEIPASS
@@ -61,6 +65,8 @@ SUPPORTED_EXTENSIONS = {
 # Wiki settings
 WIKI_COLLECTION_NAME = "wiki"
 WIKI_INGEST_MAX_TOKENS = 4096
+WIKI_INGEST_MAX_SOURCE_CHARS = 24_000   # ~6K tokens of source material per LLM call
+WIKI_INGEST_MAX_INDEX_CHARS = 6_000     # Cap on wiki index injected into system prompt
 WIKI_QUERY_MAX_CONTEXT_PAGES = 5
 WIKI_CHAT_THRESHOLD = 0.7  # Min similarity score to use wiki instead of RAG
 WIKI_CHAT_TOP_K = 5  # Max wiki pages to retrieve for chat

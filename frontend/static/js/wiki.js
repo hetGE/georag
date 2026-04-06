@@ -303,27 +303,41 @@
     function updateActionButtonStates(stats) {
         const ingestBtn = document.getElementById('wiki-ingest-btn');
         const lintBtn = document.getElementById('wiki-lint-btn');
+        const newBtn = document.getElementById('wiki-new-btn');
+        const resetBtn = document.getElementById('wiki-reset-btn');
 
         const llmBusy = window.chatIsStreaming?.() || stats.library_is_processing || stats.wiki_ingest_running;
 
         if (llmBusy) {
             ingestBtn.disabled = true;
             lintBtn.disabled = true;
+            newBtn.disabled = true;
+            resetBtn.disabled = true;
             if (window.chatIsStreaming?.()) {
                 ingestBtn.title = 'Chat is streaming — wait for it to finish';
                 lintBtn.title = 'Chat is streaming — wait for it to finish';
+                newBtn.title = 'Chat is streaming — wait for it to finish';
+                resetBtn.title = 'Chat is streaming — wait for it to finish';
             } else if (stats.library_is_processing) {
                 ingestBtn.title = 'Library is still processing documents...';
                 lintBtn.title = 'Library is still processing documents...';
+                newBtn.title = 'Library is still processing documents...';
+                resetBtn.title = 'Library is still processing documents...';
             } else if (stats.wiki_ingest_running) {
                 ingestBtn.title = 'Wiki rebuild is already running...';
                 lintBtn.title = 'Wiki rebuild is already running...';
+                newBtn.title = 'Wiki rebuild is already running...';
+                resetBtn.title = 'Wiki rebuild is already running...';
             }
         } else {
             ingestBtn.disabled = false;
             lintBtn.disabled = false;
+            newBtn.disabled = false;
+            resetBtn.disabled = false;
             ingestBtn.title = 'Rebuild wiki from tagged documents';
             lintBtn.title = 'Run a health check on the wiki';
+            newBtn.title = 'Create a manual wiki page';
+            resetBtn.title = 'Delete all wiki pages and reset';
         }
     }
 

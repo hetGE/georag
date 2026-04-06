@@ -151,15 +151,15 @@ async def search_wiki(q: str = Query(..., min_length=1), db: Session = Depends(g
 # ── Ingest ────────────────────────────────────────────────────────────────
 
 @router.post("/wiki/ingest")
-async def start_ingest(request: WikiIngestRequest, db: Session = Depends(get_db)):
+async def start_ingest(request: WikiIngestRequest):
     """Start wiki ingest from source documents. Runs in background."""
     status = wiki_service.get_ingest_status()
     if status["is_running"]:
         raise HTTPException(status_code=409, detail="Ingest already running")
 
-    # Run in background
+    # Run in background — ingest_sources creates its own session
     asyncio.create_task(
-        wiki_service.ingest_sources(db, tag_names=request.tag_names, file_ids=request.file_ids)
+        wiki_service.ingest_sources(tag_names=request.tag_names, file_ids=request.file_ids)
     )
     return {"ok": True, "message": "Ingest started"}
 
