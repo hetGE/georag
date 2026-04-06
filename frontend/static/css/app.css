@@ -2205,30 +2205,34 @@ a.wikilink:hover {
 
 .wiki-query-bar {
     flex-shrink: 0;
-    padding: 0.5rem 1rem;
+    padding: 0.5rem 0.5rem;
     border-top: 1px solid var(--pico-muted-border-color);
 }
 
 .wiki-query-form {
     display: flex;
     gap: 0.5rem;
-    align-items: flex-end;
+    align-items: stretch;
     margin: 0;
 }
 
 .wiki-query-form textarea {
     flex: 1;
     margin-bottom: 0;
-    font-size: 0.85rem;
+    font-size: 0.75rem;
     padding: 0.4rem 0.6rem;
     resize: none;
-    min-height: auto;
+    min-height: 2rem;
+    max-height: 6rem;
 }
 
 .wiki-query-form button {
     margin-bottom: 0;
-    font-size: 0.8rem;
-    padding: 0.4rem 1rem;
+    font-size: 0.75rem;
+    padding: 0 1.1rem;
+    white-space: nowrap;
+    width: auto;
+    flex-shrink: 0;
 }
 
 /* Wiki Query Response */

@@ -86,10 +86,12 @@ streamingChannel.onmessage = (e) => {
         showRemoteStream(msg.conversationId, msg.selectedTags);
         enterRemoteStopMode();
         updateInputState();
+        window.updateWikiQueryState?.();
     } else {
         remoteStreaming = false;
         closeMirrorStream();
         exitRemoteStopMode();
+        window.updateWikiQueryState?.();
         if (!isStreaming) {
             document.body.classList.remove('chat-streaming');
             document.getElementById('new-chat-btn').disabled = false;
@@ -770,6 +772,7 @@ async function handleSubmit(e) {
     // Start streaming
     isStreaming = true;
     document.body.classList.add('chat-streaming');
+    window.updateWikiQueryState?.();
     const sendBtn = document.getElementById('send-btn');
     sendBtn.textContent = 'Stop';
     sendBtn.type = 'button';
@@ -875,6 +878,7 @@ async function handleSubmit(e) {
     sendBtn.type = 'submit';
     sendBtn.classList.remove('stop-mode');
     isStreaming = false;
+    window.updateWikiQueryState?.();
     streamingChannel.postMessage({ streaming: false, conversationId: currentConversationId });
     if (!remoteStreaming) document.body.classList.remove('chat-streaming');
     document.getElementById('new-chat-btn').disabled = false;

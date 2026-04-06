@@ -84,6 +84,7 @@ const LibraryPanel = (() => {
                 || status.phase === 'ocr_processing' || status.phase === 'ocr_stopping';
             if (wasProcessing !== window.libraryIsProcessing) {
                 window.updateChatInputState?.();
+                window.updateWikiQueryState?.();
             }
 
             // Detect new LM Studio errors during processing/explore

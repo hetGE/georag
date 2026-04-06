@@ -124,7 +124,53 @@
         document.querySelectorAll('.close-wiki-log').forEach(btn => {
             btn.addEventListener('click', () => document.getElementById('wiki-log-dialog').close());
         });
+
+        // Textarea input → toggle Ask button enabled/disabled based on text
+        document.getElementById('wiki-query-input').addEventListener('input', () => {
+            updateQueryInputState();
+        });
+
+        // Set initial query input state
+        updateQueryInputState();
     }
+
+    // ── Query Input State (LLM busy / wiki not ready) ───────────────────
+
+    function updateQueryInputState() {
+        const input = document.getElementById('wiki-query-input');
+        const btn = document.getElementById('wiki-query-btn');
+        if (!input || !btn) return;
+
+        // Don't override state while actively querying
+        if (isQuerying) return;
+
+        const llmBusy = window.chatIsStreaming?.() || window.libraryIsProcessing;
+        const wikiNotReady = lastSyncStats && (
+            lastSyncStats.wiki_total_pages === 0 && !lastSyncStats.wiki_ever_ingested
+        );
+        const wikiIngesting = lastSyncStats?.wiki_ingest_running;
+
+        if (llmBusy) {
+            input.disabled = true;
+            btn.disabled = true;
+            input.placeholder = 'LLM is busy with another task...';
+        } else if (wikiIngesting) {
+            input.disabled = true;
+            btn.disabled = true;
+            input.placeholder = 'Wiki is being built...';
+        } else if (wikiNotReady) {
+            input.disabled = true;
+            btn.disabled = true;
+            input.placeholder = 'Initialize the wiki first to ask questions...';
+        } else {
+            input.disabled = false;
+            input.placeholder = 'Ask the wiki a question...';
+            btn.disabled = !input.value.trim();
+        }
+    }
+
+    // Expose for cross-component state updates (panel.js, chat.js)
+    window.updateWikiQueryState = updateQueryInputState;
 
     // ── Wiki Readiness / State Machine ───────────────────────────────────
 
@@ -147,6 +193,7 @@
             applyWikiState(stats);
             updateIngestButtonBadge(stats);
             updateActionButtonStates(stats);
+            updateQueryInputState();
         } catch (e) {
             // API not available yet
         }
