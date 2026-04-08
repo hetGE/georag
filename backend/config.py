@@ -39,7 +39,6 @@ EMBEDDING_DIM = 768
 EMBEDDING_BATCH_SIZE = 128
 
 # Chat model
-# CHAT_MODEL = "qwen3-vl-30b"
 # CHAT_MODEL = "qwen/qwen3.5-35b-a3b"
 CHAT_MODEL = "google/gemma-4-26b-a4b"
 

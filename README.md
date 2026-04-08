@@ -132,12 +132,10 @@ Search for and download one of these (pick based on your hardware):
 
 | Model | Download Size | RAM Needed | Best For |
 |-------|-------------|------------|----------|
-| Qwen 3 VL 30B | ~18 GB | 24 GB+ | Best quality + can read images |
-| Qwen 3 8B | ~5 GB | 10 GB+ | Great quality, works on most machines |
-| Gemma 3 4B | ~3 GB | 8 GB+ | Good balance of speed and quality |
-| Llama 3.2 3B | ~2 GB | 6 GB+ | Fastest, works on modest hardware |
+| Qwen 3.5 35B (A3B MoE) | ~22 GB | 28 GB+ | Best quality, expert mixture architecture |
+| Gemma 4 26B (A4B MoE) | ~16 GB | 24 GB+ | Great quality, efficient MoE with active 4B params |
 
-> For geotechnical work, bigger models (8B+) understand technical content better. If your machine can handle it, go bigger.
+> Both are Mixture-of-Experts models with small active parameter counts, so they run faster than their total size suggests. For geotechnical work, these large models understand technical content significantly better than smaller alternatives.
 
 **2. The "librarian", an embedding model that finds relevant documents:**
 
@@ -786,7 +784,7 @@ All values live in `backend/config.py`.
 | `CHAT_URL` | `{base}/v1/chat/completions` | Chat completion endpoint |
 | `EMBEDDING_MODEL` | `text-embedding-nomic-embed-text-v1.5` | Embedding model name |
 | `EMBEDDING_DIM` | `768` | Vector dimensionality |
-| `CHAT_MODEL` | `qwen3-vl-30b` | Chat/vision model name |
+| `CHAT_MODEL` | `google/gemma-4-26b-a4b` | Chat model name (or `qwen/qwen3.5-35b-a3b`) |
 
 ### Processing Tuning
 
