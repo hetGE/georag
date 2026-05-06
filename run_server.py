@@ -17,15 +17,27 @@ def main():
     print("=" * 35)
     print()
 
-    # Check LM Studio connectivity
-    try:
-        import urllib.request
+    # Check llama-server connectivity (chat on :8001, embeddings on :8002)
+    import urllib.request
 
-        urllib.request.urlopen("http://127.0.0.1:1234/v1/models", timeout=2)
-        print("LM Studio: Connected")
-    except Exception:
-        print("WARNING: LM Studio not detected at http://127.0.0.1:1234")
-        print("         Make sure LM Studio is running before using chat.")
+    def _probe(url: str) -> bool:
+        try:
+            urllib.request.urlopen(url, timeout=2)
+            return True
+        except Exception:
+            return False
+
+    chat_ok = _probe("http://127.0.0.1:8001/v1/models")
+    emb_ok = _probe("http://127.0.0.1:8002/v1/models")
+
+    if chat_ok and emb_ok:
+        print("llama-server (chat :8001, embeddings :8002): Connected")
+    else:
+        if not chat_ok:
+            print("WARNING: chat llama-server not detected at http://127.0.0.1:8001")
+        if not emb_ok:
+            print("WARNING: embedding llama-server not detected at http://127.0.0.1:8002")
+        print("         Start the servers as described in the README ('Step 1: Set Up llama-server').")
 
     print()
     print("Starting GeoRAG server...")

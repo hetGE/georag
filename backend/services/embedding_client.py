@@ -1,4 +1,4 @@
-"""LM Studio embedding wrapper with concurrent batching."""
+"""llama-server embedding wrapper with concurrent batching."""
 import asyncio
 import logging
 import time

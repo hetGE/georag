@@ -78,29 +78,29 @@
         </article>
     </dialog>
 
-    <!-- LM Studio Warning Modal -->
-    <dialog id="lmstudio-warning-modal">
-        <article class="lmstudio-warning-content">
-            <div class="lmstudio-warning-icon">
+    <!-- Local LLM Servers Warning Modal -->
+    <dialog id="llm-warning-modal">
+        <article class="llm-warning-content">
+            <div class="llm-warning-icon">
                 <svg viewBox="0 0 24 24" width="64" height="64" fill="none" stroke="#e74c3c" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                     <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
                     <line x1="12" y1="9" x2="12" y2="13"/>
                     <line x1="12" y1="17" x2="12.01" y2="17"/>
                 </svg>
             </div>
-            <h3 class="lmstudio-warning-title">LM Studio Not Available</h3>
-            <p class="lmstudio-warning-detail" id="lmstudio-warning-detail">Cannot connect to LM Studio on port 1234.</p>
-            <p class="lmstudio-warning-info">The following features require LM Studio to be running with a model loaded:</p>
-            <ul class="lmstudio-warning-list">
+            <h3 class="llm-warning-title">Local LLM Servers Not Available</h3>
+            <p class="llm-warning-detail" id="llm-warning-detail">Cannot connect to the llama-server instances on ports 8001 (chat) and 8002 (embeddings). See the README "Step 1: Set Up llama-server" section for the launch commands.</p>
+            <p class="llm-warning-info">The following features require both llama-server instances to be running:</p>
+            <ul class="llm-warning-list">
                 <li>Chat (RAG responses)</li>
                 <li>Wiki (Ingest, Query, Lint)</li>
                 <li>Semantic Search</li>
                 <li>Document Processing</li>
                 <li>Tag Exploration</li>
             </ul>
-            <div class="lmstudio-warning-actions">
-                <button id="lmstudio-retry-btn" class="lmstudio-retry-btn">Retry Connection</button>
-                <button id="lmstudio-dismiss-btn" class="outline lmstudio-dismiss-btn">Dismiss</button>
+            <div class="llm-warning-actions">
+                <button id="llm-retry-btn" class="llm-retry-btn">Retry Connection</button>
+                <button id="llm-dismiss-btn" class="outline llm-dismiss-btn">Dismiss</button>
             </div>
         </article>
     </dialog>
@@ -139,10 +139,10 @@
     </dialog>
 
     <script>
-    // LM Studio connectivity check (global)
-    window.checkLmStudio = async function() {
+    // Local llama-server connectivity check (global)
+    window.checkLlmServers = async function() {
         try {
-            const res = await fetch('/api/health/lm-studio');
+            const res = await fetch('/api/health/llm');
             const data = await res.json();
             return data;
         } catch {
@@ -150,44 +150,44 @@
         }
     };
 
-    window.showLmStudioWarning = function(detail) {
-        const dlg = document.getElementById('lmstudio-warning-modal');
+    window.showLlmWarning = function(detail) {
+        const dlg = document.getElementById('llm-warning-modal');
         if (!dlg || dlg.open) return;
-        if (detail) document.getElementById('lmstudio-warning-detail').textContent = detail;
+        if (detail) document.getElementById('llm-warning-detail').textContent = detail;
         dlg.showModal();
     };
 
-    // Returns true if LM Studio is OK, shows warning and returns false if not
-    window.requireLmStudio = async function() {
-        const result = await window.checkLmStudio();
+    // Returns true if both llama-servers are OK, shows warning and returns false if not
+    window.requireLlmServers = async function() {
+        const result = await window.checkLlmServers();
         if (result.status === 'ok') return true;
-        window.showLmStudioWarning(result.detail);
+        window.showLlmWarning(result.detail);
         return false;
     };
 
     (function() {
-        const dlg = document.getElementById('lmstudio-warning-modal');
-        const retryBtn = document.getElementById('lmstudio-retry-btn');
-        const dismissBtn = document.getElementById('lmstudio-dismiss-btn');
+        const dlg = document.getElementById('llm-warning-modal');
+        const retryBtn = document.getElementById('llm-retry-btn');
+        const dismissBtn = document.getElementById('llm-dismiss-btn');
 
         retryBtn.addEventListener('click', async () => {
             retryBtn.setAttribute('aria-busy', 'true');
             retryBtn.disabled = true;
-            const result = await window.checkLmStudio();
+            const result = await window.checkLlmServers();
             retryBtn.setAttribute('aria-busy', 'false');
             retryBtn.disabled = false;
             if (result.status === 'ok') {
                 dlg.close();
             } else {
-                document.getElementById('lmstudio-warning-detail').textContent = result.detail;
+                document.getElementById('llm-warning-detail').textContent = result.detail;
             }
         });
 
         dismissBtn.addEventListener('click', () => dlg.close());
 
         // Proactive check on page load
-        window.checkLmStudio().then(result => {
-            if (result.status !== 'ok') window.showLmStudioWarning(result.detail);
+        window.checkLlmServers().then(result => {
+            if (result.status !== 'ok') window.showLlmWarning(result.detail);
         });
     })();
     </script>

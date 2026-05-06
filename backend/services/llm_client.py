@@ -1,4 +1,4 @@
-"""LM Studio chat + vision wrapper."""
+"""llama-server chat + vision wrapper."""
 import json
 import logging
 import time
@@ -14,7 +14,7 @@ _client = httpx.AsyncClient(timeout=120.0)
 
 
 async def stream_chat_response(messages: list[dict]) -> AsyncGenerator[str, None]:
-    """Stream chat response from LM Studio. Yields tokens."""
+    """Stream chat response from llama-server. Yields tokens."""
     logger.info("LLM stream request: model=%s, messages=%d", CHAT_MODEL, len(messages))
     t0 = time.time()
     token_count = 0

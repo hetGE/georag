@@ -1,4 +1,4 @@
-"""Image description using vision model via LM Studio."""
+"""Image description using a vision-capable chat model served by llama-server (requires --mmproj)."""
 import base64
 from pathlib import Path
 

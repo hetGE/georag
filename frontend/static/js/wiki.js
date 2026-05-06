@@ -375,7 +375,7 @@
     // ── Initialize Wiki (one-click ingest all) ───────────────────────────
 
     async function initializeWiki() {
-        if (!await window.requireLmStudio()) return;
+        if (!await window.requireLlmServers()) return;
 
         // Save params for resume
         lastIngestTagNames = [];
@@ -408,7 +408,7 @@
     }
 
     async function resumeIngest() {
-        if (!await window.requireLmStudio()) return;
+        if (!await window.requireLlmServers()) return;
 
         // Show ingesting state
         document.querySelectorAll('#wiki-welcome .wiki-state').forEach(el => {
@@ -430,7 +430,7 @@
     }
 
     async function processPendingFiles() {
-        if (!await window.requireLmStudio()) return;
+        if (!await window.requireLlmServers()) return;
 
         document.querySelectorAll('#wiki-welcome .wiki-state').forEach(el => {
             el.style.display = 'none';
@@ -769,7 +769,7 @@
         const question = input.value.trim();
         if (!question || isQuerying) return;
 
-        if (!await window.requireLmStudio()) return;
+        if (!await window.requireLlmServers()) return;
 
         isQuerying = true;
         queryAnswer = '';
@@ -888,7 +888,7 @@
     // ── Ingest (Dialog) ──────────────────────────────────────────────────
 
     async function openIngestDialog() {
-        if (!await window.requireLmStudio()) return;
+        if (!await window.requireLlmServers()) return;
 
         const dlg = document.getElementById('wiki-ingest-dialog');
         const tagsContainer = document.getElementById('wiki-ingest-tags');
@@ -963,7 +963,7 @@
     let lintFixPollTimer = null;
 
     async function runLint() {
-        if (!await window.requireLmStudio()) return;
+        if (!await window.requireLlmServers()) return;
 
         const dlg = document.getElementById('wiki-lint-dialog');
         const content = document.getElementById('wiki-lint-content');

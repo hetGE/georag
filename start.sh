@@ -37,13 +37,19 @@ fi
 # Create data directories
 mkdir -p "$DATA_DIR"/{chroma,cache,logs}
 
-# Check LM Studio
+# Check llama-server (chat on :8001, embeddings on :8002)
 echo ""
-if curl -s --connect-timeout 2 http://127.0.0.1:1234/v1/models > /dev/null 2>&1; then
-    echo "LM Studio: Connected"
+CHAT_OK=0
+EMB_OK=0
+curl -s --connect-timeout 2 http://127.0.0.1:8001/v1/models > /dev/null 2>&1 && CHAT_OK=1
+curl -s --connect-timeout 2 http://127.0.0.1:8002/v1/models > /dev/null 2>&1 && EMB_OK=1
+
+if [ "$CHAT_OK" = 1 ] && [ "$EMB_OK" = 1 ]; then
+    echo "llama-server (chat :8001, embeddings :8002): Connected"
 else
-    echo "WARNING: LM Studio not detected at http://127.0.0.1:1234"
-    echo "  Chat and embedding features will not work until LM Studio is running."
+    [ "$CHAT_OK" = 0 ] && echo "WARNING: chat llama-server not detected at http://127.0.0.1:8001"
+    [ "$EMB_OK" = 0 ] && echo "WARNING: embedding llama-server not detected at http://127.0.0.1:8002"
+    echo "  Start the servers as described in the README ('Step 1: Set Up llama-server')."
 fi
 
 echo ""

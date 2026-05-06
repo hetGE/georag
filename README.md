@@ -25,7 +25,7 @@
 
 ### [Part 2: Getting Started](#part-2-getting-started)
 - [What You Need](#what-you-need)
-- [Step 1: Set Up LM Studio](#step-1-set-up-lm-studio)
+- [Step 1: Set Up llama-server](#step-1-set-up-llama-server)
 - [Step 2: Start GeoRAG](#step-2-start-georag)
 - [Step 3: First-Time Walkthrough](#step-3-first-time-walkthrough)
 - [Using the Chat](#using-the-chat)
@@ -60,7 +60,7 @@ GeoRAG is a **local AI assistant for geotechnical engineers**. It reads your eng
 
 It's like having a colleague who has read every document in your library and can instantly recall any detail.
 
-**Key principle:** Your data never leaves your computer. The AI models run locally through [LM Studio](https://lmstudio.ai/), a free desktop application. There are no subscriptions, no cloud uploads, and no API costs.
+**Key principle:** Your data never leaves your computer. The AI models run locally through [llama.cpp](https://github.com/ggml-org/llama.cpp)'s `llama-server` (open source, free). There are no subscriptions, no cloud uploads, and no API costs.
 
 ## What Can It Do?
 
@@ -93,7 +93,7 @@ Your Engineering/ folder
 
 Two pieces of software make this work:
 1. **GeoRAG** (this project), the web app that processes documents and runs the interface
-2. **LM Studio** (free, separate download), runs the AI models locally on your hardware
+2. **`llama-server`** (from [llama.cpp](https://github.com/ggml-org/llama.cpp)), two instances run locally, one for chat (port 8001) and one for embeddings (port 8002)
 
 ---
 
@@ -108,60 +108,91 @@ Two pieces of software make this work:
 | **Operating system** | macOS 14+, Windows 10+, or Ubuntu 20.04+ | macOS with Apple Silicon (M1/M2/M3/M4) |
 | **Python** | 3.10 | 3.11 or newer |
 | **Tesseract OCR** | 4.x+ | Latest (`brew install tesseract` on macOS) |
-| **LM Studio** | Version 0.3+ | Latest version ([download here](https://lmstudio.ai/download)) |
+| **llama-server** | Recent build of [llama.cpp](https://github.com/ggml-org/llama.cpp) | Apple Silicon Metal build or CUDA build matching your GPU |
 | **GPU** | Not strictly required | Apple Silicon or NVIDIA GPU (much faster) |
 
-## Step 1: Set Up LM Studio
+## Step 1: Set Up llama-server
 
-LM Studio is a free app that runs AI models on your computer. GeoRAG talks to it behind the scenes.
+GeoRAG expects **two separate `llama-server` processes** (from [llama.cpp](https://github.com/ggml-org/llama.cpp)) to be running before you start the app:
 
-### Install It
+| Role | Port | Default model | Alias |
+|------|------|---------------|-------|
+| Chat (with vision) | 8001 | Qwen 3.5 9B + mmproj sidecar | `qwen3.5-9B` |
+| Embeddings | 8002 | Nomic embed text v1.5 | `nomic-embed-text-v1.5` |
 
-Download from [lmstudio.ai/download](https://lmstudio.ai/download):
-- **Mac**: Open the `.dmg` and drag to Applications
-- **Windows**: Run the `.exe` installer
-- **Linux**: Download the AppImage and make it executable
+GeoRAG does not start, restart, or manage these processes. Run them yourself in two separate terminals (or under a supervisor like `tmux` / `launchd` / `systemd`).
 
-### Download Two AI Models
+### Install llama.cpp
 
-Open LM Studio and go to the **Discover** tab (the search/magnifying glass icon). You need two models:
+Build or install from the upstream project: <https://github.com/ggml-org/llama.cpp>. On macOS the simplest route is `brew install llama.cpp`. After install, `llama-server --version` should print a version.
 
-**1. The "brain", a chat model that writes answers:**
+### Download the GGUF model files
 
-Search for and download one of these (pick based on your hardware):
+Place GGUFs anywhere; the examples below assume `~/LLMs/`. You need **three** files:
 
-| Model | Download Size | RAM Needed | Best For |
-|-------|-------------|------------|----------|
-| Qwen 3.5 35B (A3B MoE) | ~22 GB | 28 GB+ | Best quality, expert mixture architecture |
-| Gemma 4 26B (A4B MoE) | ~16 GB | 24 GB+ | Great quality, efficient MoE with active 4B params |
-
-> Both are Mixture-of-Experts models with small active parameter counts, so they run faster than their total size suggests. For geotechnical work, these large models understand technical content significantly better than smaller alternatives.
-
-**2. The "librarian", an embedding model that finds relevant documents:**
-
-Search for `nomic-embed-text` and download:
 ```
-nomic-ai/nomic-embed-text-v1.5-GGUF
+~/LLMs/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf
+~/LLMs/lmstudio-community/Qwen3.5-9B-GGUF/mmproj-Qwen3.5-9B-BF16.gguf
+~/LLMs/second-state/Nomic-embed-text-v1.5-Embedding-GGUF/nomic-embed-text-v1.5-Q8_0.gguf
 ```
-This is small (~260 MB) and runs on any machine.
 
-### Start the Local Server
+The `mmproj-*.gguf` sidecar is the multimodal projector for the chat model. Without it, llama-server cannot caption images and `backend/services/extractors/image_extractor.py` will fail on PNG/JPG documents.
 
-1. **Load both models**: click each one and hit Load (or press `Cmd+L` / `Ctrl+L`)
-2. Go to the **Developer** tab (the `</>` icon)
-3. Make sure the server shows **Started** on port **1234**
-4. To verify, open your browser to `http://127.0.0.1:1234/v1/models`; you should see your loaded models listed
+Both Qwen GGUFs ship together in `lmstudio-community/Qwen3.5-9B-GGUF`; the embedding GGUF lives in `second-state/Nomic-embed-text-v1.5-Embedding-GGUF`.
 
-### Recommended Settings
+### Start the chat llama-server (port 8001)
 
-| Setting | Set It To | Why |
-|---------|----------|-----|
-| Context Length | 50000+ | Required for Wiki ingest (each file can use up to ~36K tokens); 8192 is sufficient for chat-only use |
-| GPU Offload | Max layers | Much faster answers |
-| Temperature | 0.1 to 0.3 | Keeps answers factual and grounded |
-| Max Concurrent Predictions | 2 to 3 | Lets embedding and chat run at the same time |
+```bash
+llama-server \
+  --model ~/LLMs/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf \
+  --mmproj ~/LLMs/lmstudio-community/Qwen3.5-9B-GGUF/mmproj-Qwen3.5-9B-BF16.gguf \
+  --port 8001 \
+  --alias qwen3.5-9B \
+  -c 131072 \
+  -n 32768 \
+  --no-context-shift \
+  --temp 0.6 \
+  --top-p 0.95 \
+  --top-k 20 \
+  --repeat-penalty 1.00 \
+  --presence-penalty 0.00 \
+  --fit on \
+  -fa on \
+  -ctk q8_0 \
+  -ctv q8_0 \
+  --chat-template-kwargs '{"preserve_thinking": true}'
+```
 
-> **LM Studio must be running before you start GeoRAG.** The startup script will warn you if it can't connect.
+`--chat-template-kwargs '{"preserve_thinking": true}'` keeps Qwen 3.5's `<think>...</think>` reasoning blocks in the streamed reply. The chat UI auto-collapses them after the model finishes thinking, with a click-to-expand toggle.
+
+### Start the embedding llama-server (port 8002)
+
+```bash
+llama-server \
+  --model ~/LLMs/second-state/Nomic-embed-text-v1.5-Embedding-GGUF/nomic-embed-text-v1.5-Q8_0.gguf \
+  --port 8002 \
+  --alias nomic-embed-text-v1.5 \
+  --embeddings \
+  --pooling mean \
+  -c 8192 \
+  -b 8192 \
+  -ub 8192 \
+  --rope-scaling yarn \
+  --rope-freq-scale 0.75 \
+  -fa on \
+  -ngl 99
+```
+
+### Verify both servers are up
+
+```bash
+curl http://127.0.0.1:8001/v1/models   # should list qwen3.5-9B
+curl http://127.0.0.1:8002/v1/models   # should list nomic-embed-text-v1.5
+```
+
+The `--alias` values **must match** `CHAT_MODEL` and `EMBEDDING_MODEL` in `backend/config.py`. If you change one, change the other.
+
+> **Both llama-server processes must be running before you start GeoRAG.** `start.sh` and the in-app modal both probe ports 8001 and 8002 and warn (with a pointer back to this section) if either is unreachable.
 
 ## Step 2: Start GeoRAG
 
@@ -182,7 +213,7 @@ That's it. The script will:
 1. Create a Python virtual environment (first run only)
 2. Install all dependencies (first run only)
 3. Set up data directories
-4. Check that LM Studio is reachable
+4. Check that both llama-server instances (ports 8001 and 8002) are reachable
 5. Start the web server
 
 You'll see:
@@ -191,7 +222,7 @@ You'll see:
   GeoRAG - Geotechnical RAG
 ===============================
 
-LM Studio: Connected
+llama-server (chat :8001, embeddings :8002): Connected
 Starting GeoRAG server...
   URL: http://localhost:3000
 ```
@@ -240,7 +271,7 @@ When you first open GeoRAG, the **Library Panel** on the right side walks you th
 
 4. **Chat**: Once processing finishes, go to the Chat page, select one or more topic tags, and start asking questions.
 
-> Processing speed depends on your hardware and the number of files. LM Studio (specifically the embedding model) is the bottleneck. You can stop and resume processing at any time; already processed files won't be redone.
+> Processing speed depends on your hardware and the number of files. The embedding llama-server (port 8002) is the bottleneck. You can stop and resume processing at any time; already processed files won't be redone.
 
 ## Using the Chat
 
@@ -324,24 +355,30 @@ You can also create your own custom tags through the Documents page or the API.
 - Check the error list in the Library Panel for details on individual failures
 - For non-English documents, add the language code to `OCR_LANGUAGES` in `backend/config.py` (e.g., `["eng", "tur"]` for English + Turkish). You may also need to install the Tesseract language pack (e.g., `brew install tesseract-lang`).
 
-### "LM Studio not detected"
-LM Studio isn't running or the server isn't started. Open LM Studio, go to the Developer tab, and make sure the server is running on port 1234.
+### "Local LLM Servers Not Available" / "llama-server not detected"
+One or both of the llama-server instances isn't running. Start them in two terminals using the commands in [Step 1: Set Up llama-server](#step-1-set-up-llama-server). Verify with:
+```bash
+curl http://127.0.0.1:8001/v1/models   # chat
+curl http://127.0.0.1:8002/v1/models   # embeddings
+```
 
 ### Chat gives empty or broken responses
-- Make sure a **chat model** is loaded in LM Studio (not just the embedding model)
-- The model name in `backend/config.py` must match what LM Studio shows
-- Try increasing the context length — 8192+ for chat, 50000+ if using Wiki ingest
+- Make sure the chat llama-server (port 8001) is running and `--alias qwen3.5-9B` matches `CHAT_MODEL` in `backend/config.py`
+- If you changed the model, update both `--alias` and `CHAT_MODEL` to match
+- Try increasing `-c` (context length) on the chat server — 131072 for Wiki ingest, 8192+ for chat-only
 
 ### Processing fails on embeddings
-- Make sure the **nomic-embed-text-v1.5** model is loaded in LM Studio
-- Both models (chat + embedding) need to be loaded simultaneously
+- Make sure the embedding llama-server (port 8002) is running with `--embeddings` and `--alias nomic-embed-text-v1.5`
+- The chat server alone is not sufficient; both processes must be up
+
+### Image extraction fails
+- The chat llama-server must be started with `--mmproj <path-to-mmproj.gguf>`. Without it, llama-server cannot accept images and `image_extractor.py` will mark image files as failed.
 
 ### Processing is really slow
-LM Studio is the bottleneck; it's doing all the AI work locally. To speed things up:
-- Turn on GPU offloading in LM Studio (offload as many layers as possible)
-- Increase "Max Concurrent Predictions" when loading models
+The local llama-servers are doing all the AI work. To speed things up:
+- Pass `-ngl 99` (or as many layers as fit) to push the model onto your GPU
+- Use a smaller/faster chat GGUF (e.g. a smaller Qwen quantization)
 - Close other apps competing for GPU/RAM
-- Consider using a smaller/faster chat model
 
 ### Files don't show up after scanning
 - Files must be inside the `Engineering/` parent directory (not inside `_0RAG/` itself)
@@ -414,24 +451,26 @@ rm -rf data/         # Deletes all processed data (your source documents are saf
 +----------+-------------+-----------------------------------+
            |             |
            v             v
-+----------------------------+   +---------------------------+
-| LM Studio (:1234)          |   | Data Storage              |
-|                            |   |                           |
-| +------------------------+ |   | +---------------------+   |
-| | /v1/chat/completions   | |   | | ChromaDB            |   |
-| | (chat model)           | |   | | (vectors)           |   |
-| +------------------------+ |   | +---------------------+   |
-| | /v1/embeddings         | |   | | SQLite              |   |
-| | (nomic-embed-text-     | |   | | (metadata)          |   |
-| |  v1.5)                 | |   | +---------------------+   |
-| +------------------------+ |   +---------------------------+
-+----------------------------+
++--------------------------------------+   +---------------------------+
+|  llama-server (chat, :8001)          |   | Data Storage              |
+|  +--------------------------------+  |   |                           |
+|  | /v1/chat/completions           |  |   | +---------------------+   |
+|  | (qwen3.5-9B + mmproj vision)   |  |   | | ChromaDB            |   |
+|  +--------------------------------+  |   | | (vectors)           |   |
++--------------------------------------+   | +---------------------+   |
++--------------------------------------+   | | SQLite              |   |
+|  llama-server (embeddings, :8002)    |   | | (metadata)          |   |
+|  +--------------------------------+  |   | +---------------------+   |
+|  | /v1/embeddings                 |  |   +---------------------------+
+|  | (nomic-embed-text-v1.5)        |  |
+|  +--------------------------------+  |
++--------------------------------------+
 ```
 
 **Three tier layout:**
 - **Browser**: Vanilla JS frontend served as static files. Chat page, documents page, and library panel. Tabs sync via BroadcastChannel API.
 - **FastAPI Backend** (port 3000): Python async server handling API requests, orchestrating the RAG pipeline, and streaming responses via SSE.
-- **LM Studio** (port 1234): Local LLM runtime exposing an OpenAI compatible API for chat completions, embeddings, and vision.
+- **Two `llama-server` instances** (ports 8001 / 8002): Local LLM runtimes exposing OpenAI-compatible APIs. The chat server runs the chat model plus its multimodal projector for image captioning; the embedding server runs the embedding model.
 
 **Storage:**
 - **ChromaDB**: On disk vector database. One collection per topic tag, cosine distance metric, 768 dim vectors.
@@ -447,7 +486,7 @@ Engineering/ directory
     → Extractors: format specific text extraction (10 files in parallel)
     → Tagger: heuristic keyword matching, then LLM fallback for unmatched files
     → Chunker: RecursiveCharacterTextSplitter (1000 tokens, 200 overlap)
-    → Embedding Client: batch embed via LM Studio /v1/embeddings
+    → Embedding Client: batch embed via embedding llama-server /v1/embeddings
     → Vector Store: upsert into ChromaDB per tag collections
     → SQLite: update status=processed, save chunk count + text preview
 ```
@@ -456,12 +495,12 @@ Engineering/ directory
 
 ```
 User message + selected tags
-    → Embed query via LM Studio /v1/embeddings
+    → Embed query via embedding llama-server /v1/embeddings
     → Query each selected tag's ChromaDB collection (top K per tag)
     → Deduplicate across tags, rank by cosine similarity
     → Assemble system prompt with top context chunks
     → Append last 4 conversation turns (8 messages)
-    → Stream completion from LM Studio /v1/chat/completions
+    → Stream completion from chat llama-server /v1/chat/completions
     → Deliver tokens to browser via SSE
     → Save message + source citations to SQLite
 ```
@@ -484,7 +523,7 @@ Walks `Engineering/` recursively. Skips `_0RAG/`, `.git/`, `__pycache__/`, `node
 | DOCX | python-docx | Paragraph text + table cell contents |
 | XLSX | openpyxl | All sheets with `[Sheet: name]` markers |
 | PPTX | python-pptx | Per slide text with `[Slide N]` markers + tables |
-| Images | LM Studio vision | Base64 encoded image sent to vision model for description (max 10 MB) |
+| Images | llama-server vision (`--mmproj`) | Base64 encoded image sent to chat model for description (max 10 MB) |
 | Text/HTML/RTF/CSV/MD | Built in | Direct read with HTML tag stripping; UTF 8 to latin 1 fallback |
 | DWG/DXF | N/A | Filename indexed only, no content extraction |
 
@@ -526,7 +565,7 @@ Page/slide/sheet metadata is extracted via regex from markers embedded during ex
 
 ### Phase 5: Embedding (`services/embedding_client.py`)
 
-Chunks are batched (up to 128 per request) and sent to LM Studio's `/v1/embeddings` endpoint using the `nomic-embed-text-v1.5` model. Three concurrent embedding requests are allowed (semaphore controlled). Each chunk becomes a 768 dimensional float vector.
+Chunks are batched (up to 128 per request) and sent to the embedding llama-server's `/v1/embeddings` endpoint using the `nomic-embed-text-v1.5` model. Three concurrent embedding requests are allowed (semaphore controlled). Each chunk becomes a 768 dimensional float vector.
 
 ### Phase 6: Vector Storage (`services/vector_store.py`)
 
@@ -547,7 +586,7 @@ When a user sends a message via `POST /api/chat`:
 4. The top `max_context_chunks` (default: 8) are selected by relevance score
 5. A system prompt is built containing the context chunks with source metadata
 6. The last `CONVERSATION_HISTORY_TURNS` turns (default: 4 turns = 8 messages) are appended
-7. The full prompt is streamed to LM Studio via `/v1/chat/completions` with `stream=true`
+7. The full prompt is streamed to the chat llama-server via `/v1/chat/completions` with `stream=true`
 8. Tokens are forwarded to the client as SSE events (`event: token`, `data: {"token": "..."}`)
 9. On completion, a `done` event sends `{conversation_id, sources}` and the message is persisted
 
@@ -570,12 +609,12 @@ When a user sends a message via `POST /api/chat`:
 | Resource | Limit | Mechanism | Rationale |
 |----------|-------|-----------|-----------|
 | File extraction | 10 parallel | `asyncio.gather` batch | I/O bound, benefits from parallelism |
-| LLM tagging | 1 | `asyncio.Semaphore(1)` | LM Studio single model inference bottleneck |
-| Embedding requests | 3 | `asyncio.Semaphore(3)` | Balance throughput vs. LM Studio capacity |
+| LLM tagging | 1 | `asyncio.Semaphore(1)` | llama-server single-slot serialization |
+| Embedding requests | 3 | `asyncio.Semaphore(3)` | Balance throughput vs. embedding llama-server capacity |
 | Database writes | 1 | `asyncio.Lock` | SQLite transaction safety |
 | OCR processing | 1 file | Sequential | CPU-intensive Tesseract, avoids thrashing |
 | Pipeline exclusion | 1 pipeline | Mutual exclusion checks | Processing, OCR, and exploration block each other |
-| Embedding batch size | 128 texts | Config constant | LM Studio request size limit |
+| Embedding batch size | 128 texts | Config constant | llama-server request size limit |
 | Processing batch | 10 files | Config constant | Memory bounded pipeline stage |
 
 ## Tech Stack
@@ -589,7 +628,7 @@ When a user sends a message via `POST /api/chat`:
 | sqlalchemy | 2.0.36 | ORM and database toolkit |
 | aiosqlite | 0.20.0 | Async SQLite driver |
 | chromadb | 0.5.23 | Vector database |
-| httpx | 0.28.1 | Async HTTP client (LM Studio communication) |
+| httpx | 0.28.1 | Async HTTP client (llama-server communication) |
 | pdfplumber | 0.11.4 | PDF text extraction |
 | PyMuPDF | 1.25.1 | PDF support |
 | python-docx | 1.1.2 | Word document parsing |
@@ -619,14 +658,15 @@ When a user sends a message via `POST /api/chat`:
 | Component | Port | Role |
 |-----------|------|------|
 | GeoRAG (Uvicorn) | 3000 | Web server + API |
-| LM Studio | 1234 | Local LLM inference (OpenAI compatible API) |
+| llama-server (chat) | 8001 | Local chat model + vision (OpenAI compatible API) |
+| llama-server (embeddings) | 8002 | Local embedding model (OpenAI compatible API) |
 | Tesseract OCR | N/A | System binary for OCR (used by `ocrmypdf`) |
 
 ## Project Structure
 
 ```
 _0RAG/
-├── start.sh                        # Startup: venv, deps, LM Studio check, server
+├── start.sh                        # Startup: venv, deps, llama-server check, server
 ├── kill.sh                         # Find and kill all GeoRAG processes
 ├── requirements.txt                # Pinned Python dependencies
 ├── .gitignore                      # Excludes venv/, data/, __pycache__/
@@ -654,7 +694,7 @@ _0RAG/
 │       ├── ocr_processor.py        # OCR scanned PDFs via ocrmypdf/Tesseract
 │       ├── scanner.py              # Filesystem walk + DB synchronization
 │       ├── chunker.py              # RecursiveCharacterTextSplitter wrapper
-│       ├── embedding_client.py     # Async batch embeddings via LM Studio
+│       ├── embedding_client.py     # Async batch embeddings via llama-server
 │       ├── vector_store.py         # ChromaDB per tag collection management
 │       ├── llm_client.py           # Chat completions + vision (streaming)
 │       ├── tagger.py               # 94 pattern heuristic + LLM classification
@@ -775,16 +815,18 @@ All values live in `backend/config.py`.
 | `CACHE_DIR` | `data/cache/` | Application cache |
 | `LOG_DIR` | `data/logs/` | Application logs |
 
-### LM Studio Connection
+### llama-server Connection
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LM_STUDIO_BASE_URL` | `http://127.0.0.1:1234` | LM Studio API root |
-| `EMBEDDING_URL` | `{base}/v1/embeddings` | Embedding endpoint |
-| `CHAT_URL` | `{base}/v1/chat/completions` | Chat completion endpoint |
-| `EMBEDDING_MODEL` | `text-embedding-nomic-embed-text-v1.5` | Embedding model name |
+| `CHAT_BASE_URL` | `http://127.0.0.1:8001` | Chat llama-server root |
+| `EMBEDDING_BASE_URL` | `http://127.0.0.1:8002` | Embedding llama-server root |
+| `CHAT_URL` | `{CHAT_BASE_URL}/v1/chat/completions` | Chat completion endpoint |
+| `EMBEDDING_URL` | `{EMBEDDING_BASE_URL}/v1/embeddings` | Embedding endpoint |
+| `CHAT_MODEL` | `qwen3.5-9B` | Chat model name (must match `--alias` on the chat llama-server) |
+| `EMBEDDING_MODEL` | `nomic-embed-text-v1.5` | Embedding model name (must match `--alias` on the embedding llama-server) |
 | `EMBEDDING_DIM` | `768` | Vector dimensionality |
-| `CHAT_MODEL` | `google/gemma-4-26b-a4b` | Chat model name (or `qwen/qwen3.5-35b-a3b`) |
+| `LLM_PARALLEL_SLOTS` | `1` | Concurrent inference slots (must match the chat server's `-np`) |
 
 ### Processing Tuning
 
@@ -902,7 +944,7 @@ The SPA router fires a custom `spa:pageshow` event, which triggers lazy initiali
 1. Detect Python 3.11 (fallback to python3)
 2. Create venv/ if missing, then pip install requirements.txt
 3. mkdir -p data/{chroma,cache,logs}
-4. curl LM Studio at 127.0.0.1:1234 (warn if unreachable)
+4. curl llama-server at 127.0.0.1:8001 and 127.0.0.1:8002 (warn if either unreachable)
 5. exec uvicorn backend.app:app --host 0.0.0.0 --port 3000 --reload
 ```
 

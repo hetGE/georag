@@ -87,14 +87,14 @@ const LibraryPanel = (() => {
                 window.updateWikiQueryState?.();
             }
 
-            // Detect new LM Studio errors during processing/explore
+            // Detect new llama-server errors during processing/explore
             const errors = status.errors || [];
             if (errors.length > lastErrorCount) {
                 const newErrors = errors.slice(lastErrorCount);
-                const lmError = newErrors.find(e =>
+                const llmError = newErrors.find(e =>
                     /connect|timeout|ConnectError|embed|model.*not.*loaded|No models loaded/i.test(e)
                 );
-                if (lmError) window.requireLmStudio();
+                if (llmError) window.requireLlmServers();
             }
             lastErrorCount = errors.length;
         } catch {
@@ -464,7 +464,7 @@ const LibraryPanel = (() => {
 
     async function handleStartProcessing() {
         if (window.chatIsStreaming?.()) return;
-        if (!(await window.requireLmStudio())) return;
+        if (!(await window.requireLlmServers())) return;
         const btn = document.getElementById('lp-process-btn');
         btn.disabled = true;
         btn.setAttribute('aria-busy', 'true');
@@ -513,7 +513,7 @@ const LibraryPanel = (() => {
 
     async function handleProcessNew() {
         if (window.chatIsStreaming?.()) return;
-        if (!(await window.requireLmStudio())) return;
+        if (!(await window.requireLlmServers())) return;
         const btn = document.getElementById('lp-action-process-new');
         btn.disabled = true;
         btn.setAttribute('aria-busy', 'true');
@@ -538,7 +538,7 @@ const LibraryPanel = (() => {
     async function confirmReprocessAll() {
         const dialog = document.getElementById('reprocess-confirm-dialog');
         dialog.close();
-        if (!(await window.requireLmStudio())) return;
+        if (!(await window.requireLlmServers())) return;
         const btn = document.getElementById('lp-action-reprocess');
         if (btn) {
             btn.disabled = true;
@@ -562,7 +562,7 @@ const LibraryPanel = (() => {
 
     async function handleStartOCR() {
         if (window.chatIsStreaming?.()) return;
-        if (!(await window.requireLmStudio())) return;
+        if (!(await window.requireLlmServers())) return;
         const btn = document.getElementById('lp-action-ocr');
         if (btn) {
             btn.disabled = true;
@@ -597,7 +597,7 @@ const LibraryPanel = (() => {
 
     async function handleStartExploring() {
         if (window.chatIsStreaming?.()) return;
-        if (!(await window.requireLmStudio())) return;
+        if (!(await window.requireLlmServers())) return;
         const btn = document.getElementById('lp-action-explore');
         if (btn) {
             btn.disabled = true;

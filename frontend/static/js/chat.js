@@ -1,12 +1,27 @@
 // geoRAG Chat Interface
 
-// Render markdown with LaTeX math support.
-// Extracts $$...$$ (display) and $...$ (inline) blocks before markdown
-// parsing so that underscores/asterisks inside formulas aren't mangled,
-// then renders them with KaTeX after marked has run.
-function renderContent(text) {
-    const mathBlocks = [];
+// Render markdown with LaTeX math support and <think>...</think> reasoning blocks.
+// Pipeline:
+//   1. Protect $$...$$ and $...$ math (so markdown doesn't mangle them).
+//   2. Extract <think>...</think> blocks (closed and unclosed-while-streaming).
+//   3. Run marked on the outer text (placeholders left intact).
+//   4. Substitute think placeholders with collapsible block markup, rendering
+//      the inner thought content through marked too.
+//   5. Substitute math placeholders globally (catches both outer and think bodies).
+// State for thinking blocks (user expand/collapse override + streaming timestamps)
+// lives on the parent message DOM node so it survives per-token re-renders.
+function renderContent(text, ctx) {
+    ctx = ctx || {};
+    const messageEl = ctx.messageEl || null;
+    const isStreaming = !!ctx.isStreaming;
 
+    let thinkStates = null;
+    if (messageEl) {
+        if (!messageEl._thinkStates) messageEl._thinkStates = {};
+        thinkStates = messageEl._thinkStates;
+    }
+
+    const mathBlocks = [];
     let processed = text;
 
     // Protect display math first ($$...$$)
@@ -23,9 +38,23 @@ function renderContent(text) {
         return `\x00MATH${idx}\x00`;
     });
 
-    let html = marked.parse(processed);
+    // Extract <think>...</think> blocks (a trailing unclosed <think> while
+    // streaming is captured too, with closed=false).
+    const { processed: thinkProcessed, blocks: thinkBlocks } = extractThinkBlocks(processed);
 
-    // Replace placeholders with KaTeX-rendered HTML
+    let html = marked.parse(thinkProcessed);
+
+    // Substitute think placeholders. The inner content is rendered through
+    // marked again so lists/code/headings inside reasoning still display.
+    html = html.replace(/\x01THINK(\d+)\x01/g, (_m, idxStr) => {
+        const idx = parseInt(idxStr);
+        const block = thinkBlocks[idx];
+        if (!block) return '';
+        const state = ensureThinkState(thinkStates, idx, block, isStreaming);
+        return renderThinkBlockHtml(block, state);
+    });
+
+    // Replace math placeholders with KaTeX (covers outer + inner-think occurrences)
     html = html.replace(/\x00MATH(\d+)\x00/g, (_m, idx) => {
         const block = mathBlocks[parseInt(idx)];
         try {
@@ -39,6 +68,113 @@ function renderContent(text) {
     });
 
     return html;
+}
+
+function extractThinkBlocks(text) {
+    const blocks = [];
+    let out = '';
+    let i = 0;
+    while (i < text.length) {
+        const open = text.indexOf('<think>', i);
+        if (open < 0) { out += text.slice(i); break; }
+        out += text.slice(i, open);
+        const close = text.indexOf('</think>', open + 7);
+        if (close < 0) {
+            // Unclosed: still streaming (or stream errored before closing tag).
+            const content = text.slice(open + 7);
+            const idx = blocks.length;
+            blocks.push({ index: idx, content, closed: false });
+            out += `\x01THINK${idx}\x01`;
+            i = text.length;
+            break;
+        }
+        const content = text.slice(open + 7, close);
+        const idx = blocks.length;
+        blocks.push({ index: idx, content, closed: true });
+        out += `\x01THINK${idx}\x01`;
+        i = close + 8;
+    }
+    return { processed: out, blocks };
+}
+
+function ensureThinkState(thinkStates, idx, block, isStreaming) {
+    if (!thinkStates) {
+        return { userOverride: null, startedAt: null, finishedAt: null };
+    }
+    let s = thinkStates[idx];
+    if (!s) {
+        // Only stamp startedAt while streaming; saved messages get null so the
+        // duration renders as "Thoughts" rather than a misleading "Thought for 0s".
+        s = { userOverride: null, startedAt: isStreaming ? Date.now() : null, finishedAt: null };
+        thinkStates[idx] = s;
+    }
+    if (block.closed && s.finishedAt == null && s.startedAt != null) {
+        s.finishedAt = Date.now();
+    }
+    return s;
+}
+
+function renderThinkBlockHtml(block, state) {
+    let effective;
+    if (state.userOverride === 'expanded' || state.userOverride === 'collapsed') {
+        effective = state.userOverride;
+    } else {
+        effective = block.closed ? 'collapsed' : 'streaming';
+    }
+
+    const inner = marked.parse(block.content || '');
+
+    let label;
+    if (block.closed) {
+        if (state.startedAt && state.finishedAt) {
+            const secs = Math.max(1, Math.round((state.finishedAt - state.startedAt) / 1000));
+            label = `Thought for ${secs}s`;
+        } else {
+            label = 'Thoughts';
+        }
+    } else {
+        label = 'Thinking…';
+    }
+
+    const ariaExpanded = effective === 'expanded' ? 'true' : 'false';
+    const spinner = block.closed ? '' : '<span class="think-spinner" aria-hidden="true"></span>';
+
+    return `<div class="think-block" data-think-id="${block.index}" data-state="${effective}">`
+        + `<button type="button" class="think-toggle" aria-expanded="${ariaExpanded}">`
+        + spinner
+        + `<span class="think-label">${escapeHtml(label)}</span>`
+        + `<svg class="think-chevron" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">`
+        + `<path d="M3.5 6 L8 10.5 L12.5 6" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`
+        + `</svg>`
+        + `</button>`
+        + `<div class="think-body"><div class="think-content">${inner}</div></div>`
+        + `</div>`;
+}
+
+// Single delegated click handler on the chat-messages container; toggles a
+// think block between collapsed and expanded and persists the choice on the
+// parent .message node so per-token re-renders keep the user's state.
+function setupThinkToggle() {
+    const messagesEl = document.getElementById('chat-messages');
+    if (!messagesEl || messagesEl._thinkToggleInstalled) return;
+    messagesEl._thinkToggleInstalled = true;
+    messagesEl.addEventListener('click', (e) => {
+        const toggle = e.target.closest('.think-toggle');
+        if (!toggle) return;
+        const block = toggle.closest('.think-block');
+        if (!block) return;
+        const messageEl = toggle.closest('.message');
+        const idx = parseInt(block.dataset.thinkId);
+        const next = block.dataset.state === 'expanded' ? 'collapsed' : 'expanded';
+        block.dataset.state = next;
+        toggle.setAttribute('aria-expanded', next === 'expanded' ? 'true' : 'false');
+        if (messageEl) {
+            messageEl._thinkStates = messageEl._thinkStates || {};
+            const cur = messageEl._thinkStates[idx] || { userOverride: null, startedAt: null, finishedAt: null };
+            cur.userOverride = next;
+            messageEl._thinkStates[idx] = cur;
+        }
+    });
 }
 
 let currentConversationId = null;
@@ -253,7 +389,7 @@ async function showRemoteStream(conversationId, broadcastTags) {
             const data = JSON.parse(e.data);
             if (data.token !== undefined) {
                 fullText += data.token;
-                contentEl.innerHTML = renderContent(fullText);
+                contentEl.innerHTML = renderContent(fullText, { messageEl: assistantDiv, isStreaming: true });
                 scrollToBottom();
             }
         } catch {}
@@ -289,6 +425,9 @@ async function showRemoteStream(conversationId, broadcastTags) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+    // Install the delegated toggle handler for <think> blocks once
+    setupThinkToggle();
+
     // Load tags first so they're available for any streaming mirror
     await loadTags();
 
@@ -752,8 +891,8 @@ async function handleSubmit(e) {
     const message = input.value.trim();
     if (!message || isStreaming || remoteStreaming || window.libraryIsProcessing) return;
 
-    // Check LM Studio before sending
-    if (!(await window.requireLmStudio())) return;
+    // Check llama-servers before sending
+    if (!(await window.requireLlmServers())) return;
 
     // Block submit if welcome state and no tags selected
     if (isWelcomeState && allTags.length > 0 && selectedTags.size === 0) return;
@@ -829,8 +968,8 @@ async function handleSubmit(e) {
 
                         if (data.error) {
                             contentEl.textContent = 'Error: ' + data.error;
-                            // Check if it's an LM Studio connectivity issue
-                            window.requireLmStudio();
+                            // Check if it's a llama-server connectivity issue
+                            window.requireLlmServers();
                         } else if (data.token !== undefined) {
                             // Broadcast streaming status on first token
                             if (!broadcastedStart) {
@@ -838,7 +977,7 @@ async function handleSubmit(e) {
                                 streamingChannel.postMessage({ streaming: true, conversationId: currentConversationId, selectedTags: Array.from(selectedTags) });
                             }
                             fullText += data.token;
-                            contentEl.innerHTML = renderContent(fullText);
+                            contentEl.innerHTML = renderContent(fullText, { messageEl: assistantDiv, isStreaming: true });
                             scrollToBottom();
                         }
                     } catch {}
@@ -868,7 +1007,7 @@ async function handleSubmit(e) {
     } catch (err) {
         if (err.name !== 'AbortError') {
             contentEl.textContent = 'Error: ' + err.message;
-            window.requireLmStudio();
+            window.requireLlmServers();
         }
     }
 
@@ -899,7 +1038,7 @@ function appendMessage(role, content, sources = null, streaming = false) {
     if (streaming) {
         contentEl.innerHTML = '<span class="loading-dots">Thinking</span>';
     } else if (role === 'assistant') {
-        contentEl.innerHTML = renderContent(content);
+        contentEl.innerHTML = renderContent(content, { messageEl: div, isStreaming: false });
     } else {
         contentEl.textContent = content;
     }

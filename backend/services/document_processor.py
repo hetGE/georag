@@ -48,7 +48,7 @@ EXTRACTOR_MAP = {
 }
 
 # Concurrency controls
-_llm_semaphore = asyncio.Semaphore(1)  # LM Studio serves one model request at a time
+_llm_semaphore = asyncio.Semaphore(1)  # llama-server serializes per slot; cap LLM tagging concurrency to 1
 _db_lock = asyncio.Lock()
 
 BATCH_SIZE = 10  # Files processed concurrently & LLM batch size

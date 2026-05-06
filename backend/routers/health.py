@@ -1,54 +1,93 @@
-"""Health check endpoint for LM Studio connectivity."""
+"""Health check endpoint for llama-server connectivity (chat + embeddings)."""
+import asyncio
 import httpx
 from fastapi import APIRouter
 
-from backend.config import LM_STUDIO_BASE_URL, EMBEDDING_URL, CHAT_URL, EMBEDDING_MODEL, CHAT_MODEL
+from backend.config import (
+    CHAT_BASE_URL,
+    EMBEDDING_BASE_URL,
+    EMBEDDING_URL,
+    CHAT_MODEL,
+    EMBEDDING_MODEL,
+)
 
 router = APIRouter(tags=["health"])
 
 _health_client = httpx.AsyncClient(timeout=5.0)
 
+_README_HINT = (
+    "See the 'Step 1: Set Up llama-server' section of the README for the launch commands."
+)
 
-@router.get("/health/lm-studio")
-async def check_lm_studio():
-    """Verify LM Studio is running and both models are loaded by making lightweight test calls."""
-    # 1. Check connectivity and get loaded models list
+
+async def _probe_chat() -> str | None:
+    """Returns None on success, or an error string explaining the failure."""
     try:
-        response = await _health_client.get(f"{LM_STUDIO_BASE_URL}/v1/models")
+        response = await _health_client.get(f"{CHAT_BASE_URL}/v1/models")
         response.raise_for_status()
         data = response.json()
-        model_ids = [m.get("id", "") for m in data.get("data", [])]
     except httpx.ConnectError:
-        return {"status": "error", "detail": "Cannot connect to LM Studio. Is it running?"}
+        return f"Cannot connect to chat llama-server at {CHAT_BASE_URL}. Is it running?"
     except httpx.TimeoutException:
-        return {"status": "error", "detail": "LM Studio connection timed out."}
+        return f"Chat llama-server at {CHAT_BASE_URL} timed out."
     except Exception as e:
-        return {"status": "error", "detail": f"LM Studio connection failed: {e}"}
+        return f"Chat llama-server at {CHAT_BASE_URL} failed: {e}"
 
+    model_ids = [m.get("id", "") for m in data.get("data", [])]
     if not model_ids:
-        return {"status": "error", "detail": "LM Studio is running but no models are loaded."}
+        return f"Chat llama-server is running but no model is loaded. Expected alias '{CHAT_MODEL}'."
+    if not any(CHAT_MODEL in mid for mid in model_ids):
+        return (
+            f"Chat model alias '{CHAT_MODEL}' not found on chat llama-server. "
+            f"Loaded: {', '.join(model_ids)}."
+        )
+    return None
 
-    # 2. Test embedding model with a lightweight call (fast, sub-second)
+
+async def _probe_embedding() -> str | None:
+    """Returns None on success, or an error string explaining the failure."""
     try:
-        response = await _health_client.post(EMBEDDING_URL, json={
-            "model": EMBEDDING_MODEL,
-            "input": "test",
-        })
+        response = await _health_client.get(f"{EMBEDDING_BASE_URL}/v1/models")
         response.raise_for_status()
-    except Exception:
-        return {
-            "status": "error",
-            "detail": f"Embedding model '{EMBEDDING_MODEL}' is not loaded. Please load it in LM Studio.",
-        }
+        data = response.json()
+    except httpx.ConnectError:
+        return f"Cannot connect to embedding llama-server at {EMBEDDING_BASE_URL}. Is it running?"
+    except httpx.TimeoutException:
+        return f"Embedding llama-server at {EMBEDDING_BASE_URL} timed out."
+    except Exception as e:
+        return f"Embedding llama-server at {EMBEDDING_BASE_URL} failed: {e}"
 
-    # 3. Verify chat model appears in loaded models list
-    # (actual completion test is too slow due to cold-start prompt processing)
-    # LM Studio may prefix with org, e.g. "qwen/qwen3-vl-30b" for config "qwen3-vl-30b"
-    chat_found = any(CHAT_MODEL in mid for mid in model_ids)
-    if not chat_found:
-        return {
-            "status": "error",
-            "detail": f"Chat model '{CHAT_MODEL}' is not loaded. Please load it in LM Studio.",
-        }
+    model_ids = [m.get("id", "") for m in data.get("data", [])]
+    if not model_ids:
+        return (
+            f"Embedding llama-server is running but no model is loaded. "
+            f"Expected alias '{EMBEDDING_MODEL}'."
+        )
+    if not any(EMBEDDING_MODEL in mid for mid in model_ids):
+        return (
+            f"Embedding model alias '{EMBEDDING_MODEL}' not found on embedding llama-server. "
+            f"Loaded: {', '.join(model_ids)}."
+        )
 
-    return {"status": "ok"}
+    try:
+        response = await _health_client.post(
+            EMBEDDING_URL,
+            json={"model": EMBEDDING_MODEL, "input": "test"},
+        )
+        response.raise_for_status()
+    except Exception as e:
+        return f"Embedding pipeline test call failed at {EMBEDDING_URL}: {e}"
+    return None
+
+
+@router.get("/health/llm")
+async def check_llm_servers():
+    """Verify both llama-server instances are reachable and serving the expected models."""
+    chat_err, emb_err = await asyncio.gather(_probe_chat(), _probe_embedding())
+
+    if chat_err is None and emb_err is None:
+        return {"status": "ok"}
+
+    parts = [e for e in (chat_err, emb_err) if e]
+    detail = " ".join(parts) + " " + _README_HINT
+    return {"status": "error", "detail": detail.strip()}

@@ -109,8 +109,8 @@ async function loadDocuments() {
     const contentSearch = document.getElementById('content-search-toggle')?.checked || false;
     const isContentQuery = contentSearch && search;
 
-    // Check LM Studio before semantic search
-    if (isContentQuery && !(await window.requireLmStudio())) return;
+    // Check llama-servers before semantic search
+    if (isContentQuery && !(await window.requireLlmServers())) return;
 
     const params = new URLSearchParams({page: currentPage, per_page: 50});
     if (search) params.set('search', search);
@@ -134,7 +134,7 @@ async function loadDocuments() {
         renderPagination(data);
         updateMultiTagVisibility();
     } catch (err) {
-        if (isContentQuery) window.requireLmStudio();
+        if (isContentQuery) window.requireLlmServers();
     } finally {
         overlay?.classList.remove('active');
         searchRow?.classList.remove('disabled');

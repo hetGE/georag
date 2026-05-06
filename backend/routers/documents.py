@@ -49,7 +49,7 @@ async def list_documents(
             content_paths = list(file_scores.keys())
             logger.info("Content search for '%s': %d files matched", search, len(content_paths))
         except Exception as e:
-            logger.warning("Content search failed (LM Studio down?): %s", e)
+            logger.warning("Content search failed (is the embedding llama-server on :8002 running?): %s", e)
         # Match by filename/path OR by content similarity
         query = query.filter(
             (File.filename.ilike(f"%{search}%"))

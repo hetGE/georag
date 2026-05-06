@@ -28,22 +28,22 @@ METADATA_DB = DATA_DIR / "metadata.db"
 # SQLAlchemy database URL
 DATABASE_URL = f"sqlite:///{METADATA_DB}"
 
-# LM Studio endpoints
-LM_STUDIO_BASE_URL = "http://127.0.0.1:1234"
-EMBEDDING_URL = f"{LM_STUDIO_BASE_URL}/v1/embeddings"
-CHAT_URL = f"{LM_STUDIO_BASE_URL}/v1/chat/completions"
+# llama-server endpoints (run separately by the user; see README "Step 1: Set Up llama-server")
+CHAT_BASE_URL = "http://127.0.0.1:8001"
+EMBEDDING_BASE_URL = "http://127.0.0.1:8002"
+CHAT_URL = f"{CHAT_BASE_URL}/v1/chat/completions"
+EMBEDDING_URL = f"{EMBEDDING_BASE_URL}/v1/embeddings"
 
-# Embedding settings
-EMBEDDING_MODEL = "text-embedding-nomic-embed-text-v1.5"
+# Embedding settings (model name must match the --alias passed to llama-server)
+EMBEDDING_MODEL = "nomic-embed-text-v1.5"
 EMBEDDING_DIM = 768
 EMBEDDING_BATCH_SIZE = 128
 
-# Chat model
-CHAT_MODEL = "qwen/qwen3.5-35b-a3b"
-# CHAT_MODEL = "google/gemma-4-26b-a4b"
+# Chat model (must match the --alias passed to llama-server)
+CHAT_MODEL = "qwen3.5-9B"
 
-# LM Studio parallel processing slots (match LM Studio server config)
-LLM_PARALLEL_SLOTS = 4
+# Parallel inference slots (must match llama-server -np; default 1)
+LLM_PARALLEL_SLOTS = 1
 
 # Chunking settings
 CHUNK_SIZE = 1000
