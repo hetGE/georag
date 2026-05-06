@@ -10,21 +10,31 @@ echo "  GeoRAG - Geotechnical RAG"
 echo "==============================="
 echo ""
 
-# Check Python 3.11
-if command -v python3.11 &> /dev/null; then
+# Check Python 3.13
+if command -v python3.13 &> /dev/null; then
+    PYTHON=python3.13
+    PY_VERSION=$($PYTHON --version 2>&1 | awk '{print $2}')
+    echo "Using Python $PY_VERSION"
+elif command -v python3.12 &> /dev/null; then
+    PYTHON=python3.12
+    PY_VERSION=$($PYTHON --version 2>&1 | awk '{print $2}')
+    echo "Using Python $PY_VERSION (3.13 recommended)"
+elif command -v python3.11 &> /dev/null; then
     PYTHON=python3.11
+    PY_VERSION=$($PYTHON --version 2>&1 | awk '{print $2}')
+    echo "Using Python $PY_VERSION (3.13 recommended)"
 elif command -v python3 &> /dev/null; then
     PYTHON=python3
     PY_VERSION=$($PYTHON --version 2>&1 | awk '{print $2}')
-    echo "Using Python $PY_VERSION (3.11 recommended)"
+    echo "WARNING: Using Python $PY_VERSION (3.13 recommended)"
 else
-    echo "ERROR: Python 3 not found. Please install Python 3.11+"
+    echo "ERROR: Python 3 not found. Please install Python 3.13+"
     exit 1
 fi
 
 # Create venv if needed
 if [ ! -d "$VENV_DIR" ]; then
-    echo "Creating virtual environment..."
+    echo "Creating virtual environment with $PYTHON..."
     $PYTHON -m venv "$VENV_DIR"
     echo "Installing dependencies..."
     "$VENV_DIR/bin/pip" install --upgrade pip -q
