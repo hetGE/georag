@@ -39,8 +39,8 @@ EMBEDDING_DIM = 768
 EMBEDDING_BATCH_SIZE = 128
 
 # Chat model
-# CHAT_MODEL = "qwen/qwen3.5-35b-a3b"
-CHAT_MODEL = "google/gemma-4-26b-a4b"
+CHAT_MODEL = "qwen/qwen3.5-35b-a3b"
+# CHAT_MODEL = "google/gemma-4-26b-a4b"
 
 # LM Studio parallel processing slots (match LM Studio server config)
 LLM_PARALLEL_SLOTS = 4
