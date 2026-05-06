@@ -172,6 +172,10 @@ const LibraryPanel = (() => {
         // Action buttons (only for complete phase — scanned has inline scan button)
         if (status.phase === 'complete') {
             html += renderActionButtons(status);
+        } else if (status.phase === 'not_started' || status.phase === 'scanned') {
+            // Empty / pre-processing states still need backup access so users
+            // can restore from a backup instead of (re-)processing from scratch.
+            html += `<hr class="lp-divider">${renderBackupActions(status)}`;
         }
 
         // Reprocess All — always at the bottom (except initial state and explore phases)
@@ -380,7 +384,6 @@ const LibraryPanel = (() => {
         const exploreDisabled = busy ? ' disabled' : '';
         const ocrCount = status.failed_pdfs || 0;
         const ocrDisabled = (ocrCount === 0 || busy) ? ' disabled' : '';
-        const backupDisabled = busy ? ' disabled' : '';
         return `<hr class="lp-divider">
         <div class="lp-phase">
             <div class="lp-actions">
@@ -390,10 +393,21 @@ const LibraryPanel = (() => {
                 <button id="lp-action-explore" class="outline"${exploreDisabled}>Explore New Tags</button>
             </div>
             <hr class="lp-divider" style="margin:0.5rem 0">
-            <div class="lp-actions">
-                <button id="lp-action-export" class="outline"${backupDisabled}>Export Backup</button>
-                <button id="lp-action-import" class="outline"${backupDisabled}>Import Backup</button>
-            </div>
+            ${renderBackupActions(status)}
+        </div>`;
+    }
+
+    // Export + Import backup buttons. Used by renderActionButtons() in the
+    // 'complete' phase, and separately in the empty/scanned phases so users
+    // can restore a backup before any processing happens. Export is disabled
+    // when there's nothing to export yet.
+    function renderBackupActions(status) {
+        const busy = window.chatIsStreaming?.();
+        const importDisabled = busy ? ' disabled' : '';
+        const exportDisabled = (busy || (status.processed_files || 0) === 0) ? ' disabled' : '';
+        return `<div class="lp-actions">
+            <button id="lp-action-export" class="outline"${exportDisabled}>Export Backup</button>
+            <button id="lp-action-import" class="outline"${importDisabled}>Import Backup</button>
         </div>`;
     }
 
