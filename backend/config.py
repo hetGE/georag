@@ -68,7 +68,7 @@ SUPPORTED_EXTENSIONS = {
 
 # Wiki settings
 WIKI_COLLECTION_NAME = "wiki"
-WIKI_INGEST_MAX_TOKENS = 4096
+WIKI_INGEST_MAX_TOKENS = 8192   # Headroom for Qwen <think>...</think> + JSON output
 WIKI_INGEST_MAX_SOURCE_CHARS = 24_000   # ~6K tokens of source material per LLM call
 WIKI_INGEST_MAX_INDEX_CHARS = 6_000     # Cap on wiki index injected into system prompt
 WIKI_QUERY_MAX_CONTEXT_PAGES = 5

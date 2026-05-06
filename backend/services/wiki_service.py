@@ -820,9 +820,10 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
             # Apply results sequentially (SQLite write safety)
             for (f, _, file_source_files), llm_response in zip(prepared, llm_results):
                 if isinstance(llm_response, Exception):
-                    error_msg = f"File '{f.filename}': {str(llm_response)}"
+                    err_repr = f"{type(llm_response).__name__}: {llm_response}".rstrip(": ")
+                    error_msg = f"File '{f.filename}': {err_repr}"
                     _ingest_status["errors"].append(error_msg)
-                    logger.warning("Wiki ingest LLM error: %s", llm_response)
+                    logger.warning("Wiki ingest LLM error: %s", err_repr)
                 else:
                     try:
                         result = await _apply_llm_wiki_response(
@@ -1243,11 +1244,28 @@ async def apply_lint_fixes(fixes: dict):
 # ── Internal Helpers ──────────────────────────────────────────────────────
 
 def _parse_json_response(text: str) -> dict:
-    """Extract JSON from LLM response (may be wrapped in markdown code blocks)."""
-    # Try direct parse
+    """Extract JSON from LLM response.
+
+    Handles three contaminations the chat model can emit:
+    - <think>...</think> reasoning blocks (Qwen with preserve_thinking=true)
+    - markdown code fences around the JSON
+    - trailing prose after a valid JSON object
+    """
+    # Strip thinking blocks first so they can't fool the brace scan below.
+    text = re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL | re.IGNORECASE)
+    # An open <think> with no closing tag means thinking was truncated; drop
+    # everything from that point so we can still recover any preceding JSON.
+    open_think = re.search(r"<think>", text, flags=re.IGNORECASE)
+    if open_think:
+        text = text[:open_think.start()]
     text = text.strip()
+
+    # Try direct parse
     if text.startswith("{"):
-        return json.loads(text)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass  # fall through to brace-scan below
     # Try extracting from code block
     match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
     if match:

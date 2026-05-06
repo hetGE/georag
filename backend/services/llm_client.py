@@ -10,7 +10,12 @@ from backend.config import CHAT_URL, CHAT_MODEL
 
 logger = logging.getLogger(__name__)
 
-_client = httpx.AsyncClient(timeout=120.0)
+# Read timeout is generous because Qwen3.5-9B with thinking can need several
+# minutes for a 4-8K-token wiki page. Connect/write/pool stay tight so we fail
+# fast if the chat llama-server is not actually up.
+_client = httpx.AsyncClient(
+    timeout=httpx.Timeout(connect=10.0, read=600.0, write=30.0, pool=10.0)
+)
 
 
 async def stream_chat_response(messages: list[dict]) -> AsyncGenerator[str, None]:
