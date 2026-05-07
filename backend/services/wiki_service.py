@@ -804,13 +804,49 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
 
                 messages = [
                     {"role": "system", "content": prompt},
-                    {"role": "user", "content": f"Process these source documents and create/update wiki pages:\n{source_material}"},
+                    {
+                        "role": "user",
+                        # Trailing /no_think disables Qwen3 reasoning for this turn so
+                        # the 8K-token budget goes to the JSON output, not <think> blocks.
+                        "content": (
+                            "Process these source documents and create/update wiki pages:\n"
+                            f"{source_material}\n\n/no_think"
+                        ),
+                    },
                 ]
                 prepared.append((f, messages, file_source_files))
 
-            # Fire LLM calls concurrently (one per parallel slot)
+            # Fire LLM calls concurrently (one per parallel slot). chat_template_kwargs
+            # is the request-level path to disable thinking; /no_think is the
+            # template-suffix path. Either alone would do; we send both for resilience
+            # across llama.cpp builds and chat-template versions.
             async def _llm_call(messages):
-                return await chat_completion(messages, max_tokens=WIKI_INGEST_MAX_TOKENS)
+                response = await chat_completion(
+                    messages,
+                    max_tokens=WIKI_INGEST_MAX_TOKENS,
+                    chat_template_kwargs={"enable_thinking": False},
+                )
+                # If the first attempt is empty or unparseable, retry once with
+                # a stricter system message. Cheaper than dropping the file.
+                if _looks_unusable(response):
+                    logger.info("Wiki ingest: first attempt unusable, retrying with stricter prompt")
+                    strict_messages = [
+                        {
+                            "role": "system",
+                            "content": (
+                                messages[0]["content"]
+                                + "\n\nIMPORTANT: Respond with EXACTLY ONE JSON object. "
+                                "No <think> blocks, no prose, no code fences, no commentary."
+                            ),
+                        },
+                        messages[1],
+                    ]
+                    response = await chat_completion(
+                        strict_messages,
+                        max_tokens=WIKI_INGEST_MAX_TOKENS,
+                        chat_template_kwargs={"enable_thinking": False},
+                    )
+                return response
 
             llm_results = await asyncio.gather(
                 *[_llm_call(msgs) for _, msgs, _ in prepared],
@@ -1243,13 +1279,31 @@ async def apply_lint_fixes(fixes: dict):
 
 # ── Internal Helpers ──────────────────────────────────────────────────────
 
+def _looks_unusable(response: str) -> bool:
+    """Cheap pre-check before the apply step: returns True if `response` is
+    empty after stripping <think> blocks, or fails to parse as wiki JSON.
+    Used by the wiki ingest retry path to decide whether to re-issue the LLM
+    call with a stricter prompt instead of dropping the file outright.
+    """
+    if not response or not response.strip():
+        return True
+    try:
+        _parse_json_response(response)
+        return False
+    except Exception:
+        return True
+
+
 def _parse_json_response(text: str) -> dict:
     """Extract JSON from LLM response.
 
-    Handles three contaminations the chat model can emit:
+    Handles five contaminations the chat model can emit:
     - <think>...</think> reasoning blocks (Qwen with preserve_thinking=true)
     - markdown code fences around the JSON
     - trailing prose after a valid JSON object
+    - truncated JSON (output cut off mid-page) — salvage by walking back to
+      the last balanced `}`/`]` boundary that still parses
+    - lone unescaped backslashes inside string values
     """
     # Strip thinking blocks first so they can't fool the brace scan below.
     text = re.sub(r"<think>.*?</think>\s*", "", text, flags=re.DOTALL | re.IGNORECASE)
@@ -1260,22 +1314,100 @@ def _parse_json_response(text: str) -> dict:
         text = text[:open_think.start()]
     text = text.strip()
 
-    # Try direct parse
+    # Pull the JSON region: prefer code-fenced block, else first `{` to last `}`.
+    candidate: str | None = None
     if text.startswith("{"):
+        candidate = text
+    else:
+        match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
+        if match:
+            candidate = match.group(1).strip()
+        else:
+            start = text.find("{")
+            end = text.rfind("}") + 1
+            if start >= 0 and end > start:
+                candidate = text[start:end]
+
+    if candidate is None:
+        raise ValueError(f"No JSON found in response: {text[:200]}")
+
+    # Try strict parse, then salvage paths.
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError as e:
+        salvaged = _salvage_truncated_json(candidate)
+        if salvaged is not None:
+            return salvaged
+        # Last-ditch: escape lone backslashes (common when the model writes
+        # Windows paths or LaTeX inside content strings) and retry once.
+        repaired = re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", candidate)
+        if repaired != candidate:
+            try:
+                return json.loads(repaired)
+            except json.JSONDecodeError:
+                pass
+        raise ValueError(
+            f"No JSON found in response: {candidate[:200]}"
+        ) from e
+
+
+def _salvage_truncated_json(candidate: str) -> dict | None:
+    """Recover a parseable prefix of a truncated JSON response.
+
+    Walks `candidate` once recording every position where an inner object/
+    array just closed (i.e. a structural boundary outside any string). For
+    each such position, in reverse, tries:
+      1. The exact prefix (in case it's already balanced).
+      2. The prefix with synthetic closes (])(}) appended to balance any
+         still-open arrays / objects.
+    Returns the first dict that parses, or None.
+    """
+    # Snapshot of the open-bracket stack at every clean structural boundary.
+    # Each entry: (end_position, list_of_remaining_close_chars_in_reverse).
+    snapshots: list[tuple[int, list[str]]] = []
+    stack: list[str] = []  # closing chars in order
+    in_string = False
+    escape = False
+    for i, ch in enumerate(candidate):
+        if escape:
+            escape = False
+            continue
+        if in_string:
+            if ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+        elif ch == "{":
+            stack.append("}")
+        elif ch == "[":
+            stack.append("]")
+        elif ch in "}]":
+            if stack and stack[-1] == ch:
+                stack.pop()
+                # We just closed a structure cleanly (not inside a string).
+                snapshots.append((i + 1, list(reversed(stack))))
+
+    for end, closes in reversed(snapshots):
+        # Try the bare prefix (already balanced if closes is empty).
+        if not closes:
+            try:
+                return json.loads(candidate[:end])
+            except json.JSONDecodeError:
+                pass
+        # Try with synthetic closes. Trailing whitespace then a stray
+        # comma would make `[..., ]` invalid, so trim them first.
+        prefix = candidate[:end].rstrip()
+        if prefix.endswith(","):
+            prefix = prefix[:-1]
+        synthetic = prefix + "".join(closes)
         try:
-            return json.loads(text)
+            return json.loads(synthetic)
         except json.JSONDecodeError:
-            pass  # fall through to brace-scan below
-    # Try extracting from code block
-    match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
-    if match:
-        return json.loads(match.group(1).strip())
-    # Last resort: find first { to last }
-    start = text.find("{")
-    end = text.rfind("}") + 1
-    if start >= 0 and end > start:
-        return json.loads(text[start:end])
-    raise ValueError(f"No JSON found in response: {text[:200]}")
+            continue
+    return None
 
 
 def _merge_source_files(existing: list, new: list) -> list:

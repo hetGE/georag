@@ -10,11 +10,11 @@ from backend.config import CHAT_URL, CHAT_MODEL
 
 logger = logging.getLogger(__name__)
 
-# Read timeout is generous because Qwen3.5-9B with thinking can need several
-# minutes for a 4-8K-token wiki page. Connect/write/pool stay tight so we fail
-# fast if the chat llama-server is not actually up.
+# Read timeout is generous because Qwen3.5-9B can need 10+ minutes for a
+# large wiki ingest call. Connect/write/pool stay tight so we fail fast if
+# the chat llama-server is not actually up.
 _client = httpx.AsyncClient(
-    timeout=httpx.Timeout(connect=10.0, read=600.0, write=30.0, pool=10.0)
+    timeout=httpx.Timeout(connect=10.0, read=900.0, write=30.0, pool=10.0)
 )
 
 
@@ -53,16 +53,29 @@ async def stream_chat_response(messages: list[dict]) -> AsyncGenerator[str, None
     logger.info("LLM stream complete: ~%d tokens in %.1fs", token_count, time.time() - t0)
 
 
-async def chat_completion(messages: list[dict], max_tokens: int = 1024) -> str:
-    """Non-streaming chat completion. Returns full response text."""
+async def chat_completion(
+    messages: list[dict],
+    max_tokens: int = 1024,
+    *,
+    chat_template_kwargs: dict | None = None,
+) -> str:
+    """Non-streaming chat completion. Returns full response text.
+
+    chat_template_kwargs is forwarded to llama-server's request body (e.g.
+    {"enable_thinking": False} to disable Qwen3 reasoning per-request without
+    changing the server's --chat-template-kwargs flag).
+    """
     logger.info("LLM completion request: model=%s, max_tokens=%d", CHAT_MODEL, max_tokens)
     t0 = time.time()
-    response = await _client.post(CHAT_URL, json={
+    payload: dict = {
         "model": CHAT_MODEL,
         "messages": messages,
         "temperature": 0.2,
         "max_tokens": max_tokens,
-    })
+    }
+    if chat_template_kwargs:
+        payload["chat_template_kwargs"] = chat_template_kwargs
+    response = await _client.post(CHAT_URL, json=payload)
     if response.is_error:
         logger.error("LLM request failed: %s — %s", response.status_code, response.text)
     response.raise_for_status()

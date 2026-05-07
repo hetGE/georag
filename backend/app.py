@@ -20,7 +20,14 @@ logging.basicConfig(
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
 logging.getLogger("chromadb").setLevel(logging.WARNING)
+# ChromaDB ships a PostHog client whose API drifted from the installed
+# posthog package, so it logs ERROR per request even though
+# ANONYMIZED_TELEMETRY=False suppresses the actual send. Mute it.
+logging.getLogger("chromadb.telemetry.product.posthog").setLevel(logging.CRITICAL)
 logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+# python-multipart warns about benign trailing bytes after the final boundary
+# on every browser/curl upload; raise the threshold so only real errors show.
+logging.getLogger("python_multipart.multipart").setLevel(logging.ERROR)
 
 
 def seed_tags():
