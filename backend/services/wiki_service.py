@@ -296,13 +296,11 @@ def get_sync_status(db: Session) -> dict:
 
     # Compute persistent coverage: which processed files appear in any wiki page's source_files
     all_processed_files = db.query(File).filter(File.scan_status == "processed").all()
-    covered_paths = set()
-    for page in db.query(WikiPage).all():
-        for sf in (page.source_files or []):
-            path = sf.get("file_path", "") if isinstance(sf, dict) else str(sf)
-            if path:
-                covered_paths.add(path)
-    covered_count = sum(1 for f in all_processed_files if f.relative_path in covered_paths)
+    covered_paths, covered_filenames = _wiki_covered_index(db)
+    covered_count = sum(
+        1 for f in all_processed_files
+        if f.relative_path in covered_paths or f.filename in covered_filenames
+    )
     pending_count = processed_count - covered_count
 
     return {
@@ -321,17 +319,37 @@ def get_sync_status(db: Session) -> dict:
     }
 
 
+def _wiki_covered_index(db: Session) -> tuple[set[str], set[str]]:
+    """Return (covered_paths, covered_filenames) sets aggregated across every
+    WikiPage.source_files entry. We match on either: historical pages were
+    saved with LLM-invented file_paths that don't always line up with
+    File.relative_path, but the filename field is reliable."""
+    covered_paths: set[str] = set()
+    covered_filenames: set[str] = set()
+    for page in db.query(WikiPage).all():
+        for sf in (page.source_files or []):
+            if isinstance(sf, dict):
+                path = sf.get("file_path", "")
+                fn = sf.get("filename", "")
+            else:
+                path = str(sf)
+                fn = ""
+            if path:
+                covered_paths.add(path)
+            if fn:
+                covered_filenames.add(fn)
+    return covered_paths, covered_filenames
+
+
 def get_pending_file_ids(db: Session) -> list[int]:
     """Return IDs of processed files not yet covered by any wiki page."""
     from backend.models.schemas import File
     all_processed = db.query(File).filter(File.scan_status == "processed").all()
-    covered_paths = set()
-    for page in db.query(WikiPage).all():
-        for sf in (page.source_files or []):
-            path = sf.get("file_path", "") if isinstance(sf, dict) else str(sf)
-            if path:
-                covered_paths.add(path)
-    return [f.id for f in all_processed if f.relative_path not in covered_paths]
+    covered_paths, covered_filenames = _wiki_covered_index(db)
+    return [
+        f.id for f in all_processed
+        if f.relative_path not in covered_paths and f.filename not in covered_filenames
+    ]
 
 
 # ── Reset Wiki ─────────────────────────────────────────────────────────────
@@ -738,14 +756,14 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
             )
         all_files = query.all()
 
-        # Skip files already covered by existing wiki pages (persistent resume)
-        covered_paths = set()
-        for page in db.query(WikiPage).all():
-            for sf in (page.source_files or []):
-                path = sf.get("file_path", "") if isinstance(sf, dict) else str(sf)
-                if path:
-                    covered_paths.add(path)
-        files = [f for f in all_files if f.relative_path not in covered_paths]
+        # Skip files already covered by existing wiki pages (persistent resume).
+        # Match on either relative_path or filename — see _wiki_covered_index.
+        covered_paths, covered_filenames = _wiki_covered_index(db)
+        files = [
+            f for f in all_files
+            if f.relative_path not in covered_paths
+            and f.filename not in covered_filenames
+        ]
 
         _ingest_status["total_sources"] = len(files)
         logger.info("Wiki ingest: %d files to process (%d already covered by wiki pages)",
@@ -1470,8 +1488,10 @@ async def _apply_llm_wiki_response(db: Session, response: str, operation: str,
             title = page_data.get("title", "").strip()
             if not title:
                 continue
-            # Use per-page source_files from LLM if present, else batch-level fallback
-            page_sources = page_data.get("source_files") or source_files or []
+            # Trust the caller-provided source_files (built from File.relative_path)
+            # over the LLM, which sometimes invents file paths that don't match
+            # any real File row — breaking the resume skip filter.
+            page_sources = source_files if source_files else (page_data.get("source_files") or [])
             page = create_page(
                 db,
                 title=title,
@@ -1494,8 +1514,8 @@ async def _apply_llm_wiki_response(db: Session, response: str, operation: str,
             slug = page_data.get("slug", "").strip()
             if not slug:
                 continue
-            # Merge new sources with existing page sources
-            new_sources = page_data.get("source_files") or source_files or []
+            # Trust caller-provided sources over the LLM (same rationale as create).
+            new_sources = source_files if source_files else (page_data.get("source_files") or [])
             existing_page = get_page(db, slug)
             merged_sources = _merge_source_files(
                 existing_page.source_files if existing_page else [],
