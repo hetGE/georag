@@ -28,11 +28,54 @@ METADATA_DB = DATA_DIR / "metadata.db"
 # SQLAlchemy database URL
 DATABASE_URL = f"sqlite:///{METADATA_DB}"
 
-# llama-server endpoints (run separately by the user; see README "Step 1: Set Up llama-server")
+# llama-server endpoints (launched in-process by backend.services.llama_supervisor)
 CHAT_BASE_URL = "http://127.0.0.1:8001"
 EMBEDDING_BASE_URL = "http://127.0.0.1:8002"
 CHAT_URL = f"{CHAT_BASE_URL}/v1/chat/completions"
 EMBEDDING_URL = f"{EMBEDDING_BASE_URL}/v1/embeddings"
+
+# llama-server model files
+LLAMA_CHAT_MODEL = "/Users/bora/Desktop/LLMs/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
+LLAMA_CHAT_MMPROJ = "/Users/bora/Desktop/LLMs/lmstudio-community/Qwen3.5-9B-GGUF/mmproj-Qwen3.5-9B-BF16.gguf"
+LLAMA_EMBED_MODEL = "/Users/bora/Desktop/LLMs/second-state/Nomic-embed-text-v1.5-Embedding-GGUF/nomic-embed-text-v1.5-Q8_0.gguf"
+
+# llama-server launch argv (used by backend.services.llama_supervisor)
+LLAMA_CHAT_LAUNCH = [
+    "llama-server",
+    "--model", LLAMA_CHAT_MODEL,
+    "--mmproj", LLAMA_CHAT_MMPROJ,
+    "--port", "8001",
+    "--alias", "qwen3.5-9B",
+    "-c", "131072",
+    "-n", "32768",
+    "--no-context-shift",
+    "--temp", "0.6",
+    "--top-p", "0.95",
+    "--top-k", "20",
+    "--repeat-penalty", "1.00",
+    "--presence-penalty", "0.00",
+    "--fit", "on",
+    "-fa", "on",
+    "-ctk", "q8_0",
+    "-ctv", "q8_0",
+    "--chat-template-kwargs", '{"preserve_thinking": true}',
+]
+
+LLAMA_EMBED_LAUNCH = [
+    "llama-server",
+    "--model", LLAMA_EMBED_MODEL,
+    "--port", "8002",
+    "--alias", "nomic-embed-text-v1.5",
+    "--embeddings",
+    "--pooling", "mean",
+    "-c", "8192",
+    "-b", "8192",
+    "-ub", "8192",
+    "--rope-scaling", "yarn",
+    "--rope-freq-scale", "0.75",
+    "-fa", "on",
+    "-ngl", "99",
+]
 
 # Embedding settings (model name must match the --alias passed to llama-server)
 EMBEDDING_MODEL = "nomic-embed-text-v1.5"

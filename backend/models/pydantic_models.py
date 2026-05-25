@@ -129,6 +129,7 @@ class WikiPageUpdate(BaseModel):
 class WikiIngestRequest(BaseModel):
     tag_names: list[str] = []
     file_ids: list[int] = []
+    scheduled: bool = False  # if True, scheduler will auto-pause/resume during downtime
 
 
 class WikiQueryRequest(BaseModel):

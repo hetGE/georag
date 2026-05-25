@@ -1,7 +1,7 @@
 """SQLAlchemy ORM models."""
 import datetime
 from sqlalchemy import (
-    Column, Integer, String, Float, DateTime, Text, ForeignKey, JSON, Index
+    Column, Integer, String, Float, DateTime, Text, ForeignKey, JSON, Index, Boolean
 )
 from sqlalchemy.orm import relationship
 from backend.models.database import Base
@@ -113,3 +113,19 @@ class Message(Base):
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     conversation = relationship("Conversation", back_populates="messages")
+
+
+class AppSettings(Base):
+    """Single-row config (id=1) for the scheduled-downtime + auto-shutdown features."""
+    __tablename__ = "app_settings"
+
+    id = Column(Integer, primary_key=True)  # always 1
+    schedule_enabled = Column(Boolean, default=False, nullable=False)
+    downtime_start = Column(String, default="06:30", nullable=False)  # local "HH:MM"
+    downtime_end = Column(String, default="09:30", nullable=False)
+    auto_shutdown_on_manual_pause = Column(Boolean, default=False, nullable=False)
+    scheduled_run_active = Column(Boolean, default=False, nullable=False)
+    scheduled_tag_names = Column(JSON, default=list, nullable=False)
+    scheduled_file_ids = Column(JSON, default=list, nullable=False)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow,
+                        onupdate=datetime.datetime.utcnow)

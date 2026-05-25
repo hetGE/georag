@@ -47,7 +47,34 @@ def seed_tags():
 async def lifespan(app: FastAPI):
     init_db()
     seed_tags()
-    yield
+
+    # Lazy imports so circular deps stay shallow
+    from backend.services import llama_supervisor, scheduler
+
+    settings = scheduler.get_settings()
+    if scheduler.is_in_downtime(settings):
+        logging.getLogger(__name__).info(
+            "Starting inside downtime window — skipping llama-server launch")
+    else:
+        # Fire-and-wait: do not block startup if it takes >180s, but log loudly.
+        try:
+            ok = await llama_supervisor.start_all(wait=True, timeout=180.0)
+            if not ok:
+                logging.getLogger(__name__).error(
+                    "llama-servers did not become ready during startup; "
+                    "the app will continue, but chat/embeddings will fail until they recover")
+        except Exception:
+            logging.getLogger(__name__).exception("llama-server startup failed")
+
+    scheduler.start_scheduler()
+
+    try:
+        yield
+    finally:
+        await scheduler.stop_scheduler()
+        # Note: we intentionally do NOT stop llama-server on app shutdown.
+        # The pid files let a fresh app instance adopt them, which is friendlier
+        # during dev (uvicorn --reload) and avoids losing the warm KV cache.
 
 
 app = FastAPI(title="GeoRAG", version="1.0.0", lifespan=lifespan)
@@ -59,7 +86,10 @@ app.mount("/static", StaticFiles(directory=str(BUNDLE_DIR / "frontend" / "static
 templates = Jinja2Templates(directory=str(BUNDLE_DIR / "frontend" / "templates"))
 
 # Import and include routers
-from backend.routers import documents, tags, chat, conversations, processing, explore, ocr, health, wiki, backup  # noqa: E402
+from backend.routers import (  # noqa: E402
+    documents, tags, chat, conversations, processing, explore, ocr,
+    health, wiki, backup, system,
+)
 
 app.include_router(documents.router, prefix="/api")
 app.include_router(tags.router, prefix="/api")
@@ -71,6 +101,7 @@ app.include_router(ocr.router, prefix="/api")
 app.include_router(health.router, prefix="/api")
 app.include_router(wiki.router, prefix="/api")
 app.include_router(backup.router, prefix="/api")
+app.include_router(system.router, prefix="/api")
 
 
 @app.get("/")

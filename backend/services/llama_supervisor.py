@@ -1,0 +1,266 @@
+"""Manage llama-server subprocesses for chat (:8001) and embedding (:8002).
+
+The FastAPI app owns these processes so the scheduler can stop/start them
+during a downtime window. Idempotent: start_all() is a no-op if a server is
+already responding on its port (so it survives uvicorn --reload).
+"""
+import asyncio
+import logging
+import os
+import signal
+import subprocess
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+import httpx
+
+from backend.config import (
+    CHAT_BASE_URL,
+    EMBEDDING_BASE_URL,
+    LLAMA_CHAT_LAUNCH,
+    LLAMA_EMBED_LAUNCH,
+    LOG_DIR,
+    DATA_DIR,
+)
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _ServerSpec:
+    name: str
+    launch: list[str]
+    base_url: str
+    pid_file: Path
+    log_file: Path
+    process: Optional[subprocess.Popen] = field(default=None, repr=False)
+
+
+_servers: dict[str, _ServerSpec] = {
+    "chat": _ServerSpec(
+        name="chat",
+        launch=LLAMA_CHAT_LAUNCH,
+        base_url=CHAT_BASE_URL,
+        pid_file=DATA_DIR / "llama-chat.pid",
+        log_file=LOG_DIR / "llama-chat.log",
+    ),
+    "embed": _ServerSpec(
+        name="embed",
+        launch=LLAMA_EMBED_LAUNCH,
+        base_url=EMBEDDING_BASE_URL,
+        pid_file=DATA_DIR / "llama-embed.pid",
+        log_file=LOG_DIR / "llama-embed.log",
+    ),
+}
+
+# Lifecycle intent flags. Transient (lost on uvicorn reload); the pill falls
+# back to "Servers down" after a restart if llama hasn't been re-launched, which
+# is the safer reading.
+_starting: bool = False
+_intentionally_paused: bool = False
+
+# Serialise start_all/stop_all so a click + scheduler tick don't race.
+_lifecycle_lock = asyncio.Lock()
+
+
+def _is_pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ProcessLookupError):
+        return False
+
+
+def _read_pid_file(pid_file: Path) -> Optional[int]:
+    if not pid_file.exists():
+        return None
+    try:
+        return int(pid_file.read_text().strip())
+    except (ValueError, OSError):
+        return None
+
+
+async def _port_alive(base_url: str, timeout: float = 1.5) -> bool:
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            r = await client.get(f"{base_url}/v1/models")
+            return r.status_code == 200
+    except Exception:
+        return False
+
+
+def _pid_listening_on(base_url: str) -> Optional[int]:
+    """Look up the PID of the process listening on the port in base_url. macOS/Linux only."""
+    try:
+        from urllib.parse import urlparse
+        port = urlparse(base_url).port
+        if not port:
+            return None
+        out = subprocess.run(
+            ["lsof", "-t", "-i", f":{port}", "-sTCP:LISTEN"],
+            capture_output=True, text=True, timeout=3,
+        )
+        if out.returncode != 0:
+            return None
+        first = out.stdout.strip().splitlines()
+        return int(first[0]) if first else None
+    except (subprocess.SubprocessError, ValueError, OSError):
+        return None
+
+
+async def is_running(name: str) -> bool:
+    return await _port_alive(_servers[name].base_url)
+
+
+async def status() -> dict:
+    chat_up, embed_up = await asyncio.gather(
+        _port_alive(CHAT_BASE_URL),
+        _port_alive(EMBEDDING_BASE_URL),
+    )
+    return {"chat_up": chat_up, "embed_up": embed_up}
+
+
+async def _start_one(spec: _ServerSpec) -> None:
+    if await _port_alive(spec.base_url):
+        # Already up. Record a usable PID so a later stop_all() can kill it.
+        if spec.process is None:
+            existing = _read_pid_file(spec.pid_file)
+            if existing and _is_pid_alive(existing):
+                logger.info("llama-server '%s' already up at %s (pid %d, adopted from file)",
+                            spec.name, spec.base_url, existing)
+            else:
+                # Pid file missing or stale — discover the listening pid and persist.
+                discovered = _pid_listening_on(spec.base_url)
+                if discovered and _is_pid_alive(discovered):
+                    spec.pid_file.write_text(str(discovered))
+                    logger.info("llama-server '%s' already up at %s (pid %d, discovered via lsof)",
+                                spec.name, spec.base_url, discovered)
+                else:
+                    logger.info("llama-server '%s' already up at %s (pid unknown)",
+                                spec.name, spec.base_url)
+        return
+
+    spec.log_file.parent.mkdir(parents=True, exist_ok=True)
+    log_fh = open(spec.log_file, "ab", buffering=0)
+    logger.info("Launching llama-server '%s' → %s", spec.name, spec.log_file)
+    spec.process = subprocess.Popen(
+        spec.launch,
+        stdout=log_fh,
+        stderr=subprocess.STDOUT,
+        start_new_session=True,  # detach so uvicorn --reload doesn't reap it
+    )
+    spec.pid_file.write_text(str(spec.process.pid))
+
+
+async def _wait_ready(spec: _ServerSpec, timeout: float = 180.0) -> bool:
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        if await _port_alive(spec.base_url):
+            logger.info("llama-server '%s' ready at %s", spec.name, spec.base_url)
+            return True
+        await asyncio.sleep(1.0)
+    logger.error("llama-server '%s' did not become ready within %.0fs",
+                 spec.name, timeout)
+    return False
+
+
+async def start_all(wait: bool = True, timeout: float = 180.0) -> bool:
+    """Start both servers (no-op if already up). Returns True iff both are ready
+    (or True immediately when wait=False)."""
+    global _starting, _intentionally_paused
+    async with _lifecycle_lock:
+        _intentionally_paused = False
+        _starting = True
+        try:
+            await asyncio.gather(*(_start_one(s) for s in _servers.values()))
+            if not wait:
+                # Fire-and-forget: clear _starting in a background watcher so the
+                # pill flips to "LLMs idle" when the port comes alive.
+                asyncio.create_task(_clear_starting_when_ready(timeout))
+                return True
+            results = await asyncio.gather(
+                *(_wait_ready(s, timeout) for s in _servers.values())
+            )
+            return all(results)
+        finally:
+            if wait:
+                _starting = False
+
+
+async def _clear_starting_when_ready(timeout: float) -> None:
+    """Used by start_all(wait=False) — clear _starting once both ports respond."""
+    global _starting
+    try:
+        results = await asyncio.gather(
+            *(_wait_ready(s, timeout) for s in _servers.values())
+        )
+        if not all(results):
+            logger.warning("ensure_running: not all llama-servers became ready")
+    finally:
+        _starting = False
+
+
+async def ensure_running(timeout: float = 180.0) -> bool:
+    """Idempotent: return immediately if both servers are up; otherwise start
+    them and wait. Used by request handlers that need llama right now."""
+    chat_up, embed_up = await asyncio.gather(
+        _port_alive(CHAT_BASE_URL), _port_alive(EMBEDDING_BASE_URL)
+    )
+    if chat_up and embed_up:
+        return True
+    return await start_all(wait=True, timeout=timeout)
+
+
+def get_lifecycle_state(chat_up: bool, embed_up: bool) -> str:
+    """Return one of: running, starting, paused, down. Caller passes the live
+    port-alive readings to avoid a second probe round-trip."""
+    if chat_up and embed_up:
+        return "running"
+    if _starting:
+        return "starting"
+    if _intentionally_paused:
+        return "paused"
+    return "down"
+
+
+async def _stop_one(spec: _ServerSpec) -> None:
+    pid = spec.process.pid if spec.process else _read_pid_file(spec.pid_file)
+    if not pid or not _is_pid_alive(pid):
+        spec.process = None
+        try:
+            spec.pid_file.unlink()
+        except OSError:
+            pass
+        return
+
+    logger.info("Stopping llama-server '%s' (pid %d)", spec.name, pid)
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as e:
+        logger.warning("SIGTERM to %d failed: %s", pid, e)
+
+    for _ in range(30):  # up to 15 s
+        if not _is_pid_alive(pid):
+            break
+        await asyncio.sleep(0.5)
+    else:
+        logger.warning("llama-server '%s' did not exit, sending SIGKILL", spec.name)
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except OSError:
+            pass
+
+    spec.process = None
+    try:
+        spec.pid_file.unlink()
+    except OSError:
+        pass
+
+
+async def stop_all() -> None:
+    global _intentionally_paused
+    async with _lifecycle_lock:
+        await asyncio.gather(*(_stop_one(s) for s in _servers.values()))
+        _intentionally_paused = True

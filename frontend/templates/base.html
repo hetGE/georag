@@ -25,12 +25,68 @@
                 </a>
             </span></strong></li>
         </ul>
+        <ul class="nav-system">
+            <li>
+                <span id="sys-status-pill" class="sys-pill sys-pill-ok" title="System status">Operational</span>
+            </li>
+            <li>
+                <button id="sys-end-downtime-btn" class="sys-end-btn" style="display:none;" title="End the current downtime period now">End Downtime</button>
+            </li>
+            <li>
+                <button id="sys-schedule-btn" class="sys-schedule-btn outline" title="Schedule downtime / shutdown settings">Schedule&hellip;</button>
+            </li>
+        </ul>
         <ul>
             <li><a href="/" class="{% if active_page == 'chat' %}active{% endif %}">Chat</a></li>
             <li><a href="/wiki" class="{% if active_page == 'wiki' %}active{% endif %}">Wiki</a></li>
             <li><a href="/documents" class="{% if active_page == 'documents' %}active{% endif %}">Documents</a></li>
         </ul>
     </nav>
+
+    <!-- Schedule / Settings Dialog -->
+    <dialog id="schedule-dialog">
+        <article>
+            <header>
+                <button aria-label="Close" rel="prev" class="close-schedule-dialog"></button>
+                <h3>Scheduled Downtime &amp; Auto-Shutdown</h3>
+            </header>
+            <p class="secondary" style="font-size:0.85rem;">During the daily downtime window, any running wiki build is gracefully paused and the local llama-servers are shut down to free memory. At the end of the window the servers come back up and the wiki build resumes.</p>
+            <label style="display:flex;gap:0.5rem;align-items:center;">
+                <input type="checkbox" id="sched-enabled-input">
+                <span>Enable daily downtime window</span>
+            </label>
+            <div style="display:flex;gap:1rem;margin-top:0.5rem;">
+                <label style="flex:1;">Start time
+                    <input type="time" id="sched-start-input" value="06:30">
+                </label>
+                <label style="flex:1;">End time
+                    <input type="time" id="sched-end-input" value="09:30">
+                </label>
+            </div>
+            <hr>
+            <label style="display:flex;gap:0.5rem;align-items:center;">
+                <input type="checkbox" id="sched-autoshutdown-input">
+                <span>Auto-shutdown llama-servers when wiki is manually paused</span>
+            </label>
+            <p class="secondary" style="font-size:0.8rem;margin-top:0.25rem;">When on, clicking <strong>Stop</strong> on a wiki build also frees the ~7-10 GB of memory the llama-servers use. They stay paused until you next click in Chat, Documents, or Wiki — or click the status pill to start them manually.</p>
+            <footer>
+                <button class="secondary outline close-schedule-dialog">Cancel</button>
+                <button id="sched-save-btn">Save</button>
+            </footer>
+        </article>
+    </dialog>
+
+    <!-- Generic confirm dialog (used by system_status.confirm) -->
+    <dialog id="confirm-dialog">
+        <article>
+            <header><h3 class="confirm-dialog-title">Confirm</h3></header>
+            <p class="confirm-dialog-body"></p>
+            <footer>
+                <button class="secondary outline confirm-dialog-cancel">Cancel</button>
+                <button class="confirm-dialog-confirm">Confirm</button>
+            </footer>
+        </article>
+    </dialog>
     <main class="container-fluid">
         {% block content %}{% endblock %}
     </main>
@@ -195,6 +251,7 @@
     <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js" crossorigin="anonymous"></script>
     <script src="/static/js/utils.js"></script>
     <script src="/static/js/panel.js"></script>
+    <script src="/static/js/system_status.js"></script>
     <script>
     (function() {
         const btn = document.getElementById('about-logo-btn');

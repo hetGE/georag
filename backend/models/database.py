@@ -20,7 +20,9 @@ def get_db():
 
 def init_db():
     """Create all tables."""
-    from backend.models.schemas import File, Tag, FileTag, Conversation, Message  # noqa: F401
+    from backend.models.schemas import (  # noqa: F401
+        File, Tag, FileTag, Conversation, Message, AppSettings
+    )
     Base.metadata.create_all(bind=engine)
 
     # Migration: add deleted_at column to existing conversations table
@@ -29,3 +31,14 @@ def init_db():
     if 'deleted_at' not in columns:
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE conversations ADD COLUMN deleted_at DATETIME"))
+
+    # Seed AppSettings row (id=1) if missing
+    with engine.begin() as conn:
+        row = conn.execute(text("SELECT id FROM app_settings WHERE id=1")).first()
+        if row is None:
+            conn.execute(text(
+                "INSERT INTO app_settings (id, schedule_enabled, downtime_start, downtime_end, "
+                "auto_shutdown_on_manual_pause, scheduled_run_active, "
+                "scheduled_tag_names, scheduled_file_ids) "
+                "VALUES (1, 0, '06:30', '09:30', 0, 0, '[]', '[]')"
+            ))

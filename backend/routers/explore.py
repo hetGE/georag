@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from backend.models.database import get_db
 from backend.models.schemas import Tag, File, FileTag
 from backend.services.tag_explorer import TagExplorer
+from backend.services import llama_supervisor
 
 router = APIRouter(tags=["explore"])
 
@@ -29,6 +30,10 @@ async def start_exploring():
         return {"error": "Cannot explore while OCR is running."}
     if _explorer.is_running:
         return {"error": "Exploration already in progress."}
+
+    ready = await llama_supervisor.ensure_running()
+    if not ready:
+        return {"error": "Local LLM servers did not start in time. Try again in a moment."}
 
     asyncio.create_task(_explorer.run())
     return {"status": "started"}

@@ -15,7 +15,7 @@ from backend.models.pydantic_models import ChatRequest
 from backend.services.llm_client import stream_chat_response
 from backend.services.vector_store import query_tags
 from backend.services.embedding_client import embed_text
-from backend.services import wiki_service
+from backend.services import wiki_service, llama_supervisor
 from backend.config import MAX_CONTEXT_CHUNKS, CONVERSATION_HISTORY_TURNS
 
 router = APIRouter(tags=["chat"])
@@ -58,6 +58,14 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     if _chat_streaming:
         return EventSourceResponse(
             iter([{"event": "error", "data": json.dumps({"error": "Another chat response is already in progress."})}])
+        )
+    # llama-servers may be paused (manual auto-shutdown or end of downtime
+    # before resume). Start them on demand; the status pill will reflect
+    # "Starting LLMs" while we wait.
+    ready = await llama_supervisor.ensure_running()
+    if not ready:
+        return EventSourceResponse(
+            iter([{"event": "error", "data": json.dumps({"error": "Local LLM servers did not start in time. Try again in a moment."})}])
         )
     _chat_streaming = True
     _chat_cancel = False

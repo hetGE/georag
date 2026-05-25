@@ -117,6 +117,10 @@
         document.getElementById('wiki-resume-btn')?.addEventListener('click', resumeIngest);
         document.getElementById('wiki-process-pending-btn')?.addEventListener('click', processPendingFiles);
 
+        // Scheduled Run buttons (initialize + resume variants)
+        document.getElementById('wiki-scheduled-init-btn')?.addEventListener('click', () => scheduledStart('init'));
+        document.getElementById('wiki-scheduled-resume-btn')?.addEventListener('click', () => scheduledStart('resume'));
+
         // Ingest dialog
         document.querySelectorAll('.close-wiki-ingest').forEach(btn => {
             btn.addEventListener('click', () => document.getElementById('wiki-ingest-dialog').close());
@@ -426,6 +430,48 @@
         } catch (e) {
             document.getElementById('wiki-init-progress-text').textContent =
                 'Error: ' + (e.message || 'Failed to resume ingest');
+        }
+    }
+
+    // ── Scheduled Run (variant of init/resume that respects downtime window) ──
+
+    async function scheduledStart(mode) {
+        // Make sure the user has actually configured a window before starting.
+        let settings;
+        try {
+            settings = await apiGet('/api/system/settings');
+        } catch (e) {
+            settings = null;
+        }
+        if (!settings || !settings.schedule_enabled) {
+            // Open the schedule dialog so the user can configure the window.
+            // After saving, they can click Scheduled Run again.
+            if (window.systemStatus && typeof window.systemStatus.openScheduleDialog === 'function') {
+                await window.systemStatus.openScheduleDialog();
+            } else {
+                alert('Open Schedule… in the top nav to configure a downtime window first.');
+            }
+            return;
+        }
+
+        const tag_names = mode === 'resume' ? lastIngestTagNames : [];
+        const file_ids = mode === 'resume' ? lastIngestFileIds : [];
+
+        document.querySelectorAll('#wiki-welcome .wiki-state').forEach(el => {
+            el.style.display = 'none';
+        });
+        document.getElementById('wiki-state-ingesting').style.display = '';
+        document.getElementById('wiki-init-progress-text').textContent =
+            mode === 'resume' ? 'Scheduled run resuming…' : 'Scheduled run starting…';
+        document.getElementById('wiki-init-progress-bar').value = 0;
+
+        try {
+            await apiPost('/api/wiki/ingest', { tag_names, file_ids, scheduled: true });
+            pollInitProgress();
+            if (window.systemStatus) window.systemStatus.refresh();
+        } catch (e) {
+            document.getElementById('wiki-init-progress-text').textContent =
+                'Error: ' + (e.message || 'Failed to start scheduled run');
         }
     }
 

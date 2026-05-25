@@ -900,6 +900,15 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
         _ingest_status["phase"] = "stopped" if was_cancelled else "done"
         _ingest_status["was_stopped"] = was_cancelled
 
+        # Natural completion clears any scheduled-run flag so the scheduler
+        # won't try to auto-resume at the next uptime boundary.
+        if not was_cancelled:
+            try:
+                from backend.services import scheduler as _sched
+                _sched.clear_scheduled_run()
+            except Exception:
+                logger.warning("Failed to clear scheduled_run_active", exc_info=True)
+
 
 async def query_wiki(db: Session, question: str, save_as_page: bool = False):
     """Query the wiki and stream a response. Returns an async generator of tokens."""

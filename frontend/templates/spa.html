@@ -274,6 +274,7 @@
                         <h2>Wiki</h2>
                         <p class="secondary"><strong id="wiki-ready-count">0</strong> processed documents are ready to become your knowledge base.</p>
                         <button id="wiki-init-btn" class="wiki-init-cta">Initialize Wiki</button>
+                        <button id="wiki-scheduled-init-btn" class="wiki-init-cta wiki-scheduled-btn outline" title="Run during the daily uptime window only">Scheduled Run</button>
                         <p class="secondary" style="font-size:0.82rem;">The LLM will read your documents and build interlinked wiki pages with cross-references.</p>
                     </div>
 
@@ -292,6 +293,7 @@
                         <progress id="wiki-stopped-progress-bar" value="0" max="100"></progress>
                         <p id="wiki-stopped-progress-text" class="secondary"></p>
                         <button id="wiki-resume-btn" class="wiki-init-cta" style="margin-top:0.5rem;">Resume</button>
+                        <button id="wiki-scheduled-resume-btn" class="wiki-init-cta wiki-scheduled-btn outline" title="Resume during the daily uptime window only">Scheduled Run</button>
                     </div>
 
                     <!-- State: Wiki Populated -->

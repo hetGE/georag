@@ -14,7 +14,7 @@ from backend.models.pydantic_models import (
     WikiIngestRequest, WikiQueryRequest, WikiLogResponse,
     WikiLintFixRequest,
 )
-from backend.services import wiki_service
+from backend.services import wiki_service, llama_supervisor, scheduler
 
 logger = logging.getLogger(__name__)
 
@@ -153,16 +153,29 @@ async def search_wiki(q: str = Query(..., min_length=1), db: Session = Depends(g
 
 @router.post("/wiki/ingest")
 async def start_ingest(request: WikiIngestRequest):
-    """Start wiki ingest from source documents. Runs in background."""
+    """Start wiki ingest from source documents. Runs in background.
+
+    `scheduled=True` marks this run as schedule-aware so the downtime scheduler
+    will auto-pause/resume it. The resume params are persisted to AppSettings.
+    """
     status = wiki_service.get_ingest_status()
     if status["is_running"]:
         raise HTTPException(status_code=409, detail="Ingest already running")
 
-    # Run in background — ingest_sources creates its own session
+    if request.scheduled:
+        scheduler.update_settings(
+            scheduled_run_active=True,
+            scheduled_tag_names=request.tag_names,
+            scheduled_file_ids=request.file_ids,
+        )
+
+    if not await llama_supervisor.ensure_running():
+        raise HTTPException(status_code=503, detail="Local LLM servers did not start in time.")
+
     asyncio.create_task(
         wiki_service.ingest_sources(tag_names=request.tag_names, file_ids=request.file_ids)
     )
-    return {"ok": True, "message": "Ingest started"}
+    return {"ok": True, "message": "Ingest started", "scheduled": request.scheduled}
 
 
 @router.get("/wiki/ingest/status")
@@ -173,8 +186,27 @@ async def ingest_status():
 
 @router.post("/wiki/ingest/stop")
 async def stop_ingest():
-    """Stop running ingest."""
+    """Stop running ingest.
+
+    Side-effects: clears scheduled_run_active (user override beats schedule).
+    If auto_shutdown_on_manual_pause is set and we're not already in a
+    scheduler-driven downtime, llama-servers are shut down once the wiki has
+    transitioned to phase='stopped'.
+    """
     await wiki_service.stop_ingest()
+    scheduler.clear_scheduled_run()
+
+    settings = scheduler.get_settings()
+    if settings["auto_shutdown_on_manual_pause"] and not scheduler.is_in_downtime(settings):
+        # Wait for wiki to drain, then stop llama. Don't block the response.
+        async def _drain_and_shutdown():
+            for _ in range(300):  # up to 10 minutes
+                if wiki_service.get_ingest_status()["phase"] == "stopped":
+                    break
+                await asyncio.sleep(2.0)
+            await llama_supervisor.stop_all()
+
+        asyncio.create_task(_drain_and_shutdown())
     return {"ok": True}
 
 
@@ -187,6 +219,8 @@ async def start_pending_ingest(db: Session = Depends(get_db)):
     pending_ids = wiki_service.get_pending_file_ids(db)
     if not pending_ids:
         return {"ok": True, "message": "No pending files", "count": 0}
+    if not await llama_supervisor.ensure_running():
+        raise HTTPException(status_code=503, detail="Local LLM servers did not start in time.")
     asyncio.create_task(wiki_service.ingest_sources(file_ids=pending_ids))
     return {"ok": True, "message": f"Ingest started for {len(pending_ids)} pending files", "count": len(pending_ids)}
 
@@ -196,6 +230,12 @@ async def start_pending_ingest(db: Session = Depends(get_db)):
 @router.post("/wiki/query")
 async def query_wiki(request: WikiQueryRequest, db: Session = Depends(get_db)):
     """Query the wiki with streaming response."""
+    ready = await llama_supervisor.ensure_running()
+    if not ready:
+        async def _err_gen():
+            yield {"event": "error", "data": json.dumps({"error": "Local LLM servers did not start in time. Try again in a moment."})}
+        return EventSourceResponse(_err_gen())
+
     async def event_generator():
         try:
             async for event in wiki_service.query_wiki(db, request.question, request.save_as_page):
@@ -231,6 +271,8 @@ async def apply_lint_fixes(request: WikiLintFixRequest):
         raise HTTPException(status_code=409, detail="Lint fix already running")
     if wiki_service._ingest_running:
         raise HTTPException(status_code=409, detail="Wiki ingest is running — try again later")
+    if not await llama_supervisor.ensure_running():
+        raise HTTPException(status_code=503, detail="Local LLM servers did not start in time.")
     asyncio.create_task(wiki_service.apply_lint_fixes(request.model_dump()))
     return {"ok": True, "message": "Lint fix started"}
 

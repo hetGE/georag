@@ -3,6 +3,7 @@ import asyncio
 from fastapi import APIRouter
 
 from backend.services.ocr_processor import OCRProcessor
+from backend.services import llama_supervisor
 
 router = APIRouter(tags=["ocr"])
 
@@ -22,6 +23,10 @@ async def start_ocr():
         return {"error": "Cannot OCR while processing is running"}
     if _explorer.is_running:
         return {"error": "Cannot OCR while tag exploration is running"}
+
+    ready = await llama_supervisor.ensure_running()
+    if not ready:
+        return {"error": "Local LLM servers did not start in time. Try again in a moment."}
 
     asyncio.create_task(_ocr_processor.run())
     return {"status": "started"}

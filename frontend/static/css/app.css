@@ -2476,3 +2476,93 @@ a.wikilink:hover {
 .chat-wiki-pages a:hover {
     text-decoration: underline;
 }
+
+/* ── Nav system status group ──────────────────────────────────────────── */
+.nav-system {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    margin-right: 0.5rem;
+}
+.nav-system li {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+.sys-pill {
+    display: inline-block;
+    padding: 0.25rem 0.7rem;
+    border-radius: 999px;
+    font-size: 0.78rem;
+    font-weight: 600;
+    border: 1px solid transparent;
+    line-height: 1.2;
+}
+.sys-pill-ok    { background: rgba(20, 191, 152, 0.12); color: #14bf98; border-color: rgba(20, 191, 152, 0.4); }
+.sys-pill-busy  { background: rgba(99, 102, 241, 0.12); color: #4f46e5; border-color: rgba(99, 102, 241, 0.4); }
+.sys-pill-warn  { background: rgba(245, 158, 11, 0.12); color: #d18800; border-color: rgba(245, 158, 11, 0.4); }
+.sys-pill-down  { background: rgba(231, 76, 60, 0.12);  color: #c0392b; border-color: rgba(231, 76, 60, 0.4);  }
+.sys-pill-paused {
+    background: rgba(108, 117, 125, 0.10);
+    color: #6c757d;
+    border: 1px dashed rgba(108, 117, 125, 0.55);
+}
+.sys-pill-clickable { cursor: pointer; }
+.sys-pill-clickable:hover { filter: brightness(0.95); }
+.sys-pill-busy::before {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #4f46e5;
+    margin-right: 0.4rem;
+    vertical-align: middle;
+    animation: sys-pulse 1.4s ease-in-out infinite;
+}
+@keyframes sys-pulse {
+    0%,100% { opacity: 0.35; }
+    50%     { opacity: 1; }
+}
+.sys-end-btn {
+    background: #c0392b;
+    color: #fff;
+    border: 1px solid #c0392b;
+    padding: 0.2rem 0.65rem;
+    font-size: 0.78rem;
+    border-radius: 6px;
+    cursor: pointer;
+    line-height: 1.2;
+}
+.sys-end-btn:hover { background: #a32b1f; }
+.sys-schedule-btn {
+    padding: 0.2rem 0.65rem !important;
+    font-size: 0.78rem !important;
+    line-height: 1.2 !important;
+    margin: 0 !important;
+}
+
+/* When in scheduled downtime, dim downtime-affected controls */
+body[data-downtime="true"] .wiki-init-cta,
+body[data-downtime="true"] #wiki-init-btn,
+body[data-downtime="true"] #wiki-resume-btn,
+body[data-downtime="true"] .wiki-action-btn {
+    opacity: 0.55;
+}
+
+/* Schedule dialog tightening */
+#schedule-dialog article { max-width: 520px; }
+#schedule-dialog hr { margin: 1rem 0; }
+
+/* Wiki "Scheduled Run" button — same accent as Resume */
+.wiki-scheduled-btn {
+    margin-top: 0.5rem;
+    margin-left: 0.5rem;
+}
+
+/* Generic confirm dialog (system_status.confirmDialog) */
+#confirm-dialog article { max-width: 420px; }
+#confirm-dialog .confirm-dialog-confirm.danger {
+    background: var(--pico-del-color);
+    border-color: var(--pico-del-color);
+}

@@ -9,6 +9,7 @@ from backend.models.database import get_db
 from backend.models.schemas import File, FileTag
 from backend.models.pydantic_models import ProcessingRequest, ProcessingStatus
 from backend.services.document_processor import DocumentProcessor
+from backend.services import llama_supervisor
 
 router = APIRouter(tags=["processing"])
 
@@ -28,6 +29,10 @@ async def start_processing(request: ProcessingRequest, db: Session = Depends(get
         return {"error": "Cannot process while tag exploration is running"}
     if _ocr_processor.is_running:
         return {"error": "Cannot process while OCR is running"}
+
+    ready = await llama_supervisor.ensure_running()
+    if not ready:
+        return {"error": "Local LLM servers did not start in time. Try again in a moment."}
 
     asyncio.create_task(_processor.run(
         tag_names=request.tag_names,
