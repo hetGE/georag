@@ -656,8 +656,9 @@ _ingest_status = {
     "is_running": False,
     "phase": "idle",  # idle|ingesting|stopping|stopped|done
     "was_stopped": False,
-    "total_sources": 0,
-    "processed_sources": 0,
+    "total_sources": 0,           # files this run will process (after skip filter)
+    "processed_sources": 0,       # files this run has processed so far
+    "previously_covered": 0,      # files skipped this run because they were already in the wiki
     "pages_created": 0,
     "pages_updated": 0,
     "current_source": None,
@@ -711,6 +712,7 @@ def _reset_ingest_state():
     _ingest_status.update({
         "is_running": False, "phase": "idle", "was_stopped": False,
         "total_sources": 0, "processed_sources": 0,
+        "previously_covered": 0,
         "pages_created": 0, "pages_updated": 0,
         "current_source": None, "errors": [],
     })
@@ -734,6 +736,7 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
     _ingest_status.update({
         "is_running": True, "phase": "ingesting", "was_stopped": False,
         "current_source": None, "total_sources": 0, "processed_sources": 0,
+        "previously_covered": 0,
         "pages_created": 0, "pages_updated": 0, "errors": [],
     })
 
@@ -766,8 +769,9 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
         ]
 
         _ingest_status["total_sources"] = len(files)
+        _ingest_status["previously_covered"] = len(all_files) - len(files)
         logger.info("Wiki ingest: %d files to process (%d already covered by wiki pages)",
-                     len(files), len(all_files) - len(files))
+                     len(files), _ingest_status["previously_covered"])
 
         index_text = _get_index_text(db)
 

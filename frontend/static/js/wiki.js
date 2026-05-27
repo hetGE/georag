@@ -513,10 +513,15 @@
         ingestPollTimer = setInterval(async () => {
             try {
                 const status = await apiGet('/api/wiki/ingest/status');
+                const covered = status.previously_covered || 0;
+                const coveredPrefix = covered > 0
+                    ? `${covered.toLocaleString()} already covered · `
+                    : '';
                 const progressText = status.total_sources > 0
-                    ? `${status.processed_sources}/${status.total_sources} sources processed. ` +
-                      `${status.pages_created} created, ${status.pages_updated} updated.` +
-                      (status.current_source ? ` Current: ${status.current_source}` : '')
+                    ? coveredPrefix +
+                      `${status.processed_sources}/${status.total_sources} new sources processed · ` +
+                      `${status.pages_created} created, ${status.pages_updated} updated` +
+                      (status.current_source ? ` · Current: ${status.current_source}` : '')
                     : 'Starting...';
                 const pct = status.total_sources > 0
                     ? Math.round((status.processed_sources / status.total_sources) * 100) : 0;
