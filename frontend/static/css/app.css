@@ -2509,6 +2509,25 @@ a.wikilink:hover {
 }
 .sys-pill-clickable { cursor: pointer; }
 .sys-pill-clickable:hover { filter: brightness(0.95); }
+
+/* Secondary pill for upcoming scheduled events */
+.sys-event-pill {
+    display: inline-block;
+    padding: 0.2rem 0.6rem;
+    border-radius: 999px;
+    font-size: 0.72rem;
+    font-weight: 500;
+    color: var(--pico-muted-color);
+    background: rgba(0, 0, 0, 0.04);
+    border: 1px solid rgba(0, 0, 0, 0.10);
+    line-height: 1.2;
+    white-space: nowrap;
+}
+.sys-event-pill::before {
+    content: "\23F3";   /* hourglass */
+    margin-right: 0.35rem;
+    opacity: 0.65;
+}
 .sys-pill-busy::before {
     content: "";
     display: inline-block;

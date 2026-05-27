@@ -15,6 +15,16 @@
         } catch { return ''; }
     }
 
+    function fmtHHMMFromSetting(hhmm) {
+        // Convert "HH:MM" (24h, local) into the user's locale-formatted time.
+        if (!hhmm || !hhmm.includes(':')) return '';
+        const [h, m] = hhmm.split(':').map(Number);
+        if (Number.isNaN(h) || Number.isNaN(m)) return '';
+        const d = new Date();
+        d.setHours(h, m, 0, 0);
+        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    }
+
     function applyStatus(s) {
         lastStatus = s;
         const pill = document.getElementById('sys-status-pill');
@@ -64,6 +74,22 @@
         } else {
             endBtn.style.display = 'none';
             document.body.removeAttribute('data-downtime');
+        }
+
+        // Upcoming-event pill: shown whenever the schedule is enabled, so the
+        // user can glance at when the next pause/resume will happen.
+        const eventPill = document.getElementById('sys-next-event-pill');
+        if (eventPill) {
+            if (s.schedule_enabled) {
+                if (s.in_downtime) {
+                    eventPill.textContent = `Resuming at ${fmtHHMMFromSetting(s.downtime_end)}`;
+                } else {
+                    eventPill.textContent = `Pausing at ${fmtHHMMFromSetting(s.downtime_start)}`;
+                }
+                eventPill.style.display = '';
+            } else {
+                eventPill.style.display = 'none';
+            }
         }
 
         // Disable chat send when in downtime

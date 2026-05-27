@@ -191,24 +191,53 @@ async def enter_downtime():
     await llama_supervisor.stop_all()
 
 
-async def exit_downtime():
+async def _ensure_llama_up_if_needed(s: dict, chat_up: bool) -> bool:
+    """Start llama if the scheduler should bring it back up after a downtime
+    or to service a queued scheduled run. Returns True iff llama is up after."""
     global _pending_resume_after_downtime
-    logger.info("Scheduler: exiting downtime window")
+    if chat_up:
+        return True
+    if not (_pending_resume_after_downtime or s["scheduled_run_active"]):
+        return False
+    logger.info(
+        "Scheduler: starting llama-servers (pending_resume=%s scheduled_run=%s)",
+        _pending_resume_after_downtime, s["scheduled_run_active"],
+    )
     ok = await llama_supervisor.start_all(wait=True)
     if not ok:
-        logger.error("Scheduler: llama-servers did not start; auto-resume aborted")
-        # Leave _pending_resume_after_downtime True so the next tick retries.
-        return
+        logger.error("Scheduler: llama-servers did not start; will retry next tick")
+        return False
     _pending_resume_after_downtime = False
+    return True
+
+
+async def _resume_scheduled_wiki_if_needed(s: dict, chat_up: bool, wiki_running: bool):
+    """If a scheduled run is queued, llama is up, and no wiki ingest is
+    currently in flight, kick off ingest_sources. Idempotent — if the wiki
+    is still draining from a prior stop, we just try again next tick."""
+    if not s["scheduled_run_active"]:
+        return
+    if not chat_up or wiki_running:
+        return
+    tag_names = s["scheduled_tag_names"]
+    file_ids = s["scheduled_file_ids"]
+    logger.info(
+        "Scheduler: auto-resuming scheduled wiki ingest (tags=%s file_ids=%d)",
+        tag_names, len(file_ids),
+    )
+    asyncio.create_task(
+        wiki_service.ingest_sources(tag_names=tag_names, file_ids=file_ids)
+    )
+
+
+async def exit_downtime():
+    """Legacy entry-point kept for the /system/end-downtime path: drives
+    one full reconcile cycle (start llama + maybe resume wiki)."""
     s = get_settings()
-    if s["scheduled_run_active"]:
-        tag_names = s["scheduled_tag_names"]
-        file_ids = s["scheduled_file_ids"]
-        logger.info("Scheduler: auto-resuming wiki ingest (tags=%s file_ids=%d)",
-                    tag_names, len(file_ids))
-        asyncio.create_task(
-            wiki_service.ingest_sources(tag_names=tag_names, file_ids=file_ids)
-        )
+    chat_up = await llama_supervisor.is_running("chat")
+    chat_up = await _ensure_llama_up_if_needed(s, chat_up)
+    wiki_running = wiki_service.get_ingest_status()["is_running"]
+    await _resume_scheduled_wiki_if_needed(s, chat_up, wiki_running)
 
 
 # ── Periodic loop ───────────────────────────────────────────────────────
@@ -222,17 +251,18 @@ async def _tick():
     s = get_settings()
     in_dt = is_in_downtime(s)
     chat_up = await llama_supervisor.is_running("chat")
+    wiki_running = wiki_service.get_ingest_status()["is_running"]
 
     if in_dt:
         # Should be paused. Stop wiki + llama if anything is still up.
-        if chat_up or wiki_service.get_ingest_status()["is_running"]:
+        if chat_up or wiki_running:
             await enter_downtime()
-    else:
-        # Resume llama only if we entered downtime (or scheduled_run_active is
-        # waiting after a restart). A user-initiated auto-shutdown sets neither
-        # flag, so llama stays paused until they next click in Chat/Wiki/Docs.
-        if not chat_up and (_pending_resume_after_downtime or s["scheduled_run_active"]):
-            await exit_downtime()
+        return
+
+    # Outside the downtime window. Two independent concerns, both reconciled
+    # every tick so we self-heal if a previous attempt didn't fully take.
+    chat_up = await _ensure_llama_up_if_needed(s, chat_up)
+    await _resume_scheduled_wiki_if_needed(s, chat_up, wiki_running)
 
 
 async def _scheduler_loop():
