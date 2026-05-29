@@ -127,5 +127,9 @@ class AppSettings(Base):
     scheduled_run_active = Column(Boolean, default=False, nullable=False)
     scheduled_tag_names = Column(JSON, default=list, nullable=False)
     scheduled_file_ids = Column(JSON, default=list, nullable=False)
+    # File IDs already attempted by the active build (whether or not they
+    # produced a page). Lets a paused/resumed build skip them so it converges
+    # instead of re-processing no-page files (media, empty docs) every cycle.
+    scheduled_processed_file_ids = Column(JSON, default=list, nullable=False)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow,
                         onupdate=datetime.datetime.utcnow)

@@ -153,29 +153,41 @@ async def search_wiki(q: str = Query(..., min_length=1), db: Session = Depends(g
 
 @router.post("/wiki/ingest")
 async def start_ingest(request: WikiIngestRequest):
-    """Start wiki ingest from source documents. Runs in background.
+    """Start (or resume) a wiki build from source documents. Runs in background.
 
-    `scheduled=True` marks this run as schedule-aware so the downtime scheduler
-    will auto-pause/resume it. The resume params are persisted to AppSettings.
+    Every build is durable: its scope is persisted as the active build so the
+    downtime scheduler auto-pauses/resumes it. Resuming the same scope keeps the
+    per-build "attempted files" set so the build converges; a different scope is
+    a new build and resets it.
     """
     status = wiki_service.get_ingest_status()
     if status["is_running"]:
         raise HTTPException(status_code=409, detail="Ingest already running")
 
-    if request.scheduled:
-        scheduler.update_settings(
-            scheduled_run_active=True,
-            scheduled_tag_names=request.tag_names,
-            scheduled_file_ids=request.file_ids,
-        )
+    tag_names = request.tag_names or []
+    file_ids = request.file_ids or []
+    prev = scheduler.get_settings()
+    same_scope = (
+        prev["scheduled_run_active"]
+        and sorted(prev["scheduled_tag_names"]) == sorted(tag_names)
+        and sorted(prev["scheduled_file_ids"]) == sorted(file_ids)
+    )
+    fields = dict(
+        scheduled_run_active=True,
+        scheduled_tag_names=tag_names,
+        scheduled_file_ids=file_ids,
+    )
+    if not same_scope:
+        fields["scheduled_processed_file_ids"] = []  # new build → nothing attempted yet
+    scheduler.update_settings(**fields)
 
     if not await llama_supervisor.ensure_running():
         raise HTTPException(status_code=503, detail="Local LLM servers did not start in time.")
 
     asyncio.create_task(
-        wiki_service.ingest_sources(tag_names=request.tag_names, file_ids=request.file_ids)
+        wiki_service.ingest_sources(tag_names=tag_names, file_ids=file_ids)
     )
-    return {"ok": True, "message": "Ingest started", "scheduled": request.scheduled}
+    return {"ok": True, "message": "Ingest started"}
 
 
 @router.get("/wiki/ingest/status")
@@ -186,27 +198,20 @@ async def ingest_status():
 
 @router.post("/wiki/ingest/stop")
 async def stop_ingest():
-    """Stop running ingest.
-
-    Side-effects: clears scheduled_run_active (user override beats schedule).
-    If auto_shutdown_on_manual_pause is set and we're not already in a
-    scheduler-driven downtime, llama-servers are shut down once the wiki has
-    transitioned to phase='stopped'.
+    """Pause the running build. Cancels the in-flight task but keeps the active
+    build's scope + progress, so the scheduler auto-resumes it when the LLMs are
+    up and we're outside the downtime window. Use /wiki/ingest/cancel to abandon.
     """
     await wiki_service.stop_ingest()
+    return {"ok": True}
+
+
+@router.post("/wiki/ingest/cancel")
+async def cancel_ingest():
+    """Abandon the current build: stop the in-flight task and clear the active
+    build so the scheduler will not auto-resume it."""
+    await wiki_service.stop_ingest()
     scheduler.clear_scheduled_run()
-
-    settings = scheduler.get_settings()
-    if settings["auto_shutdown_on_manual_pause"] and not scheduler.is_in_downtime(settings):
-        # Wait for wiki to drain, then stop llama. Don't block the response.
-        async def _drain_and_shutdown():
-            for _ in range(300):  # up to 10 minutes
-                if wiki_service.get_ingest_status()["phase"] == "stopped":
-                    break
-                await asyncio.sleep(2.0)
-            await llama_supervisor.stop_all()
-
-        asyncio.create_task(_drain_and_shutdown())
     return {"ok": True}
 
 
@@ -219,6 +224,13 @@ async def start_pending_ingest(db: Session = Depends(get_db)):
     pending_ids = wiki_service.get_pending_file_ids(db)
     if not pending_ids:
         return {"ok": True, "message": "No pending files", "count": 0}
+    # Durable build: persist scope so the scheduler auto-pauses/resumes it.
+    scheduler.update_settings(
+        scheduled_run_active=True,
+        scheduled_tag_names=[],
+        scheduled_file_ids=pending_ids,
+        scheduled_processed_file_ids=[],
+    )
     if not await llama_supervisor.ensure_running():
         raise HTTPException(status_code=503, detail="Local LLM servers did not start in time.")
     asyncio.create_task(wiki_service.ingest_sources(file_ids=pending_ids))
@@ -313,7 +325,10 @@ async def get_stats(db: Session = Depends(get_db)):
     """Get wiki statistics including library sync status."""
     stats = wiki_service.get_stats(db)
     sync = wiki_service.get_sync_status(db)
-    return {**stats, **sync}
+    # scheduled_run_active distinguishes a paused-but-active build (auto-resumes)
+    # from a cancelled one, so the UI knows whether to show the "Paused" state.
+    settings = scheduler.get_settings()
+    return {**stats, **sync, "scheduled_run_active": settings["scheduled_run_active"]}
 
 
 # ── Reset ─────────────────────────────────────────────────────────────────

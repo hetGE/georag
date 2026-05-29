@@ -76,7 +76,6 @@ class SettingsPayload(BaseModel):
     schedule_enabled: Optional[bool] = None
     downtime_start: Optional[str] = Field(default=None, description='"HH:MM"')
     downtime_end: Optional[str] = Field(default=None, description='"HH:MM"')
-    auto_shutdown_on_manual_pause: Optional[bool] = None
 
 
 def _validate_hhmm(value: str) -> bool:
@@ -112,7 +111,6 @@ async def get_status():
         "schedule_enabled": s["schedule_enabled"],
         "downtime_start": s["downtime_start"],
         "downtime_end": s["downtime_end"],
-        "auto_shutdown_on_manual_pause": s["auto_shutdown_on_manual_pause"],
         "in_downtime": in_dt,
         "next_boundary": scheduler.next_boundary_iso(),
         "force_uptime_until": scheduler.force_uptime_until(),

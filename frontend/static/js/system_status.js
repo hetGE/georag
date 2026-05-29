@@ -68,24 +68,26 @@
         }
         pill.textContent = label;
 
+        // During downtime the End Downtime button replaces the Schedule button
+        // (one control in that slot, not both).
+        const scheduleBtn = document.getElementById('sys-schedule-btn');
         if (s.in_downtime) {
             endBtn.style.display = '';
+            if (scheduleBtn) scheduleBtn.style.display = 'none';
             document.body.setAttribute('data-downtime', 'true');
         } else {
             endBtn.style.display = 'none';
+            if (scheduleBtn) scheduleBtn.style.display = '';
             document.body.removeAttribute('data-downtime');
         }
 
-        // Upcoming-event pill: shown whenever the schedule is enabled, so the
-        // user can glance at when the next pause/resume will happen.
+        // Upcoming-event pill: only while running ("Pausing at …"). During
+        // downtime the main pill already shows "resumes …", so repeating it here
+        // would just duplicate that information.
         const eventPill = document.getElementById('sys-next-event-pill');
         if (eventPill) {
-            if (s.schedule_enabled) {
-                if (s.in_downtime) {
-                    eventPill.textContent = `Resuming at ${fmtHHMMFromSetting(s.downtime_end)}`;
-                } else {
-                    eventPill.textContent = `Pausing at ${fmtHHMMFromSetting(s.downtime_start)}`;
-                }
+            if (s.schedule_enabled && !s.in_downtime) {
+                eventPill.textContent = `Pausing at ${fmtHHMMFromSetting(s.downtime_start)}`;
                 eventPill.style.display = '';
             } else {
                 eventPill.style.display = 'none';
@@ -139,7 +141,6 @@
         document.getElementById('sched-enabled-input').checked = !!settings.schedule_enabled;
         document.getElementById('sched-start-input').value = settings.downtime_start || '06:30';
         document.getElementById('sched-end-input').value = settings.downtime_end || '09:30';
-        document.getElementById('sched-autoshutdown-input').checked = !!settings.auto_shutdown_on_manual_pause;
         dlg.showModal();
     }
 
@@ -148,7 +149,6 @@
             schedule_enabled: document.getElementById('sched-enabled-input').checked,
             downtime_start: document.getElementById('sched-start-input').value || '06:30',
             downtime_end: document.getElementById('sched-end-input').value || '09:30',
-            auto_shutdown_on_manual_pause: document.getElementById('sched-autoshutdown-input').checked,
         };
         const res = await apiPut('/api/system/settings', payload);
         if (res && res.ok) {
@@ -162,15 +162,29 @@
     async function endDowntimeNow() {
         const btn = document.getElementById('sys-end-downtime-btn');
         if (btn) { btn.disabled = true; btn.setAttribute('aria-busy', 'true'); }
+        // Optimistic: reflect "leaving downtime / starting LLMs" immediately so
+        // the UI doesn't sit on the paused state while llama restarts in the
+        // background. The next status poll reconciles the real state.
+        const prev = lastStatus;
+        if (prev) {
+            applyStatus({
+                ...prev,
+                in_downtime: false,
+                llama_state: 'starting',
+                state_label: 'Starting LLMs',
+                state_severity: 'busy',
+            });
+        }
         try {
             await apiPost('/api/system/end-downtime');
-            // Optimistic poll
-            setTimeout(pollOnce, 1000);
+        } catch (e) {
+            if (prev) applyStatus(prev);  // roll back on failure
         } finally {
             if (btn) {
                 btn.disabled = false;
                 btn.removeAttribute('aria-busy');
             }
+            setTimeout(pollOnce, 1500);
         }
     }
 

@@ -51,9 +51,9 @@
         <article>
             <header>
                 <button aria-label="Close" rel="prev" class="close-schedule-dialog"></button>
-                <h3>Scheduled Downtime &amp; Auto-Shutdown</h3>
+                <h3>Scheduled Downtime</h3>
             </header>
-            <p class="secondary" style="font-size:0.85rem;">During the daily downtime window, any running wiki build is gracefully paused and the local llama-servers are shut down to free memory. At the end of the window the servers come back up and the wiki build resumes.</p>
+            <p class="secondary" style="font-size:0.85rem;">During the daily downtime window, any running wiki build is gracefully paused and the local llama-servers are shut down to free memory. At the end of the window the servers come back up and the wiki build resumes automatically.</p>
             <label style="display:flex;gap:0.5rem;align-items:center;">
                 <input type="checkbox" id="sched-enabled-input">
                 <span>Enable daily downtime window</span>
@@ -66,12 +66,6 @@
                     <input type="time" id="sched-end-input" value="09:30">
                 </label>
             </div>
-            <hr>
-            <label style="display:flex;gap:0.5rem;align-items:center;">
-                <input type="checkbox" id="sched-autoshutdown-input">
-                <span>Auto-shutdown llama-servers when wiki is manually paused</span>
-            </label>
-            <p class="secondary" style="font-size:0.8rem;margin-top:0.25rem;">When on, clicking <strong>Stop</strong> on a wiki build also frees the ~7-10 GB of memory the llama-servers use. They stay paused until you next click in Chat, Documents, or Wiki — or click the status pill to start them manually.</p>
             <footer>
                 <button class="secondary outline close-schedule-dialog">Cancel</button>
                 <button id="sched-save-btn">Save</button>
@@ -209,10 +203,13 @@
         }
     };
 
-    window.showLlmWarning = function(detail) {
+    window.showLlmWarning = function(detail, opts) {
+        opts = opts || {};
         const dlg = document.getElementById('llm-warning-modal');
         if (!dlg || dlg.open) return;
-        if (detail) document.getElementById('llm-warning-detail').textContent = detail;
+        const titleEl = dlg.querySelector('.llm-warning-title');
+        if (titleEl) titleEl.textContent = opts.title || 'Local LLM Servers Not Available';
+        document.getElementById('llm-warning-detail').textContent = detail || '';
         dlg.showModal();
     };
 
@@ -220,6 +217,15 @@
     window.requireLlmServers = async function() {
         const result = await window.checkLlmServers();
         if (result.status === 'ok') return true;
+        // During scheduled downtime the servers are intentionally paused — show a
+        // friendly note (not a connection error) and point at End Downtime.
+        const st = window.systemStatus && window.systemStatus.get && window.systemStatus.get();
+        if (st && st.in_downtime) {
+            window.showLlmWarning(
+                'Local models are paused for the scheduled downtime window. Click "End Downtime" in the top bar to start them now.',
+                { title: 'Local models are paused' });
+            return false;
+        }
         window.showLlmWarning(result.detail);
         return false;
     };
@@ -244,9 +250,16 @@
 
         dismissBtn.addEventListener('click', () => dlg.close());
 
-        // Proactive check on page load
-        window.checkLlmServers().then(result => {
-            if (result.status !== 'ok') window.showLlmWarning(result.detail);
+        // Proactive check on page load — but stay quiet during scheduled
+        // downtime, where the servers are intentionally paused (the nav pill
+        // already communicates this).
+        window.checkLlmServers().then(async result => {
+            if (result.status === 'ok') return;
+            try {
+                const s = await fetch('/api/system/status').then(r => r.json());
+                if (s && s.in_downtime) return;
+            } catch {}
+            window.showLlmWarning(result.detail);
         });
     })();
     </script>

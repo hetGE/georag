@@ -32,6 +32,13 @@ def init_db():
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE conversations ADD COLUMN deleted_at DATETIME"))
 
+    # Migration: add per-build attempted-file tracking to an existing app_settings table
+    app_cols = [c['name'] for c in insp.get_columns('app_settings')]
+    if 'scheduled_processed_file_ids' not in app_cols:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE app_settings ADD COLUMN scheduled_processed_file_ids JSON DEFAULT '[]'"))
+
     # Seed AppSettings row (id=1) if missing
     with engine.begin() as conn:
         row = conn.execute(text("SELECT id FROM app_settings WHERE id=1")).first()
@@ -39,6 +46,6 @@ def init_db():
             conn.execute(text(
                 "INSERT INTO app_settings (id, schedule_enabled, downtime_start, downtime_end, "
                 "auto_shutdown_on_manual_pause, scheduled_run_active, "
-                "scheduled_tag_names, scheduled_file_ids) "
-                "VALUES (1, 0, '06:30', '09:30', 0, 0, '[]', '[]')"
+                "scheduled_tag_names, scheduled_file_ids, scheduled_processed_file_ids) "
+                "VALUES (1, 0, '06:30', '09:30', 0, 0, '[]', '[]', '[]')"
             ))

@@ -274,8 +274,7 @@
                         <h2>Wiki</h2>
                         <p class="secondary"><strong id="wiki-ready-count">0</strong> processed documents are ready to become your knowledge base.</p>
                         <button id="wiki-init-btn" class="wiki-init-cta">Initialize Wiki</button>
-                        <button id="wiki-scheduled-init-btn" class="wiki-init-cta wiki-scheduled-btn outline" title="Run during the daily uptime window only">Scheduled Run</button>
-                        <p class="secondary" style="font-size:0.82rem;">The LLM will read your documents and build interlinked wiki pages with cross-references.</p>
+                        <p class="secondary" style="font-size:0.82rem;">The LLM will read your documents and build interlinked wiki pages with cross-references. The build pauses automatically during the scheduled downtime window and resumes after.</p>
                     </div>
 
                     <!-- State: Wiki Ingest In Progress -->
@@ -283,8 +282,11 @@
                         <h2>Building Wiki...</h2>
                         <progress id="wiki-init-progress-bar" value="0" max="100"></progress>
                         <p id="wiki-init-progress-text" class="secondary">Starting ingest...</p>
-                        <button id="wiki-init-stop-btn" class="outline secondary" style="margin-top:0.5rem;">Stop</button>
-                        <p class="secondary" style="font-size:0.8rem;margin-top:0.5rem;">You can stop and resume this process safely at any time, progress is preserved.</p>
+                        <div style="display:flex;gap:0.5rem;justify-content:center;margin-top:0.5rem;">
+                            <button id="wiki-init-stop-btn" class="outline secondary">Pause</button>
+                            <button id="wiki-init-cancel-btn" class="outline secondary">Cancel</button>
+                        </div>
+                        <p class="secondary" style="font-size:0.8rem;margin-top:0.5rem;">Pause resumes automatically when the models are up; Cancel ends the build. Progress is preserved either way.</p>
                     </div>
 
                     <!-- State: Wiki Ingest Stopped / Paused -->
@@ -292,8 +294,10 @@
                         <h2>Wiki Build Paused</h2>
                         <progress id="wiki-stopped-progress-bar" value="0" max="100"></progress>
                         <p id="wiki-stopped-progress-text" class="secondary"></p>
-                        <button id="wiki-resume-btn" class="wiki-init-cta" style="margin-top:0.5rem;">Resume</button>
-                        <button id="wiki-scheduled-resume-btn" class="wiki-init-cta wiki-scheduled-btn outline" title="Resume during the daily uptime window only">Scheduled Run</button>
+                        <div style="display:flex;gap:0.5rem;justify-content:center;margin-top:0.5rem;">
+                            <button id="wiki-resume-btn" class="wiki-init-cta">Resume</button>
+                            <button id="wiki-stopped-cancel-btn" class="outline secondary">Cancel</button>
+                        </div>
                     </div>
 
                     <!-- State: Wiki Populated -->
@@ -373,7 +377,7 @@
             </div>
             <footer>
                 <button class="secondary outline close-wiki-ingest">Cancel</button>
-                <button id="wiki-ingest-stop-btn" class="outline secondary" style="display:none;">Stop</button>
+                <button id="wiki-ingest-stop-btn" class="outline secondary" style="display:none;">Pause</button>
                 <button id="wiki-ingest-start-btn">Start Rebuild</button>
             </footer>
         </article>

@@ -1,20 +1,30 @@
 """FastAPI application entry point."""
 import logging
+from logging.handlers import RotatingFileHandler
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.requests import Request
 
-from backend.config import RAG_DIR, BUNDLE_DIR, DEFAULT_TAGS
+from backend.config import RAG_DIR, BUNDLE_DIR, DEFAULT_TAGS, LOG_DIR
 from backend.models.database import init_db, SessionLocal
 from backend.models.schemas import Tag
 
-# Configure logging for backend modules
+# Configure logging for backend modules. Logs go to stdout (uvicorn console) and
+# a rotating file (data/logs/app.log) so lifecycle/scheduler decisions are
+# inspectable after the fact without scraping the console.
+_log_format = "%(asctime)s %(levelname)-7s [%(name)s] %(message)s"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+_file_handler = RotatingFileHandler(
+    LOG_DIR / "app.log", maxBytes=5_000_000, backupCount=3, encoding="utf-8",
+)
+_file_handler.setFormatter(logging.Formatter(_log_format, datefmt="%Y-%m-%d %H:%M:%S"))
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s %(levelname)-7s [%(name)s] %(message)s",
+    format=_log_format,
     datefmt="%H:%M:%S",
+    handlers=[logging.StreamHandler(), _file_handler],
 )
 # Keep third-party loggers quiet
 logging.getLogger("httpx").setLevel(logging.WARNING)
@@ -79,8 +89,21 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="GeoRAG", version="1.0.0", lifespan=lifespan)
 
+
+class NoCacheStaticFiles(StaticFiles):
+    """Serve static assets with 'no-cache' so the browser always revalidates
+    (cheap 304 via the existing ETag). Prevents stale JS/CSS lingering after an
+    edit — which can break the page when cached JS references markup that has
+    since changed."""
+
+    async def get_response(self, path, scope):
+        response = await super().get_response(path, scope)
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
+
+
 # Mount static files (BUNDLE_DIR points to _MEIPASS when running as EXE)
-app.mount("/static", StaticFiles(directory=str(BUNDLE_DIR / "frontend" / "static")), name="static")
+app.mount("/static", NoCacheStaticFiles(directory=str(BUNDLE_DIR / "frontend" / "static")), name="static")
 
 # Templates
 templates = Jinja2Templates(directory=str(BUNDLE_DIR / "frontend" / "templates"))

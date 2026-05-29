@@ -744,6 +744,22 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
     _ingest_last_tag_names[:] = tag_names
     _ingest_last_file_ids[:] = file_ids
 
+    # Convergence: if this run is the active scheduled build (same scope), seed
+    # the skip set with files already attempted in prior (paused) runs. Without
+    # this, files that legitimately produce no page (videos, images, empty docs)
+    # are never "covered" and get re-processed on every resume, so the build
+    # never converges and the remaining-sources count stays stuck.
+    from backend.services import scheduler as _sched
+    _settings = _sched.get_settings()
+    _is_active_build = (
+        _settings["scheduled_run_active"]
+        and sorted(_settings["scheduled_tag_names"]) == sorted(tag_names)
+        and sorted(_settings["scheduled_file_ids"]) == sorted(file_ids)
+    )
+    attempted_ids: set[int] = (
+        set(_settings["scheduled_processed_file_ids"]) if _is_active_build else set()
+    )
+
     db = SessionLocal()
     try:
         from backend.models.schemas import File, FileTag, Tag
@@ -766,12 +782,24 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
             f for f in all_files
             if f.relative_path not in covered_paths
             and f.filename not in covered_filenames
+            and f.id not in attempted_ids
         ]
 
         _ingest_status["total_sources"] = len(files)
         _ingest_status["previously_covered"] = len(all_files) - len(files)
-        logger.info("Wiki ingest: %d files to process (%d already covered by wiki pages)",
-                     len(files), _ingest_status["previously_covered"])
+        logger.info(
+            "Wiki ingest: matched=%d to_process=%d already_done=%d "
+            "(covered_index: %d paths, %d filenames; attempted_this_build=%d; active_build=%s)",
+            len(all_files), len(files), _ingest_status["previously_covered"],
+            len(covered_paths), len(covered_filenames), len(attempted_ids), _is_active_build,
+        )
+        if all_files and not files:
+            logger.warning(
+                "Wiki ingest: every matched source (%d) was filtered out as "
+                "already-covered — this run will create/update nothing. If this is "
+                "a resume, the covered-files filter may be over-matching.",
+                len(all_files),
+            )
 
         index_text = _get_index_text(db)
 
@@ -896,6 +924,15 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
 
                 _ingest_processed_file_ids.add(f.id)
                 _ingest_status["processed_sources"] = len(_ingest_processed_file_ids)
+
+            # Persist attempted file IDs for the active build so a pause/resume
+            # converges: every file in this batch was sent to the LLM, so it's
+            # "done" for this build even if it produced no page. Re-check the
+            # active flag first so a concurrent Cancel (which clears the record)
+            # isn't undone by a late batch write from the draining task.
+            if _is_active_build and _sched.get_settings()["scheduled_run_active"]:
+                attempted_ids.update(f.id for f in batch)
+                _sched.update_settings(scheduled_processed_file_ids=list(attempted_ids))
 
             # Refresh index once per batch for next batch's context
             index_text = _get_index_text(db)

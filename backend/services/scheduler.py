@@ -38,10 +38,10 @@ def _row_to_dict(s: AppSettings) -> dict:
         "schedule_enabled": bool(s.schedule_enabled),
         "downtime_start": s.downtime_start or "06:30",
         "downtime_end": s.downtime_end or "09:30",
-        "auto_shutdown_on_manual_pause": bool(s.auto_shutdown_on_manual_pause),
         "scheduled_run_active": bool(s.scheduled_run_active),
         "scheduled_tag_names": list(s.scheduled_tag_names or []),
         "scheduled_file_ids": list(s.scheduled_file_ids or []),
+        "scheduled_processed_file_ids": list(s.scheduled_processed_file_ids or []),
     }
 
 
@@ -67,8 +67,9 @@ def update_settings(**kwargs) -> dict:
     """Update one or more setting fields. Unknown keys are ignored."""
     allowed = {
         "schedule_enabled", "downtime_start", "downtime_end",
-        "auto_shutdown_on_manual_pause", "scheduled_run_active",
+        "scheduled_run_active",
         "scheduled_tag_names", "scheduled_file_ids",
+        "scheduled_processed_file_ids",
     }
     db = SessionLocal()
     try:
@@ -89,6 +90,7 @@ def clear_scheduled_run():
         scheduled_run_active=False,
         scheduled_tag_names=[],
         scheduled_file_ids=[],
+        scheduled_processed_file_ids=[],
     )
 
 
@@ -186,7 +188,9 @@ async def enter_downtime():
     if wiki_service.get_ingest_status()["is_running"]:
         logger.info("Scheduler: stopping wiki ingest gracefully")
         await wiki_service.stop_ingest()
-        await _wait_for_phase("stopped", timeout=600.0)
+        reached = await _wait_for_phase("stopped", timeout=600.0)
+        logger.info("Scheduler: wiki drain complete (reached_stopped=%s, phase=%s)",
+                    reached, wiki_service.get_ingest_status()["phase"])
     logger.info("Scheduler: stopping llama-servers")
     await llama_supervisor.stop_all()
 
@@ -198,6 +202,7 @@ async def _ensure_llama_up_if_needed(s: dict, chat_up: bool) -> bool:
     if chat_up:
         return True
     if not (_pending_resume_after_downtime or s["scheduled_run_active"]):
+        logger.info("Scheduler: llama stays down (no pending resume, no scheduled run)")
         return False
     logger.info(
         "Scheduler: starting llama-servers (pending_resume=%s scheduled_run=%s)",
@@ -218,6 +223,10 @@ async def _resume_scheduled_wiki_if_needed(s: dict, chat_up: bool, wiki_running:
     if not s["scheduled_run_active"]:
         return
     if not chat_up or wiki_running:
+        logger.info(
+            "Scheduler: scheduled run queued but not resuming yet "
+            "(chat_up=%s wiki_running=%s)", chat_up, wiki_running,
+        )
         return
     tag_names = s["scheduled_tag_names"]
     file_ids = s["scheduled_file_ids"]
@@ -252,6 +261,13 @@ async def _tick():
     in_dt = is_in_downtime(s)
     chat_up = await llama_supervisor.is_running("chat")
     wiki_running = wiki_service.get_ingest_status()["is_running"]
+
+    logger.info(
+        "Scheduler tick: in_dt=%s chat_up=%s wiki_running=%s "
+        "scheduled_run_active=%s pending_resume=%s",
+        in_dt, chat_up, wiki_running,
+        s["scheduled_run_active"], _pending_resume_after_downtime,
+    )
 
     if in_dt:
         # Should be paused. Stop wiki + llama if anything is still up.
