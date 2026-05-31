@@ -11,6 +11,11 @@
     let allTags = [];
     let selectedIngestTags = new Set();
     let ingestPollTimer = null;
+    // True while a start/resume POST is in flight. That POST awaits llama
+    // startup (ensure_running), which can take many seconds; during that wait the
+    // backend ingest isn't "running" yet, so the 3s readiness poll must not flip
+    // the view back to the prior (stopped/populated) state — keep "Building".
+    let ingestStartInFlight = false;
     let readinessPollTimer = null;
     let lastSyncStats = null;
     let lastIngestTagNames = [];
@@ -246,6 +251,14 @@
         const welcome = document.getElementById('wiki-welcome');
         if (welcome.style.display === 'none') return;
 
+        // A start/resume is in flight (llama may still be launching, so the
+        // backend ingest isn't "running" yet). Keep the Building view rather
+        // than briefly flipping back to the stopped/populated state.
+        if (ingestStartInFlight) {
+            document.getElementById('wiki-state-ingesting').style.display = '';
+            return;
+        }
+
         if (stats.wiki_ingest_running) {
             // Ingest is running — show progress
             document.getElementById('wiki-state-ingesting').style.display = '';
@@ -391,12 +404,15 @@
         document.getElementById('wiki-init-progress-text').textContent = 'Starting wiki initialization...';
         document.getElementById('wiki-init-progress-bar').value = 0;
 
+        ingestStartInFlight = true;
         try {
             await apiPost('/api/wiki/ingest', { tag_names: [], file_ids: [] });
             pollInitProgress();
         } catch (e) {
             document.getElementById('wiki-init-progress-text').textContent =
                 'Error: ' + (e.message || 'Failed to start ingest');
+        } finally {
+            ingestStartInFlight = false;
         }
     }
 
@@ -456,12 +472,15 @@
         document.getElementById('wiki-state-ingesting').style.display = '';
         document.getElementById('wiki-init-progress-text').textContent = 'Resuming… (starting models if needed)';
 
+        ingestStartInFlight = true;
         try {
             await apiPost('/api/wiki/ingest', scope);
             pollInitProgress();
         } catch (e) {
             document.getElementById('wiki-init-progress-text').textContent =
                 'Error: ' + (e.message || 'Failed to resume ingest');
+        } finally {
+            ingestStartInFlight = false;
         }
     }
 
@@ -475,12 +494,15 @@
         document.getElementById('wiki-init-progress-text').textContent = 'Starting ingest for pending files...';
         document.getElementById('wiki-init-progress-bar').value = 0;
 
+        ingestStartInFlight = true;
         try {
             await apiPost('/api/wiki/ingest/pending');
             pollInitProgress();
         } catch (e) {
             document.getElementById('wiki-init-progress-text').textContent =
                 'Error: ' + (e.message || 'Failed to start ingest');
+        } finally {
+            ingestStartInFlight = false;
         }
     }
 
@@ -1007,6 +1029,7 @@
             stopBtn.textContent = 'Stop building';
         }
 
+        ingestStartInFlight = true;
         try {
             await apiPost('/api/wiki/ingest', {
                 tag_names: lastIngestTagNames,
@@ -1017,6 +1040,8 @@
             btn.setAttribute('aria-busy', 'false');
             if (stopBtn) stopBtn.style.display = 'none';
             alert('Ingest failed: ' + e.message);
+        } finally {
+            ingestStartInFlight = false;
         }
     }
 
