@@ -217,13 +217,26 @@
     window.requireLlmServers = async function() {
         const result = await window.checkLlmServers();
         if (result.status === 'ok') return true;
-        // During scheduled downtime the servers are intentionally paused — show a
-        // friendly note (not a connection error) and point at End Downtime.
+        // The servers can be intentionally not-running for several reasons —
+        // distinguish each with a friendly message instead of the scary
+        // "Local LLM Servers Not Available / Retry Connection" error.
         const st = window.systemStatus && window.systemStatus.get && window.systemStatus.get();
         if (st && st.in_downtime) {
             window.showLlmWarning(
                 'Local models are paused for the scheduled downtime window. Click "End Downtime" in the top bar to start them now.',
                 { title: 'Local models are paused' });
+            return false;
+        }
+        if (st && st.llama_state === 'paused') {
+            window.showLlmWarning(
+                'Local models are paused. Click the "LLMs paused" pill in the top bar to start them.',
+                { title: 'Local models are paused' });
+            return false;
+        }
+        if (st && st.llama_state === 'starting') {
+            window.showLlmWarning(
+                'Local models are starting up. Give them a few seconds and try again.',
+                { title: 'Local models are starting' });
             return false;
         }
         window.showLlmWarning(result.detail);
@@ -250,14 +263,14 @@
 
         dismissBtn.addEventListener('click', () => dlg.close());
 
-        // Proactive check on page load — but stay quiet during scheduled
-        // downtime, where the servers are intentionally paused (the nav pill
-        // already communicates this).
+        // Proactive check on page load — stay quiet whenever the servers are
+        // intentionally not-running (scheduled downtime, user-paused, or mid
+        // startup). The nav pill already communicates each of these.
         window.checkLlmServers().then(async result => {
             if (result.status === 'ok') return;
             try {
                 const s = await fetch('/api/system/status').then(r => r.json());
-                if (s && s.in_downtime) return;
+                if (s && (s.in_downtime || s.llama_state === 'paused' || s.llama_state === 'starting')) return;
             } catch {}
             window.showLlmWarning(result.detail);
         });

@@ -167,8 +167,17 @@ async def start_ingest(request: WikiIngestRequest):
     tag_names = request.tag_names or []
     file_ids = request.file_ids or []
     prev = scheduler.get_settings()
+    # "Same scope" covers both a fresh resume of an in-progress build and a
+    # resume after manual Stop (which leaves active=False but keeps scope +
+    # attempted so progress isn't lost). The scope must be non-trivial — i.e.
+    # we previously had a build at all (non-empty scope or attempted history).
+    prev_had_build = bool(
+        prev["scheduled_tag_names"]
+        or prev["scheduled_file_ids"]
+        or prev["scheduled_processed_file_ids"]
+    )
     same_scope = (
-        prev["scheduled_run_active"]
+        prev_had_build
         and sorted(prev["scheduled_tag_names"]) == sorted(tag_names)
         and sorted(prev["scheduled_file_ids"]) == sorted(file_ids)
     )
@@ -198,20 +207,25 @@ async def ingest_status():
 
 @router.post("/wiki/ingest/stop")
 async def stop_ingest():
-    """Pause the running build. Cancels the in-flight task but keeps the active
-    build's scope + progress, so the scheduler auto-resumes it when the LLMs are
-    up and we're outside the downtime window. Use /wiki/ingest/cancel to abandon.
-    """
+    """Gracefully stop the running build: wait for the current file's LLM call
+    + apply to finish, then shut down the llama-servers to free memory. The
+    build's scope + progress (attempted files) are preserved so the user can
+    Resume later. The scheduler will not auto-resume (active flag is cleared)."""
     await wiki_service.stop_ingest()
-    return {"ok": True}
+    # Clear the active flag so the scheduler won't auto-resume; but keep
+    # scope + attempted so manual Resume picks up exactly where this left off.
+    scheduler.update_settings(scheduled_run_active=False)
 
+    # Drain (wait for "stopped" phase) + shut down llama. Don't block the
+    # response on this — the frontend shows "Stopping..." while it polls.
+    async def _drain_and_shutdown():
+        for _ in range(300):  # up to 10 minutes
+            if wiki_service.get_ingest_status()["phase"] == "stopped":
+                break
+            await asyncio.sleep(2.0)
+        await llama_supervisor.stop_all()
 
-@router.post("/wiki/ingest/cancel")
-async def cancel_ingest():
-    """Abandon the current build: stop the in-flight task and clear the active
-    build so the scheduler will not auto-resume it."""
-    await wiki_service.stop_ingest()
-    scheduler.clear_scheduled_run()
+    asyncio.create_task(_drain_and_shutdown())
     return {"ok": True}
 
 

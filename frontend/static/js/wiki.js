@@ -111,13 +111,10 @@
             initializeWiki();
         });
 
-        // Pause / Cancel / Resume / Pending buttons. Pause yields the in-flight
-        // task but keeps the build active (scheduler auto-resumes); Cancel
-        // abandons it.
-        document.getElementById('wiki-init-stop-btn')?.addEventListener('click', pauseIngest);
-        document.getElementById('wiki-ingest-stop-btn')?.addEventListener('click', pauseIngest);
-        document.getElementById('wiki-init-cancel-btn')?.addEventListener('click', cancelIngest);
-        document.getElementById('wiki-stopped-cancel-btn')?.addEventListener('click', cancelIngest);
+        // Stop / Resume / Pending buttons. Stop drains gracefully and frees
+        // memory; scope + progress are preserved so Resume continues exactly.
+        document.getElementById('wiki-init-stop-btn')?.addEventListener('click', stopIngest);
+        document.getElementById('wiki-ingest-stop-btn')?.addEventListener('click', stopIngest);
         document.getElementById('wiki-resume-btn')?.addEventListener('click', resumeIngest);
         document.getElementById('wiki-process-pending-btn')?.addEventListener('click', processPendingFiles);
 
@@ -253,9 +250,9 @@
             // Ingest is running — show progress
             document.getElementById('wiki-state-ingesting').style.display = '';
             pollInitProgress();
-        } else if (stats.wiki_ingest_stopped && stats.scheduled_run_active) {
-            // Paused mid-build and still active → will auto-resume. A cancelled
-            // build clears scheduled_run_active, so it won't land here.
+        } else if (stats.wiki_ingest_stopped) {
+            // Build was stopped (either by user or by downtime). Scope +
+            // progress are preserved — show the stopped state with Resume.
             document.getElementById('wiki-state-stopped').style.display = '';
             fetchAndShowStoppedProgress();
         } else if (stats.library_total_files === 0) {
@@ -307,7 +304,7 @@
                 const pct = Math.round((status.processed_sources / status.total_sources) * 100);
                 bar.value = pct;
                 text.textContent = `${status.processed_sources}/${status.total_sources} sources processed. ` +
-                    `${status.pages_created} created, ${status.pages_updated} updated. Paused.`;
+                    `${status.pages_created} created, ${status.pages_updated} updated. Stopped.`;
             }
         } catch (e) { /* ignore */ }
     }
@@ -403,43 +400,52 @@
         }
     }
 
-    async function pauseIngest() {
+    async function stopIngest() {
+        // Optimistic: immediately hide the Stop button and show "Stopping…"
+        // text so the user sees feedback before the next poll tick. The poll
+        // will keep it in sync with the actual phase from here.
+        const inline = document.getElementById('wiki-init-stop-btn');
+        const stoppingText = document.getElementById('wiki-init-stopping-text');
+        const dlg = document.getElementById('wiki-ingest-stop-btn');
+        if (inline) inline.style.display = 'none';
+        if (stoppingText) stoppingText.style.display = '';
+        if (dlg) { dlg.disabled = true; dlg.setAttribute('aria-busy', 'true'); dlg.textContent = 'Stopping…'; }
         try {
             await apiPost('/api/wiki/ingest/stop');
-            // Pause keeps the build active; the scheduler resumes it when the
-            // models are up and we're outside the downtime window. UI updates via poll.
         } catch (e) {
-            console.error('Failed to pause ingest:', e);
-        }
-    }
-
-    async function cancelIngest() {
-        const ok = (window.systemStatus && window.systemStatus.confirm)
-            ? await window.systemStatus.confirm({
-                title: 'Cancel wiki build?',
-                body: 'This abandons the current build so it will not auto-resume. Pages already created are kept — you can start a new build any time.',
-                confirmLabel: 'Cancel build', cancelLabel: 'Keep building', danger: true,
-              })
-            : window.confirm('Cancel the current wiki build? It will not auto-resume.');
-        if (!ok) return;
-        try {
-            await apiPost('/api/wiki/ingest/cancel');
-            if (window.systemStatus) window.systemStatus.refresh();
-        } catch (e) {
-            console.error('Failed to cancel ingest:', e);
+            console.error('Failed to stop ingest:', e);
+            // Restore on failure
+            if (inline) inline.style.display = '';
+            if (stoppingText) stoppingText.style.display = 'none';
+            if (dlg) { dlg.disabled = false; dlg.removeAttribute('aria-busy'); dlg.textContent = 'Stop building'; }
         }
     }
 
     async function resumeIngest() {
-        if (!await window.requireLlmServers()) return;
+        // During scheduled downtime, show a friendly note instead of
+        // attempting to start (which would fight the scheduler). Outside
+        // downtime, llama may be down (we shut it down on Stop) — that's fine,
+        // the backend's start_ingest will start it up as part of the resume.
+        const sysSt = window.systemStatus && window.systemStatus.get && window.systemStatus.get();
+        if (sysSt && sysSt.in_downtime) {
+            window.showLlmWarning(
+                'Local models are paused for the scheduled downtime window. Click "End Downtime" in the top bar to start them now.',
+                { title: 'Local models are paused' });
+            return;
+        }
 
-        // Resume the persisted active build using its server-side scope (the
-        // in-memory vars are empty after a reload). Sending the same scope keeps
-        // the backend's per-build "attempted files" progress.
+        // Resume using the server-persisted scope (in-memory vars are empty
+        // after a reload). Sending the same scope preserves the per-build
+        // "attempted files" progress so the resume continues, not restarts.
         let scope = { tag_names: lastIngestTagNames, file_ids: lastIngestFileIds };
         try {
             const s = await apiGet('/api/system/settings');
-            if (s && s.scheduled_run_active) {
+            const hasSaved = s && (
+                (s.scheduled_tag_names && s.scheduled_tag_names.length) ||
+                (s.scheduled_file_ids && s.scheduled_file_ids.length) ||
+                (s.scheduled_processed_file_ids && s.scheduled_processed_file_ids.length)
+            );
+            if (hasSaved) {
                 scope = { tag_names: s.scheduled_tag_names || [], file_ids: s.scheduled_file_ids || [] };
             }
         } catch (e) { /* fall back to in-memory scope */ }
@@ -448,7 +454,7 @@
             el.style.display = 'none';
         });
         document.getElementById('wiki-state-ingesting').style.display = '';
-        document.getElementById('wiki-init-progress-text').textContent = 'Resuming...';
+        document.getElementById('wiki-init-progress-text').textContent = 'Resuming… (starting models if needed)';
 
         try {
             await apiPost('/api/wiki/ingest', scope);
@@ -494,16 +500,19 @@
 
     function pollInitProgress() {
         if (ingestPollTimer) clearInterval(ingestPollTimer);
-        // Reset the pause buttons up front so a (re)started build never shows the
-        // stale "Pausing…" label from a previous pause before the first poll.
+        // Reset the Stop button(s) up front and hide the "Stopping…" text so a
+        // (re)started build never inherits stale stopping UI from a prior stop.
         ['wiki-init-stop-btn', 'wiki-ingest-stop-btn'].forEach(id => {
             const btn = document.getElementById(id);
             if (btn) {
+                btn.style.display = '';
                 btn.disabled = false;
                 btn.removeAttribute('aria-busy');
-                btn.textContent = 'Pause';
+                btn.textContent = 'Stop building';
             }
         });
+        const _stoppingText = document.getElementById('wiki-init-stopping-text');
+        if (_stoppingText) _stoppingText.style.display = 'none';
         ingestPollTimer = setInterval(async () => {
             try {
                 const status = await apiGet('/api/wiki/ingest/status');
@@ -538,23 +547,32 @@
 
                 // Handle stopping phase — disable stop buttons, show "Stopping..."
                 const inlineStopBtn = document.getElementById('wiki-init-stop-btn');
+                const inlineStoppingText = document.getElementById('wiki-init-stopping-text');
                 const dlgStopBtn = document.getElementById('wiki-ingest-stop-btn');
-                const stopBtns = [inlineStopBtn, dlgStopBtn].filter(Boolean);
                 if (status.phase === 'stopping') {
-                    stopBtns.forEach(btn => {
-                        btn.disabled = true;
-                        btn.setAttribute('aria-busy', 'true');
-                        btn.textContent = 'Pausing\u2026';
-                    });
+                    if (inlineStopBtn) inlineStopBtn.style.display = 'none';
+                    if (inlineStoppingText) inlineStoppingText.style.display = '';
+                    if (dlgStopBtn) {
+                        dlgStopBtn.disabled = true;
+                        dlgStopBtn.setAttribute('aria-busy', 'true');
+                        dlgStopBtn.textContent = 'Stopping\u2026';
+                    }
                 } else {
-                    // Any other live phase (ingesting/starting/\u2026): ensure the
-                    // button reads "Pause", so a resumed build doesn't inherit the
-                    // stale "Pausing\u2026" label left over from the previous pause.
-                    stopBtns.forEach(btn => {
-                        btn.disabled = false;
-                        btn.removeAttribute('aria-busy');
-                        btn.textContent = 'Pause';
-                    });
+                    // Any other live phase: restore the Stop button and hide
+                    // the "Stopping\u2026" text, so a resumed build never inherits
+                    // a stale stopping label.
+                    if (inlineStopBtn) {
+                        inlineStopBtn.style.display = '';
+                        inlineStopBtn.disabled = false;
+                        inlineStopBtn.removeAttribute('aria-busy');
+                        inlineStopBtn.textContent = 'Stop building';
+                    }
+                    if (inlineStoppingText) inlineStoppingText.style.display = 'none';
+                    if (dlgStopBtn) {
+                        dlgStopBtn.disabled = false;
+                        dlgStopBtn.removeAttribute('aria-busy');
+                        dlgStopBtn.textContent = 'Stop building';
+                    }
                 }
 
                 if (!status.is_running) {
@@ -575,7 +593,7 @@
                         if (stoppedBar) stoppedBar.value = pct;
                         if (stoppedText) {
                             stoppedText.textContent = `${status.processed_sources}/${status.total_sources} sources processed. ` +
-                                `${status.pages_created} created, ${status.pages_updated} updated. Paused.`;
+                                `${status.pages_created} created, ${status.pages_updated} updated. Stopped.`;
                         }
 
                         // Update dialog if open
@@ -980,13 +998,13 @@
         btn.setAttribute('aria-busy', 'true');
         document.getElementById('wiki-ingest-progress').style.display = '';
 
-        // Show pause button, hide start
+        // Show stop button, hide start
         const stopBtn = document.getElementById('wiki-ingest-stop-btn');
         if (stopBtn) {
             stopBtn.style.display = '';
             stopBtn.disabled = false;
             stopBtn.removeAttribute('aria-busy');
-            stopBtn.textContent = 'Pause';
+            stopBtn.textContent = 'Stop building';
         }
 
         try {

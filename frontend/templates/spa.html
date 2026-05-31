@@ -282,22 +282,17 @@
                         <h2>Building Wiki...</h2>
                         <progress id="wiki-init-progress-bar" value="0" max="100"></progress>
                         <p id="wiki-init-progress-text" class="secondary">Starting ingest...</p>
-                        <div style="display:flex;gap:0.5rem;justify-content:center;margin-top:0.5rem;">
-                            <button id="wiki-init-stop-btn" class="outline secondary">Pause</button>
-                            <button id="wiki-init-cancel-btn" class="outline secondary">Cancel</button>
-                        </div>
-                        <p class="secondary" style="font-size:0.8rem;margin-top:0.5rem;">Pause resumes automatically when the models are up; Cancel ends the build. Progress is preserved either way.</p>
+                        <button id="wiki-init-stop-btn" class="outline secondary" style="margin-top:0.5rem;">Stop building</button>
+                        <p id="wiki-init-stopping-text" class="secondary" style="display:none;margin-top:0.5rem;" aria-busy="true">Stopping&hellip; finishing the current document, then freeing memory.</p>
+                        <p class="secondary" style="font-size:0.8rem;margin-top:0.5rem;">Stop preserves progress &mdash; click Resume later to continue from where it stopped.</p>
                     </div>
 
                     <!-- State: Wiki Ingest Stopped / Paused -->
                     <div id="wiki-state-stopped" class="wiki-state" style="display:none;">
-                        <h2>Wiki Build Paused</h2>
+                        <h2>Wiki Build Stopped</h2>
                         <progress id="wiki-stopped-progress-bar" value="0" max="100"></progress>
                         <p id="wiki-stopped-progress-text" class="secondary"></p>
-                        <div style="display:flex;gap:0.5rem;justify-content:center;margin-top:0.5rem;">
-                            <button id="wiki-resume-btn" class="wiki-init-cta">Resume</button>
-                            <button id="wiki-stopped-cancel-btn" class="outline secondary">Cancel</button>
-                        </div>
+                        <button id="wiki-resume-btn" class="wiki-init-cta" style="margin-top:0.5rem;">Resume</button>
                     </div>
 
                     <!-- State: Wiki Populated -->
@@ -377,7 +372,7 @@
             </div>
             <footer>
                 <button class="secondary outline close-wiki-ingest">Cancel</button>
-                <button id="wiki-ingest-stop-btn" class="outline secondary" style="display:none;">Pause</button>
+                <button id="wiki-ingest-stop-btn" class="outline secondary" style="display:none;">Stop building</button>
                 <button id="wiki-ingest-start-btn">Start Rebuild</button>
             </footer>
         </article>
