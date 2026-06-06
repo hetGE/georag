@@ -267,9 +267,21 @@ def get_lifecycle_state(chat_up: bool, embed_up: bool) -> str:
     return "down"
 
 
+def _server_exited(spec: _ServerSpec, pid: int) -> bool:
+    """Whether the server process is gone. For a child we launched, Popen.poll()
+    detects exit AND reaps it — os.kill(pid, 0) keeps reporting a not-yet-reaped
+    zombie as alive, which made every shutdown burn the full timeout (llama
+    exits on SIGTERM in ~0.1s but then lingered as a zombie). For an adopted pid
+    (no handle, e.g. after a uvicorn reload) the OS reaps it, so the kill-probe
+    is accurate there."""
+    if spec.process is not None:
+        return spec.process.poll() is not None
+    return not _is_pid_alive(pid)
+
+
 async def _stop_one(spec: _ServerSpec) -> None:
     pid = spec.process.pid if spec.process else _read_pid_file(spec.pid_file)
-    if not pid or not _is_pid_alive(pid):
+    if not pid or _server_exited(spec, pid):
         spec.process = None
         try:
             spec.pid_file.unlink()
@@ -283,16 +295,24 @@ async def _stop_one(spec: _ServerSpec) -> None:
     except OSError as e:
         logger.warning("SIGTERM to %d failed: %s", pid, e)
 
-    for _ in range(30):  # up to 15 s
-        if not _is_pid_alive(pid):
+    # llama-server handles SIGTERM and exits within ~0.1s, so _server_exited
+    # (via poll) normally breaks on the first check. The cap only matters for a
+    # genuinely wedged server.
+    for _ in range(40):  # safety cap ~10 s
+        if _server_exited(spec, pid):
             break
-        await asyncio.sleep(0.5)
+        await asyncio.sleep(0.25)
     else:
-        logger.warning("llama-server '%s' did not exit, sending SIGKILL", spec.name)
+        logger.warning("llama-server '%s' did not exit on SIGTERM, sending SIGKILL", spec.name)
         try:
             os.kill(pid, signal.SIGKILL)
         except OSError:
             pass
+        if spec.process is not None:
+            try:
+                spec.process.wait(timeout=5)  # reap so it doesn't linger as a zombie
+            except Exception:
+                pass
 
     spec.process = None
     try:
