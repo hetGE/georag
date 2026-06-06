@@ -114,6 +114,12 @@ WIKI_COLLECTION_NAME = "wiki"
 WIKI_INGEST_MAX_TOKENS = 8192   # Headroom for Qwen <think>...</think> + JSON output
 WIKI_INGEST_MAX_SOURCE_CHARS = 24_000   # ~6K tokens of source material per LLM call
 WIKI_INGEST_MAX_INDEX_CHARS = 6_000     # Cap on wiki index injected into system prompt
+# Rebuild the wiki index page (LLM context) once per this many newly
+# created/updated pages during a build, instead of after every page. The
+# index/backlink scans are O(all pages); per-file rebuilds dominated build time.
+# Only ~6K chars of the index reach the prompt anyway, so periodic freshness is
+# plenty. Backlinks are rebuilt only once at the end.
+WIKI_INDEX_REBUILD_EVERY = 25
 WIKI_QUERY_MAX_CONTEXT_PAGES = 5
 WIKI_CHAT_THRESHOLD = 0.7  # Min similarity score to use wiki instead of RAG
 WIKI_CHAT_TOP_K = 5  # Max wiki pages to retrieve for chat

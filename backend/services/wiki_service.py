@@ -13,7 +13,7 @@ from backend.config import (
     WIKI_COLLECTION_NAME, WIKI_INGEST_MAX_TOKENS,
     WIKI_INGEST_MAX_SOURCE_CHARS, WIKI_INGEST_MAX_INDEX_CHARS,
     WIKI_QUERY_MAX_CONTEXT_PAGES, WIKI_CHAT_THRESHOLD, WIKI_CHAT_TOP_K,
-    LLM_PARALLEL_SLOTS,
+    LLM_PARALLEL_SLOTS, WIKI_INDEX_REBUILD_EVERY,
 )
 from backend.models.schemas import WikiPage, WikiLog
 from backend.models.database import SessionLocal
@@ -816,6 +816,9 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
             )
 
         index_text = await asyncio.to_thread(_get_index_text, db)
+        # pages_created+updated total at the last index rebuild (for periodic
+        # context refresh without an O(N) rebuild per file).
+        _index_built_at_changed = 0
 
         # Process files in parallel batches (utilise LMStudio parallel slots)
         for batch_start in range(0, len(files), LLM_PARALLEL_SLOTS):
@@ -951,7 +954,7 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
                     try:
                         result = await _apply_llm_wiki_response(
                             db, task.result(), operation="ingest",
-                            source_files=file_source_files)
+                            source_files=file_source_files, defer_finalize=True)
                         _ingest_status["pages_created"] += result.get("created", 0)
                         _ingest_status["pages_updated"] += result.get("updated", 0)
                     except Exception as e:
@@ -975,8 +978,16 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
             if _ingest_cancel:
                 break
 
-            # Refresh index once per batch for next batch's context
-            index_text = await asyncio.to_thread(_get_index_text, db)
+            # Periodically rebuild the index page so later batches get reasonably
+            # fresh LLM context — but only after enough *new* pages, and never
+            # per-file (the O(N) rebuild dominated build time). Backlinks are left
+            # for the end; they don't affect ingest and aren't worth O(N)/batch.
+            changed_total = (_ingest_status["pages_created"]
+                             + _ingest_status["pages_updated"])
+            if changed_total - _index_built_at_changed >= WIKI_INDEX_REBUILD_EVERY:
+                await asyncio.to_thread(build_index_page, db)
+                index_text = await asyncio.to_thread(_get_index_text, db)
+                _index_built_at_changed = changed_total
 
         # Rebuild index page and backlinks — skip on cancel; these scan every
         # page (O(N) over the whole wiki) and would add seconds to a Stop. A
@@ -1551,8 +1562,14 @@ def _collect_transitive_sources(db: Session, pages_used: list[dict]) -> list[dic
 
 
 async def _apply_llm_wiki_response(db: Session, response: str, operation: str,
-                                    source_files: list[dict] = None) -> dict:
-    """Parse LLM JSON response and create/update wiki pages."""
+                                    source_files: list[dict] = None,
+                                    defer_finalize: bool = False) -> dict:
+    """Parse LLM JSON response and create/update wiki pages.
+
+    defer_finalize=True (used by the batch ingest) skips the per-file
+    backlink/index rebuild — each scans every wiki page, so doing it once per
+    created page dominated build time. The caller rebuilds the index
+    periodically for context and the backlinks once at the end."""
     try:
         data = _parse_json_response(response)
     except Exception as e:
@@ -1628,8 +1645,11 @@ async def _apply_llm_wiki_response(db: Session, response: str, operation: str,
         # so running them on the event loop froze it (and starved Stop / API
         # polls). Offload to a worker thread — the caller awaits sequentially, so
         # there's no concurrent use of `db`, and WAL keeps API reads unblocked.
-        await asyncio.to_thread(compute_backlinks, db)
-        await asyncio.to_thread(build_index_page, db)
+        # During a batch ingest these are deferred (see defer_finalize) so they
+        # don't run once per created page.
+        if not defer_finalize:
+            await asyncio.to_thread(compute_backlinks, db)
+            await asyncio.to_thread(build_index_page, db)
         await asyncio.to_thread(
             add_log_entry, db, operation,
             f"Created {created}, updated {updated} pages", affected_slugs)
