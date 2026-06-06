@@ -24,8 +24,8 @@ router = APIRouter(tags=["wiki"])
 # ── Page CRUD ─────────────────────────────────────────────────────────────
 
 @router.get("/wiki/pages")
-async def list_pages(category: Optional[str] = None, limit: Optional[int] = None,
-                     db: Session = Depends(get_db)):
+def list_pages(category: Optional[str] = None, limit: Optional[int] = None,
+               db: Session = Depends(get_db)):
     """List wiki pages, optionally filtered by category. `limit` returns only
     the newest N (most-recently-updated) — used for cheap incremental sidebar
     refreshes during a build."""
@@ -340,8 +340,13 @@ async def get_log(limit: int = 50, db: Session = Depends(get_db)):
 # ── Stats ─────────────────────────────────────────────────────────────────
 
 @router.get("/wiki/stats")
-async def get_stats(db: Session = Depends(get_db)):
-    """Get wiki statistics including library sync status."""
+def get_stats(db: Session = Depends(get_db)):
+    """Get wiki statistics including library sync status.
+
+    Sync `def` (not async) so FastAPI runs it in its threadpool: the
+    covered/pending computation scans the library and can take several seconds,
+    which would freeze the event loop (starving Stop and other polls) if it ran
+    on the loop. The frontend polls this every few seconds during a build."""
     stats = wiki_service.get_stats(db)
     sync = wiki_service.get_sync_status(db)
     # scheduled_run_active distinguishes a paused-but-active build (auto-resumes)

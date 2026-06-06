@@ -496,15 +496,18 @@ async def embed_wiki_page(page: WikiPage):
         for i in range(len(chunks))
     ]
 
-    add_chunks(WIKI_COLLECTION_NAME, ids, embeddings, texts, metadatas)
+    await asyncio.to_thread(
+        add_chunks, WIKI_COLLECTION_NAME, ids, embeddings, texts, metadatas)
     logger.info("Embedded wiki page '%s': %d chunks", page.slug, len(chunks))
 
 
 async def remove_wiki_page_vectors(slug: str):
     """Remove all vectors for a wiki page from ChromaDB."""
-    try:
+    def _delete():
         collection = get_or_create_collection(WIKI_COLLECTION_NAME)
         collection.delete(where={"slug": slug})
+    try:
+        await asyncio.to_thread(_delete)
     except Exception as e:
         logger.warning("Failed to remove vectors for wiki page %s: %s", slug, e)
 
@@ -812,7 +815,7 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
                 len(all_files),
             )
 
-        index_text = _get_index_text(db)
+        index_text = await asyncio.to_thread(_get_index_text, db)
 
         # Process files in parallel batches (utilise LMStudio parallel slots)
         for batch_start in range(0, len(files), LLM_PARALLEL_SLOTS):
@@ -834,7 +837,8 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
                 file_tag_names = tag_names if tag_names else [
                     ft.tag.name for ft in f.tags if ft.tag
                 ]
-                chunks = get_file_chunks_any_tag(f.relative_path, file_tag_names)
+                chunks = await asyncio.to_thread(
+                    get_file_chunks_any_tag, f.relative_path, file_tag_names)
 
                 source_material = ""
                 file_source_files = []
@@ -972,14 +976,15 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
                 break
 
             # Refresh index once per batch for next batch's context
-            index_text = _get_index_text(db)
+            index_text = await asyncio.to_thread(_get_index_text, db)
 
         # Rebuild index page and backlinks — skip on cancel; these scan every
         # page (O(N) over the whole wiki) and would add seconds to a Stop. A
-        # Resume (or the next completed build) rebuilds them.
+        # Resume (or the next completed build) rebuilds them. Offloaded so the
+        # final rebuild doesn't block the event loop either.
         if not _ingest_cancel:
-            build_index_page(db)
-            compute_backlinks(db)
+            await asyncio.to_thread(build_index_page, db)
+            await asyncio.to_thread(compute_backlinks, db)
 
         add_log_entry(db, "ingest",
                       f"Ingested {_ingest_status['processed_sources']} sources. "
@@ -1619,10 +1624,14 @@ async def _apply_llm_wiki_response(db: Session, response: str, operation: str,
                            operation, page_data.get("slug", "?"), e)
 
     if affected_slugs:
-        compute_backlinks(db)
-        build_index_page(db)
-        add_log_entry(db, operation,
-                      f"Created {created}, updated {updated} pages",
-                      affected_slugs)
+        # compute_backlinks/build_index_page each scan every wiki page (O(N)),
+        # so running them on the event loop froze it (and starved Stop / API
+        # polls). Offload to a worker thread — the caller awaits sequentially, so
+        # there's no concurrent use of `db`, and WAL keeps API reads unblocked.
+        await asyncio.to_thread(compute_backlinks, db)
+        await asyncio.to_thread(build_index_page, db)
+        await asyncio.to_thread(
+            add_log_entry, db, operation,
+            f"Created {created}, updated {updated} pages", affected_slugs)
 
     return {"created": created, "updated": updated}

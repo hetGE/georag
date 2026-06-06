@@ -1,10 +1,26 @@
 """SQLAlchemy engine and session management."""
-from sqlalchemy import create_engine, text, inspect
+from sqlalchemy import create_engine, text, inspect, event
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 from backend.config import DATABASE_URL
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+
+
+@event.listens_for(engine, "connect")
+def _set_sqlite_pragmas(dbapi_conn, _conn_record):
+    """WAL lets readers and a writer run concurrently, so the wiki build's
+    writes (offloaded to worker threads) don't lock out the API's reads — and a
+    busy_timeout makes any remaining contention wait briefly instead of raising
+    "database is locked". Without WAL, moving the build off the event loop would
+    just trade loop-blocking for lock errors."""
+    cur = dbapi_conn.cursor()
+    cur.execute("PRAGMA journal_mode=WAL")
+    cur.execute("PRAGMA busy_timeout=5000")
+    cur.execute("PRAGMA synchronous=NORMAL")
+    cur.close()
+
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
