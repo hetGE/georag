@@ -176,12 +176,18 @@ def _ensure_unique_slug(db: Session, slug: str) -> str:
 
 # ── Page Management ───────────────────────────────────────────────────────
 
-def get_all_pages(db: Session, category: Optional[str] = None) -> list[WikiPage]:
-    """List all wiki pages, optionally filtered by category."""
+def get_all_pages(db: Session, category: Optional[str] = None,
+                  limit: Optional[int] = None) -> list[WikiPage]:
+    """List wiki pages (most-recently-updated first), optionally filtered by
+    category. `limit` returns only the newest N — used for cheap incremental
+    refreshes of the sidebar while a build is creating pages."""
     query = db.query(WikiPage)
     if category:
         query = query.filter(WikiPage.category == category)
-    return query.order_by(WikiPage.updated_at.desc()).all()
+    query = query.order_by(WikiPage.updated_at.desc())
+    if limit:
+        query = query.limit(limit)
+    return query.all()
 
 
 def get_page(db: Session, slug: str) -> Optional[WikiPage]:

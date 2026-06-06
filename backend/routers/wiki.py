@@ -24,9 +24,12 @@ router = APIRouter(tags=["wiki"])
 # ── Page CRUD ─────────────────────────────────────────────────────────────
 
 @router.get("/wiki/pages")
-async def list_pages(category: Optional[str] = None, db: Session = Depends(get_db)):
-    """List all wiki pages, optionally filtered by category."""
-    pages = wiki_service.get_all_pages(db, category=category)
+async def list_pages(category: Optional[str] = None, limit: Optional[int] = None,
+                     db: Session = Depends(get_db)):
+    """List wiki pages, optionally filtered by category. `limit` returns only
+    the newest N (most-recently-updated) — used for cheap incremental sidebar
+    refreshes during a build."""
+    pages = wiki_service.get_all_pages(db, category=category, limit=limit)
     return [
         {
             "id": p.id, "slug": p.slug, "title": p.title,

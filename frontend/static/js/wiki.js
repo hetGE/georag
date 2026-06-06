@@ -20,6 +20,9 @@
     let lastSyncStats = null;
     let lastIngestTagNames = [];
     let lastIngestFileIds = [];
+    // pages_created+updated seen on the last poll tick — used to fold newly
+    // built pages into the sidebar list incrementally during a build.
+    let _lastBuiltCount = 0;
 
     // ── Initialization ───────────────────────────────────────────────────
 
@@ -394,8 +397,13 @@
         lastIngestTagNames = [];
         lastIngestFileIds = [];
 
-        // Flip to the Building view *before* the (potentially slow) llama-server
-        // launch so the click registers instantly. Revert if the user cancels.
+        // Mark the start in flight + flip to the Building view *before* the
+        // (potentially slow) llama-server launch so the click registers
+        // instantly AND the 3s readiness poll won't flip back to the populated
+        // view during the start handoff (the gap before the backend reports the
+        // build "running"). Cleared by pollInitProgress once the backend status
+        // is definitive, or by the cancel/error paths below.
+        ingestStartInFlight = true;
         document.querySelectorAll('#wiki-welcome .wiki-state').forEach(el => {
             el.style.display = 'none';
         });
@@ -404,19 +412,18 @@
         document.getElementById('wiki-init-progress-bar').value = 0;
 
         if (!await window.requireLlmServers()) {
+            ingestStartInFlight = false;
             updateWikiReadiness();
             return;
         }
 
-        ingestStartInFlight = true;
         try {
             await apiPost('/api/wiki/ingest', { tag_names: [], file_ids: [] });
             pollInitProgress();
         } catch (e) {
+            ingestStartInFlight = false;
             document.getElementById('wiki-init-progress-text').textContent =
                 'Error: ' + (e.message || 'Failed to start ingest');
-        } finally {
-            ingestStartInFlight = false;
         }
     }
 
@@ -483,16 +490,18 @@
             await apiPost('/api/wiki/ingest', scope);
             pollInitProgress();
         } catch (e) {
+            ingestStartInFlight = false;
             document.getElementById('wiki-init-progress-text').textContent =
                 'Error: ' + (e.message || 'Failed to resume ingest');
-        } finally {
-            ingestStartInFlight = false;
         }
     }
 
     async function processPendingFiles() {
-        // Flip to the Building view *before* the (potentially slow) llama-server
-        // launch so the click registers instantly. Revert if the user cancels.
+        // Mark in flight + flip to the Building view *before* the (potentially
+        // slow) llama-server launch so the click registers instantly and the
+        // readiness poll won't flip back to populated during the start handoff.
+        // Cleared by pollInitProgress (definitive status) or the paths below.
+        ingestStartInFlight = true;
         document.querySelectorAll('#wiki-welcome .wiki-state').forEach(el => {
             el.style.display = 'none';
         });
@@ -501,19 +510,18 @@
         document.getElementById('wiki-init-progress-bar').value = 0;
 
         if (!await window.requireLlmServers()) {
+            ingestStartInFlight = false;
             updateWikiReadiness();
             return;
         }
 
-        ingestStartInFlight = true;
         try {
             await apiPost('/api/wiki/ingest/pending');
             pollInitProgress();
         } catch (e) {
+            ingestStartInFlight = false;
             document.getElementById('wiki-init-progress-text').textContent =
                 'Error: ' + (e.message || 'Failed to start ingest');
-        } finally {
-            ingestStartInFlight = false;
         }
     }
 
@@ -546,9 +554,24 @@
         });
         const _stoppingText = document.getElementById('wiki-init-stopping-text');
         if (_stoppingText) _stoppingText.style.display = 'none';
+        _lastBuiltCount = 0;
         ingestPollTimer = setInterval(async () => {
             try {
                 const status = await apiGet('/api/wiki/ingest/status');
+                // The start handoff is over: the backend has reported a
+                // definitive status, so from here applyWikiState is driven by
+                // the real running flag. Clearing now closes the gap that made
+                // the view flicker back to "populated" mid-start.
+                ingestStartInFlight = false;
+
+                // Fold pages built so far into the sidebar list *in place* (no
+                // disruptive full reload). Cheap — fetches only recent pages.
+                const builtNow = (status.pages_created || 0) + (status.pages_updated || 0);
+                if (builtNow !== _lastBuiltCount) {
+                    _lastBuiltCount = builtNow;
+                    refreshRecentPages();
+                }
+
                 const covered = status.previously_covered || 0;
                 const coveredPrefix = covered > 0
                     ? `${covered.toLocaleString()} already covered · `
@@ -657,7 +680,10 @@
                         if (dlgStopBtn) dlgStopBtn.style.display = 'none';
                     }
 
-                    loadPages();
+                    // Quiet reconcile — incremental refresh already added the
+                    // new pages during the build, so avoid the disruptive
+                    // full-screen "Loading wiki pages…" overlay here.
+                    loadPages({ quiet: true });
                     updateWikiReadiness();
                 }
             } catch (e) {
@@ -668,8 +694,13 @@
 
     // ── Page List ────────────────────────────────────────────────────────
 
-    async function loadPages() {
-        const restore = showLoader('#wiki-page-list', 'Loading wiki pages…');
+    async function loadPages(opts = {}) {
+        // `quiet` skips the full-screen loader and preserves scroll — used for
+        // background refreshes (e.g. right after a build) so the list doesn't
+        // visibly blank out and jump.
+        const restore = opts.quiet
+            ? () => {}
+            : showLoader('#wiki-page-list', 'Loading wiki pages…');
         try {
             const url = selectedCategory
                 ? `/api/wiki/pages?category=${encodeURIComponent(selectedCategory)}`
@@ -684,8 +715,21 @@
         }
     }
 
+    function pageItemHTML(p) {
+        return `
+            <div class="wiki-page-item ${p.slug === currentPageSlug ? 'active' : ''}"
+                 data-slug="${escapeHtml(p.slug)}">
+                <div class="wiki-page-item-title">${escapeHtml(p.title)}</div>
+                <div class="wiki-page-item-meta">
+                    <span class="wiki-page-item-cat">${escapeHtml(p.category)}</span>
+                    ${p.summary ? `<span class="wiki-page-item-summary">${escapeHtml(p.summary).substring(0, 80)}</span>` : ''}
+                </div>
+            </div>`;
+    }
+
     function renderPageList() {
         const container = document.getElementById('wiki-page-list');
+        const prevScroll = container.scrollTop;
         const filtered = selectedCategory
             ? wikiPages.filter(p => p.category === selectedCategory)
             : wikiPages;
@@ -695,16 +739,7 @@
             return;
         }
 
-        container.innerHTML = filtered.map(p => `
-            <div class="wiki-page-item ${p.slug === currentPageSlug ? 'active' : ''}"
-                 data-slug="${escapeHtml(p.slug)}">
-                <div class="wiki-page-item-title">${escapeHtml(p.title)}</div>
-                <div class="wiki-page-item-meta">
-                    <span class="wiki-page-item-cat">${escapeHtml(p.category)}</span>
-                    ${p.summary ? `<span class="wiki-page-item-summary">${escapeHtml(p.summary).substring(0, 80)}</span>` : ''}
-                </div>
-            </div>
-        `).join('');
+        container.innerHTML = filtered.map(pageItemHTML).join('');
 
         // Click handlers
         container.querySelectorAll('.wiki-page-item').forEach(el => {
@@ -713,6 +748,47 @@
                 loadPage(slug);
             });
         });
+        container.scrollTop = prevScroll;
+    }
+
+    // Fold pages built during an in-progress ingest into the sidebar list
+    // *incrementally*: fetch only the most-recently-updated pages and insert any
+    // slugs we don't already show at the top, preserving scroll position. Avoids
+    // a 10MB full-list refetch + re-render on every poll tick.
+    async function refreshRecentPages() {
+        try {
+            const recent = await apiGet('/api/wiki/pages?limit=60');
+            if (!Array.isArray(recent) || recent.length === 0) return;
+            const known = new Set(wikiPages.map(p => p.slug));
+            const fresh = recent.filter(p => !known.has(p.slug));
+            if (fresh.length === 0) return;
+
+            // Keep the in-memory model in sync (newest first, matching the
+            // backend's updated_at DESC ordering).
+            wikiPages = fresh.concat(wikiPages);
+
+            const container = document.getElementById('wiki-page-list');
+            const visibleFresh = selectedCategory
+                ? fresh.filter(p => p.category === selectedCategory)
+                : fresh;
+            if (visibleFresh.length === 0) { updateStats(); return; }
+
+            // If the list is showing the empty-state placeholder, do a normal
+            // (quiet) render; otherwise prepend just the new items.
+            if (!container.querySelector('.wiki-page-item')) {
+                renderPageList();
+            } else {
+                const prevScroll = container.scrollTop;
+                const frag = document.createElement('div');
+                frag.innerHTML = visibleFresh.map(pageItemHTML).join('');
+                Array.from(frag.children).reverse().forEach(node => {
+                    node.addEventListener('click', () => loadPage(node.dataset.slug));
+                    container.insertBefore(node, container.firstChild);
+                });
+                container.scrollTop = prevScroll;
+            }
+            updateStats();
+        } catch (e) { /* best-effort; full reload happens on completion */ }
     }
 
     async function updateStats() {
@@ -1060,11 +1136,10 @@
             });
             pollInitProgress();
         } catch (e) {
+            ingestStartInFlight = false;
             restoreBtn();
             if (stopBtn) stopBtn.style.display = 'none';
             alert('Ingest failed: ' + e.message);
-        } finally {
-            ingestStartInFlight = false;
         }
     }
 
