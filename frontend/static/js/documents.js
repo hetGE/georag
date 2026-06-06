@@ -122,8 +122,11 @@ async function loadDocuments() {
     const overlay = document.getElementById('content-search-overlay');
     const searchRow = document.querySelector('.search-row');
 
+    // Show the spinner overlay for every load so the table doesn't freeze
+    // silently. Only the slow content search locks the search row (to avoid
+    // interrupting typing during fast filename/filter loads).
+    overlay?.classList.add('active');
     if (isContentQuery) {
-        overlay?.classList.add('active');
         searchRow?.classList.add('disabled');
     }
 
@@ -242,10 +245,15 @@ async function markSelectedAsNew() {
         alert('Select files first');
         return;
     }
-    await apiPost('/api/documents/batch/mark-new', { file_ids: ids });
-    selectedFileIds.clear();
-    loadStats();
-    loadDocuments();
+    const restore = setBtnBusy(document.getElementById('process-btn'), 'Saving…');
+    try {
+        await apiPost('/api/documents/batch/mark-new', { file_ids: ids });
+        selectedFileIds.clear();
+        loadStats();
+        loadDocuments();
+    } finally {
+        restore();
+    }
 }
 
 async function markSelectedAsSkipped() {
@@ -254,10 +262,15 @@ async function markSelectedAsSkipped() {
         alert('Select files first');
         return;
     }
-    await apiPost('/api/documents/batch/mark-skipped', { file_ids: ids });
-    selectedFileIds.clear();
-    loadStats();
-    loadDocuments();
+    const restore = setBtnBusy(document.getElementById('skip-btn'), 'Saving…');
+    try {
+        await apiPost('/api/documents/batch/mark-skipped', { file_ids: ids });
+        selectedFileIds.clear();
+        loadStats();
+        loadDocuments();
+    } finally {
+        restore();
+    }
 }
 
 async function checkActionButtonVisibility() {
@@ -305,7 +318,7 @@ window.documentsRefresh = () => { loadStats(); loadDocuments(); };
 async function openTagModal(fileId, filename) {
     const modal = document.getElementById('tag-modal');
     const content = document.getElementById('tag-modal-content');
-    content.innerHTML = '<p>Loading tags...</p>';
+    content.innerHTML = `<div class="modal-loader">${spinnerWheelHTML()}<p>Loading tags…</p></div>`;
     modal.showModal();
 
     // Get file's current tags
@@ -463,7 +476,7 @@ function renderMultiTagModalContent(fileIds, selectedFiles, currentTags, movedTa
 async function openTagAdminModal() {
     const modal = document.getElementById('tag-admin-modal');
     const content = document.getElementById('tag-admin-content');
-    content.innerHTML = '<p>Loading...</p>';
+    content.innerHTML = `<div class="modal-loader">${spinnerWheelHTML()}<p>Loading tags…</p></div>`;
     modal.showModal();
 
     allTagsList = await apiGet('/api/tags');
@@ -503,9 +516,9 @@ function renderTagAdmin() {
             <td class="col-files"></td>
             <td class="col-actions">
                 <div class="tag-admin-edit-actions">
-                    <button onclick="saveTagEdit(${tag.id})">Save</button>
+                    <button onclick="saveTagEdit(${tag.id}, event)">Save</button>
                     <button class="outline" onclick="toggleTagEdit(${tag.id})">Cancel</button>
-                    <button class="tag-admin-delete-btn" onclick="deleteTag('${tag.name}', '${escapeHtml(tag.display_name)}')">Delete</button>
+                    <button class="tag-admin-delete-btn" onclick="deleteTag('${tag.name}', '${escapeHtml(tag.display_name)}', event)">Delete</button>
                 </div>
             </td>
         </tr>`;
@@ -539,7 +552,7 @@ function renderTagAdmin() {
                     <td class="col-slug"><input type="text" id="tag-create-name" placeholder="slug_name" ${disabled}></td>
                     <td class="col-desc"><input type="text" id="tag-create-desc" placeholder="Description" ${disabled}></td>
                     <td class="col-files"></td>
-                    <td class="col-actions"><button onclick="createNewTag()" ${disabled}>Create</button></td>
+                    <td class="col-actions"><button onclick="createNewTag(event)" ${disabled}>Create</button></td>
                 </tr>
             </tfoot>
         </table>
@@ -555,7 +568,8 @@ function toggleTagEdit(tagId) {
     }
 }
 
-async function saveTagEdit(tagId) {
+async function saveTagEdit(tagId, ev) {
+    const btn = ev && ev.currentTarget;
     const displayName = document.getElementById(`tag-edit-display-${tagId}`).value.trim();
     const description = document.getElementById(`tag-edit-desc-${tagId}`).value.trim();
     const color = document.getElementById(`tag-edit-color-${tagId}`).value;
@@ -565,6 +579,7 @@ async function saveTagEdit(tagId) {
         return;
     }
 
+    const restore = setBtnBusy(btn, 'Saving…');
     const result = await apiPut(`/api/tags/${tagId}`, {
         display_name: displayName,
         description: description || null,
@@ -572,11 +587,12 @@ async function saveTagEdit(tagId) {
     });
 
     if (result.error) {
+        restore();
         alert(result.error);
         return;
     }
 
-    // Refresh tags and re-render
+    // Refresh tags and re-render (replaces the busy button)
     allTagsList = await apiGet('/api/tags');
     renderTagAdmin();
     refreshTagFilter();
@@ -587,11 +603,13 @@ async function saveTagEdit(tagId) {
     window.syncChannel.postMessage({ type: 'tags-changed', payload: {} });
 }
 
-async function deleteTag(tagName, displayName) {
+async function deleteTag(tagName, displayName, ev) {
     if (!confirm(`Delete "${displayName}"? This will remove it from all files.`)) return;
 
+    const restore = setBtnBusy(ev && ev.currentTarget, 'Deleting…');
     const result = await apiDelete(`/api/tags/${tagName}`);
     if (result.error) {
+        restore();
         alert(result.error);
         return;
     }
@@ -605,7 +623,8 @@ async function deleteTag(tagName, displayName) {
     window.syncChannel.postMessage({ type: 'tags-changed', payload: {} });
 }
 
-async function createNewTag() {
+async function createNewTag(ev) {
+    const btn = ev && ev.currentTarget;
     const name = document.getElementById('tag-create-name').value.trim();
     const displayName = document.getElementById('tag-create-display').value.trim();
     const description = document.getElementById('tag-create-desc').value.trim();
@@ -624,6 +643,7 @@ async function createNewTag() {
         return;
     }
 
+    const restore = setBtnBusy(btn, 'Creating…');
     const result = await apiPost('/api/tags', {
         name: name,
         display_name: displayName,
@@ -632,11 +652,12 @@ async function createNewTag() {
     });
 
     if (result.error) {
+        restore();
         alert(result.error);
         return;
     }
 
-    // Refresh tags and re-render
+    // Refresh tags and re-render (replaces the busy button)
     allTagsList = await apiGet('/api/tags');
     renderTagAdmin();
     refreshTagFilter();

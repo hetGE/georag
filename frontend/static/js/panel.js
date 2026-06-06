@@ -479,14 +479,11 @@ const LibraryPanel = (() => {
     async function handleStartProcessing() {
         if (window.chatIsStreaming?.()) return;
         if (!(await window.requireLlmServers())) return;
-        const btn = document.getElementById('lp-process-btn');
-        btn.disabled = true;
-        btn.setAttribute('aria-busy', 'true');
+        const restore = setBtnBusy(document.getElementById('lp-process-btn'), null);
         const result = await apiPost('/api/processing/start', {});
         if (result.error) {
             alert(result.error);
-            btn.disabled = false;
-            btn.setAttribute('aria-busy', 'false');
+            restore();
             return;
         }
         lastStatusJSON = '';
@@ -528,14 +525,11 @@ const LibraryPanel = (() => {
     async function handleProcessNew() {
         if (window.chatIsStreaming?.()) return;
         if (!(await window.requireLlmServers())) return;
-        const btn = document.getElementById('lp-action-process-new');
-        btn.disabled = true;
-        btn.setAttribute('aria-busy', 'true');
+        const restore = setBtnBusy(document.getElementById('lp-action-process-new'), null);
         const result = await apiPost('/api/processing/start', {});
         if (result.error) {
             alert(result.error);
-            btn.disabled = false;
-            btn.setAttribute('aria-busy', 'false');
+            restore();
             return;
         }
         lastStatusJSON = '';
@@ -553,18 +547,11 @@ const LibraryPanel = (() => {
         const dialog = document.getElementById('reprocess-confirm-dialog');
         dialog.close();
         if (!(await window.requireLlmServers())) return;
-        const btn = document.getElementById('lp-action-reprocess');
-        if (btn) {
-            btn.disabled = true;
-            btn.setAttribute('aria-busy', 'true');
-        }
+        const restore = setBtnBusy(document.getElementById('lp-action-reprocess'), null);
         const result = await apiPost('/api/processing/start', { reprocess: true });
         if (result.error) {
             alert(result.error);
-            if (btn) {
-                btn.disabled = false;
-                btn.setAttribute('aria-busy', 'false');
-            }
+            restore();
             return;
         }
         lastStatusJSON = '';
@@ -577,18 +564,11 @@ const LibraryPanel = (() => {
     async function handleStartOCR() {
         if (window.chatIsStreaming?.()) return;
         if (!(await window.requireLlmServers())) return;
-        const btn = document.getElementById('lp-action-ocr');
-        if (btn) {
-            btn.disabled = true;
-            btn.setAttribute('aria-busy', 'true');
-        }
+        const restore = setBtnBusy(document.getElementById('lp-action-ocr'), null);
         const result = await apiPost('/api/ocr/start');
         if (result.error) {
             alert(result.error);
-            if (btn) {
-                btn.disabled = false;
-                btn.setAttribute('aria-busy', 'false');
-            }
+            restore();
             return;
         }
         lastStatusJSON = '';
@@ -612,18 +592,11 @@ const LibraryPanel = (() => {
     async function handleStartExploring() {
         if (window.chatIsStreaming?.()) return;
         if (!(await window.requireLlmServers())) return;
-        const btn = document.getElementById('lp-action-explore');
-        if (btn) {
-            btn.disabled = true;
-            btn.setAttribute('aria-busy', 'true');
-        }
+        const restore = setBtnBusy(document.getElementById('lp-action-explore'), null);
         const result = await apiPost('/api/explore/start');
         if (result.error) {
             alert(result.error);
-            if (btn) {
-                btn.disabled = false;
-                btn.setAttribute('aria-busy', 'false');
-            }
+            restore();
             return;
         }
         lastStatusJSON = '';

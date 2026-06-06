@@ -390,19 +390,23 @@
     // ── Initialize Wiki (one-click ingest all) ───────────────────────────
 
     async function initializeWiki() {
-        if (!await window.requireLlmServers()) return;
-
         // Save params for resume
         lastIngestTagNames = [];
         lastIngestFileIds = [];
 
-        // Show ingesting state
+        // Flip to the Building view *before* the (potentially slow) llama-server
+        // launch so the click registers instantly. Revert if the user cancels.
         document.querySelectorAll('#wiki-welcome .wiki-state').forEach(el => {
             el.style.display = 'none';
         });
         document.getElementById('wiki-state-ingesting').style.display = '';
-        document.getElementById('wiki-init-progress-text').textContent = 'Starting wiki initialization...';
+        document.getElementById('wiki-init-progress-text').textContent = 'Starting…';
         document.getElementById('wiki-init-progress-bar').value = 0;
+
+        if (!await window.requireLlmServers()) {
+            updateWikiReadiness();
+            return;
+        }
 
         ingestStartInFlight = true;
         try {
@@ -450,6 +454,15 @@
             return;
         }
 
+        // Flip to the Building view *before* the scope fetch + llama launch so
+        // the Resume click registers instantly.
+        document.querySelectorAll('#wiki-welcome .wiki-state').forEach(el => {
+            el.style.display = 'none';
+        });
+        document.getElementById('wiki-state-ingesting').style.display = '';
+        document.getElementById('wiki-init-progress-text').textContent = 'Resuming… (starting models if needed)';
+        ingestStartInFlight = true;
+
         // Resume using the server-persisted scope (in-memory vars are empty
         // after a reload). Sending the same scope preserves the per-build
         // "attempted files" progress so the resume continues, not restarts.
@@ -466,13 +479,6 @@
             }
         } catch (e) { /* fall back to in-memory scope */ }
 
-        document.querySelectorAll('#wiki-welcome .wiki-state').forEach(el => {
-            el.style.display = 'none';
-        });
-        document.getElementById('wiki-state-ingesting').style.display = '';
-        document.getElementById('wiki-init-progress-text').textContent = 'Resuming… (starting models if needed)';
-
-        ingestStartInFlight = true;
         try {
             await apiPost('/api/wiki/ingest', scope);
             pollInitProgress();
@@ -485,14 +491,19 @@
     }
 
     async function processPendingFiles() {
-        if (!await window.requireLlmServers()) return;
-
+        // Flip to the Building view *before* the (potentially slow) llama-server
+        // launch so the click registers instantly. Revert if the user cancels.
         document.querySelectorAll('#wiki-welcome .wiki-state').forEach(el => {
             el.style.display = 'none';
         });
         document.getElementById('wiki-state-ingesting').style.display = '';
-        document.getElementById('wiki-init-progress-text').textContent = 'Starting ingest for pending files...';
+        document.getElementById('wiki-init-progress-text').textContent = 'Starting…';
         document.getElementById('wiki-init-progress-bar').value = 0;
+
+        if (!await window.requireLlmServers()) {
+            updateWikiReadiness();
+            return;
+        }
 
         ingestStartInFlight = true;
         try {
@@ -658,6 +669,7 @@
     // ── Page List ────────────────────────────────────────────────────────
 
     async function loadPages() {
+        const restore = showLoader('#wiki-page-list', 'Loading wiki pages…');
         try {
             const url = selectedCategory
                 ? `/api/wiki/pages?category=${encodeURIComponent(selectedCategory)}`
@@ -667,6 +679,8 @@
             updateStats();
         } catch (e) {
             console.error('Failed to load wiki pages:', e);
+        } finally {
+            restore();
         }
     }
 
@@ -713,6 +727,12 @@
     // ── Page Viewer ──────────────────────────────────────────────────────
 
     async function loadPage(slug) {
+        // Reveal the page-view shell up front so the loader is visible even when
+        // coming from the welcome state, and the old page stops lingering.
+        document.getElementById('wiki-welcome').style.display = 'none';
+        document.getElementById('wiki-query-response').style.display = 'none';
+        document.getElementById('wiki-page-view').style.display = '';
+        const restore = showLoader('#wiki-page-view', 'Loading…');
         try {
             const page = await apiGet(`/api/wiki/pages/${encodeURIComponent(slug)}`);
             currentPageSlug = slug;
@@ -720,6 +740,8 @@
             renderPageList(); // Update active highlight
         } catch (e) {
             console.error('Failed to load wiki page:', e);
+        } finally {
+            restore();
         }
     }
 
@@ -821,6 +843,7 @@
     // ── Search ───────────────────────────────────────────────────────────
 
     async function searchPages(query) {
+        const restore = showLoader('#wiki-page-list', 'Searching…');
         try {
             const results = await apiGet(`/api/wiki/search?q=${encodeURIComponent(query)}`);
             const container = document.getElementById('wiki-page-list');
@@ -843,6 +866,8 @@
             });
         } catch (e) {
             console.error('Wiki search failed:', e);
+        } finally {
+            restore();
         }
     }
 
@@ -1016,8 +1041,7 @@
         lastIngestFileIds = [];
 
         const btn = document.getElementById('wiki-ingest-start-btn');
-        btn.disabled = true;
-        btn.setAttribute('aria-busy', 'true');
+        const restoreBtn = setBtnBusy(btn, 'Starting…');
         document.getElementById('wiki-ingest-progress').style.display = '';
 
         // Show stop button, hide start
@@ -1036,8 +1060,7 @@
             });
             pollInitProgress();
         } catch (e) {
-            btn.disabled = false;
-            btn.setAttribute('aria-busy', 'false');
+            restoreBtn();
             if (stopBtn) stopBtn.style.display = 'none';
             alert('Ingest failed: ' + e.message);
         } finally {

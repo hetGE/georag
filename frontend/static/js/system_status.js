@@ -137,11 +137,17 @@
     async function openScheduleDialog() {
         const dlg = document.getElementById('schedule-dialog');
         if (!dlg) return;
-        const settings = await apiGet('/api/system/settings');
-        document.getElementById('sched-enabled-input').checked = !!settings.schedule_enabled;
-        document.getElementById('sched-start-input').value = settings.downtime_start || '06:30';
-        document.getElementById('sched-end-input').value = settings.downtime_end || '09:30';
+        // Open immediately, then fill the fields once settings arrive.
         dlg.showModal();
+        const restore = showLoader(dlg.querySelector('article'), 'Loading settings…');
+        try {
+            const settings = await apiGet('/api/system/settings');
+            document.getElementById('sched-enabled-input').checked = !!settings.schedule_enabled;
+            document.getElementById('sched-start-input').value = settings.downtime_start || '06:30';
+            document.getElementById('sched-end-input').value = settings.downtime_end || '09:30';
+        } finally {
+            restore();
+        }
     }
 
     async function saveScheduleSettings() {
@@ -150,18 +156,27 @@
             downtime_start: document.getElementById('sched-start-input').value || '06:30',
             downtime_end: document.getElementById('sched-end-input').value || '09:30',
         };
-        const res = await apiPut('/api/system/settings', payload);
+        const restore = setBtnBusy(document.getElementById('sched-save-btn'), 'Saving…');
+        let res;
+        try {
+            res = await apiPut('/api/system/settings', payload);
+        } catch (e) {
+            restore();
+            alert('Failed to save settings');
+            return;
+        }
         if (res && res.ok) {
             document.getElementById('schedule-dialog').close();
+            restore();
             pollOnce();
         } else {
+            restore();
             alert(res && res.error ? res.error : 'Failed to save settings');
         }
     }
 
     async function endDowntimeNow() {
-        const btn = document.getElementById('sys-end-downtime-btn');
-        if (btn) { btn.disabled = true; btn.setAttribute('aria-busy', 'true'); }
+        const restore = setBtnBusy(document.getElementById('sys-end-downtime-btn'), null);
         // Optimistic: reflect "leaving downtime / starting LLMs" immediately so
         // the UI doesn't sit on the paused state while llama restarts in the
         // background. The next status poll reconciles the real state.
@@ -180,10 +195,7 @@
         } catch (e) {
             if (prev) applyStatus(prev);  // roll back on failure
         } finally {
-            if (btn) {
-                btn.disabled = false;
-                btn.removeAttribute('aria-busy');
-            }
+            restore();
             setTimeout(pollOnce, 1500);
         }
     }

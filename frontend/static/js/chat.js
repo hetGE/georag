@@ -729,9 +729,15 @@ async function loadConversations() {
 async function loadConversation(convId, { broadcast = true } = {}) {
     if (isStreaming) return;
     currentConversationId = convId;
-    const data = await apiGet(`/api/conversations/${convId}`);
     const messagesEl = document.getElementById('chat-messages');
     messagesEl.innerHTML = '';
+    const restore = showLoader(messagesEl, 'Loading…');
+    let data;
+    try {
+        data = await apiGet(`/api/conversations/${convId}`);
+    } finally {
+        restore();
+    }
 
     // Exit welcome state
     exitWelcomeState();
@@ -793,8 +799,14 @@ function closeTrashView() {
 }
 
 async function loadTrashList() {
-    const items = await apiGet('/api/conversations/trash');
     const list = document.getElementById('trash-list');
+    const restore = showLoader(list, 'Loading…');
+    let items;
+    try {
+        items = await apiGet('/api/conversations/trash');
+    } finally {
+        restore();
+    }
 
     if (!items.length) {
         list.innerHTML = '<p class="secondary" style="font-size:0.85rem;padding:0.5rem;">Trash is empty</p>';
@@ -815,7 +827,7 @@ async function loadTrashList() {
         `;
         item.querySelector('.trash-restore').addEventListener('click', (e) => {
             e.stopPropagation();
-            restoreConversation(conv.id);
+            restoreConversation(conv.id, item);
         });
         item.querySelector('.trash-permanent-delete').addEventListener('click', (e) => {
             e.stopPropagation();
@@ -825,7 +837,10 @@ async function loadTrashList() {
     });
 }
 
-async function restoreConversation(convId) {
+async function restoreConversation(convId, rowEl) {
+    // Optimistically drop the row so the click registers instantly; the
+    // reload below reconciles the real trash state.
+    if (rowEl) rowEl.remove();
     await apiPost(`/api/conversations/${convId}/restore`);
     await loadTrashList();
     await loadConversations();
@@ -891,13 +906,14 @@ async function handleSubmit(e) {
     const message = input.value.trim();
     if (!message || isStreaming || remoteStreaming || window.libraryIsProcessing) return;
 
-    // Check llama-servers before sending
-    if (!(await window.requireLlmServers())) return;
-
     // Block submit if welcome state and no tags selected
     if (isWelcomeState && allTags.length > 0 && selectedTags.size === 0) return;
 
-    // Clear welcome message and exit welcome state
+    // ── Optimistic UI: render the user message, Thinking bubble, and Stop
+    // button synchronously *before* the (potentially slow) llama-server check,
+    // so Send responds instantly. Rolled back below if the check fails.
+    const wasWelcome = isWelcomeState;
+    const savedTags = new Set(selectedTags);
     const welcome = document.querySelector('.chat-welcome');
     if (welcome) welcome.remove();
     if (isWelcomeState) {
@@ -905,10 +921,10 @@ async function handleSubmit(e) {
     }
 
     // Show user message
-    appendMessage('user', message);
+    const userDiv = appendMessage('user', message);
     input.value = '';
 
-    // Start streaming
+    // Enter streaming UI
     isStreaming = true;
     document.body.classList.add('chat-streaming');
     window.updateWikiQueryState?.();
@@ -920,6 +936,37 @@ async function handleSubmit(e) {
     document.querySelector('.chat-sidebar').classList.add('streaming-locked');
     updateInputState();
 
+    const assistantDiv = appendMessage('assistant', '', null, true);
+    const contentEl = assistantDiv.querySelector('.message-content');
+
+    // Check llama-servers. When unavailable the helper shows its own warning —
+    // roll the optimistic UI back to its pre-click state and bail.
+    if (!(await window.requireLlmServers())) {
+        userDiv.remove();
+        assistantDiv.remove();
+        input.value = message;
+        isStreaming = false;
+        document.body.classList.remove('chat-streaming');
+        sendBtn.textContent = 'Send';
+        sendBtn.type = 'submit';
+        sendBtn.classList.remove('stop-mode');
+        document.getElementById('new-chat-btn').disabled = false;
+        document.querySelector('.chat-sidebar').classList.remove('streaming-locked');
+        window.updateWikiQueryState?.();
+        if (wasWelcome) {
+            document.getElementById('chat-messages').innerHTML = `
+        <div class="chat-welcome" id="chat-welcome">
+            <p class="secondary">Select topics to focus your search:</p>
+            <div id="welcome-tags" class="welcome-tags"></div>
+        </div>`;
+            enterWelcomeState();
+            savedTags.forEach(t => selectedTags.add(t));
+            renderWelcomeTags();
+        }
+        updateInputState();
+        return;
+    }
+
     const controller = new AbortController();
     activeAbortController = controller;
     const stopHandler = () => {
@@ -927,9 +974,6 @@ async function handleSubmit(e) {
         apiPost('/api/chat/stop');
     };
     sendBtn.addEventListener('click', stopHandler, { once: true });
-
-    const assistantDiv = appendMessage('assistant', '', null, true);
-    const contentEl = assistantDiv.querySelector('.message-content');
     let broadcastedStart = false;
 
     try {

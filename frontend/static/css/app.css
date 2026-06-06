@@ -630,32 +630,68 @@ nav ul:last-child li a.active:hover {
     display: flex;
 }
 
-.content-search-overlay .spinner-wheel {
+.spinner-wheel {
     width: 64px;
     height: 64px;
     animation: spin-wheel 1s steps(12) infinite;
 }
 
-.content-search-overlay .spinner-wheel .spoke {
+.spinner-wheel .spoke {
     fill: #2ecc71;
     opacity: 0.25;
 }
 
-.content-search-overlay .spinner-wheel .spoke:nth-child(1)  { opacity: 1.0; }
-.content-search-overlay .spinner-wheel .spoke:nth-child(2)  { opacity: 0.94; }
-.content-search-overlay .spinner-wheel .spoke:nth-child(3)  { opacity: 0.87; }
-.content-search-overlay .spinner-wheel .spoke:nth-child(4)  { opacity: 0.75; }
-.content-search-overlay .spinner-wheel .spoke:nth-child(5)  { opacity: 0.63; }
-.content-search-overlay .spinner-wheel .spoke:nth-child(6)  { opacity: 0.5; }
-.content-search-overlay .spinner-wheel .spoke:nth-child(7)  { opacity: 0.44; }
-.content-search-overlay .spinner-wheel .spoke:nth-child(8)  { opacity: 0.37; }
-.content-search-overlay .spinner-wheel .spoke:nth-child(9)  { opacity: 0.31; }
-.content-search-overlay .spinner-wheel .spoke:nth-child(10) { opacity: 0.28; }
-.content-search-overlay .spinner-wheel .spoke:nth-child(11) { opacity: 0.26; }
-.content-search-overlay .spinner-wheel .spoke:nth-child(12) { opacity: 0.25; }
+.spinner-wheel .spoke:nth-child(1)  { opacity: 1.0; }
+.spinner-wheel .spoke:nth-child(2)  { opacity: 0.94; }
+.spinner-wheel .spoke:nth-child(3)  { opacity: 0.87; }
+.spinner-wheel .spoke:nth-child(4)  { opacity: 0.75; }
+.spinner-wheel .spoke:nth-child(5)  { opacity: 0.63; }
+.spinner-wheel .spoke:nth-child(6)  { opacity: 0.5; }
+.spinner-wheel .spoke:nth-child(7)  { opacity: 0.44; }
+.spinner-wheel .spoke:nth-child(8)  { opacity: 0.37; }
+.spinner-wheel .spoke:nth-child(9)  { opacity: 0.31; }
+.spinner-wheel .spoke:nth-child(10) { opacity: 0.28; }
+.spinner-wheel .spoke:nth-child(11) { opacity: 0.26; }
+.spinner-wheel .spoke:nth-child(12) { opacity: 0.25; }
 
 @keyframes spin-wheel {
     to { transform: rotate(360deg); }
+}
+
+/* Generic loading overlay (injected by showLoader) */
+.loading-overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 1rem;
+    background: rgba(var(--card-background-color-rgb, 255,255,255), 0.8);
+    z-index: 10;
+}
+
+.loading-overlay p {
+    margin: 0;
+    color: var(--pico-muted-color);
+    font-size: 0.85rem;
+}
+
+/* Inline (non-absolute) loader for empty modal bodies */
+.modal-loader {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.75rem;
+    padding: 2rem;
+}
+
+.modal-loader p {
+    margin: 0;
+    color: var(--pico-muted-color);
+    font-size: 0.85rem;
 }
 
 .search-row.disabled {
