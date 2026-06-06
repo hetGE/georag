@@ -1178,7 +1178,7 @@ async def apply_lint_fixes(fixes: dict):
                     [{"role": "system", "content": prompt}],
                     max_tokens=4096,
                 )
-                result = await _apply_llm_wiki_response(db, response, operation="lint_fix")
+                result = await _apply_llm_wiki_response(db, response, operation="lint_fix", defer_finalize=True)
                 _lint_fix_status["pages_created"] += result.get("created", 0)
                 _lint_fix_status["pages_updated"] += result.get("updated", 0)
             except Exception as e:
@@ -1212,7 +1212,7 @@ async def apply_lint_fixes(fixes: dict):
                     [{"role": "system", "content": prompt}],
                     max_tokens=4096,
                 )
-                result = await _apply_llm_wiki_response(db, response, operation="lint_fix")
+                result = await _apply_llm_wiki_response(db, response, operation="lint_fix", defer_finalize=True)
                 _lint_fix_status["pages_created"] += result.get("created", 0)
                 _lint_fix_status["pages_updated"] += result.get("updated", 0)
             except Exception as e:
@@ -1245,7 +1245,7 @@ async def apply_lint_fixes(fixes: dict):
                     [{"role": "system", "content": prompt}],
                     max_tokens=4096,
                 )
-                result = await _apply_llm_wiki_response(db, response, operation="lint_fix")
+                result = await _apply_llm_wiki_response(db, response, operation="lint_fix", defer_finalize=True)
                 _lint_fix_status["pages_created"] += result.get("created", 0)
                 _lint_fix_status["pages_updated"] += result.get("updated", 0)
             except Exception as e:
@@ -1290,7 +1290,7 @@ async def apply_lint_fixes(fixes: dict):
                     [{"role": "system", "content": prompt}],
                     max_tokens=4096,
                 )
-                result = await _apply_llm_wiki_response(db, response, operation="lint_fix")
+                result = await _apply_llm_wiki_response(db, response, operation="lint_fix", defer_finalize=True)
                 _lint_fix_status["pages_created"] += result.get("created", 0)
                 _lint_fix_status["pages_updated"] += result.get("updated", 0)
             except Exception as e:
@@ -1368,7 +1368,7 @@ async def apply_lint_fixes(fixes: dict):
                     [{"role": "system", "content": prompt}],
                     max_tokens=4096,
                 )
-                result = await _apply_llm_wiki_response(db, response, operation="lint_fix")
+                result = await _apply_llm_wiki_response(db, response, operation="lint_fix", defer_finalize=True)
                 _lint_fix_status["pages_created"] += result.get("created", 0)
                 _lint_fix_status["pages_updated"] += result.get("updated", 0)
             except Exception as e:
@@ -1376,9 +1376,11 @@ async def apply_lint_fixes(fixes: dict):
                 logger.warning("Lint fix stale page error: %s", e)
             _lint_fix_status["processed_fixes"] += 1
 
-        # Final cleanup
-        compute_backlinks(db)
-        build_index_page(db)
+        # Final cleanup — the per-fix path now defers these, so rebuild the
+        # backlinks + index once here. Offloaded off the event loop (each scans
+        # every page) so it doesn't block Stop / API polls.
+        await asyncio.to_thread(compute_backlinks, db)
+        await asyncio.to_thread(build_index_page, db)
 
         add_log_entry(db, "lint_fix",
                       f"Applied fixes. Created {_lint_fix_status['pages_created']}, "
