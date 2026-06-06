@@ -703,6 +703,11 @@ async def stop_lint_fix():
 
 async def stop_ingest():
     global _ingest_cancel
+    # Only a running build can transition itself to "stopped" (via its finally).
+    # If nothing is running, setting phase="stopping" would strand the UI on
+    # "Stopping…" forever, so make this a no-op instead.
+    if not _ingest_running:
+        return
     _ingest_cancel = True
     _ingest_status["phase"] = "stopping"
 
@@ -904,48 +909,77 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
                     )
                 return response
 
-            llm_results = await asyncio.gather(
-                *[_llm_call(msgs) for _, msgs, _ in prepared],
-                return_exceptions=True,
-            )
+            # Fire the LLM calls concurrently, but make the batch abandonable so
+            # a Stop is honoured within ~1s instead of waiting for the slowest
+            # call (a large PDF can take 30-60s). We poll the cancel flag while
+            # the calls are in flight and cancel any still pending. The llama
+            # connections drop on cancel; _drain_and_shutdown then frees the
+            # servers. Completed calls are still applied below so their work
+            # isn't wasted.
+            tasks = [asyncio.create_task(_llm_call(msgs)) for _, msgs, _ in prepared]
+            while True:
+                _, pending = await asyncio.wait(tasks, timeout=1.0)
+                if not pending:
+                    break
+                if _ingest_cancel:
+                    for t in pending:
+                        t.cancel()
+                    for t in pending:
+                        try:
+                            await t
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                    break
 
-            # Apply results sequentially (SQLite write safety)
-            for (f, _, file_source_files), llm_response in zip(prepared, llm_results):
-                if isinstance(llm_response, Exception):
-                    err_repr = f"{type(llm_response).__name__}: {llm_response}".rstrip(": ")
-                    error_msg = f"File '{f.filename}': {err_repr}"
-                    _ingest_status["errors"].append(error_msg)
+            # Apply results sequentially (SQLite write safety). Files whose call
+            # was cancelled mid-flight are skipped here AND left out of the
+            # attempted set, so a Resume retries them rather than losing them.
+            applied_files = []
+            for (f, _, file_source_files), task in zip(prepared, tasks):
+                if task.cancelled():
+                    continue
+                exc = task.exception()
+                if exc is not None:
+                    err_repr = f"{type(exc).__name__}: {exc}".rstrip(": ")
+                    _ingest_status["errors"].append(f"File '{f.filename}': {err_repr}")
                     logger.warning("Wiki ingest LLM error: %s", err_repr)
                 else:
                     try:
                         result = await _apply_llm_wiki_response(
-                            db, llm_response, operation="ingest",
+                            db, task.result(), operation="ingest",
                             source_files=file_source_files)
                         _ingest_status["pages_created"] += result.get("created", 0)
                         _ingest_status["pages_updated"] += result.get("updated", 0)
                     except Exception as e:
-                        error_msg = f"File '{f.filename}': {str(e)}"
-                        _ingest_status["errors"].append(error_msg)
+                        _ingest_status["errors"].append(f"File '{f.filename}': {str(e)}")
                         logger.warning("Wiki ingest apply error: %s", e)
 
+                applied_files.append(f)
                 _ingest_processed_file_ids.add(f.id)
                 _ingest_status["processed_sources"] = len(_ingest_processed_file_ids)
 
-            # Persist attempted file IDs for the active build so a pause/resume
-            # converges: every file in this batch was sent to the LLM, so it's
-            # "done" for this build even if it produced no page. Re-check the
-            # active flag first so a concurrent Cancel (which clears the record)
-            # isn't undone by a late batch write from the draining task.
+            # Persist only the files we actually attempted (a mid-batch Stop may
+            # have abandoned some) so a pause/resume converges without skipping
+            # files that never ran. Re-check the active flag first so a
+            # concurrent Cancel (which clears the record) isn't undone by a late
+            # batch write from the draining task.
             if _is_active_build and _sched.get_settings()["scheduled_run_active"]:
-                attempted_ids.update(f.id for f in batch)
+                attempted_ids.update(f.id for f in applied_files)
                 _sched.update_settings(scheduled_processed_file_ids=list(attempted_ids))
+
+            # A Stop during this batch: leave now, before the heavy finalizers.
+            if _ingest_cancel:
+                break
 
             # Refresh index once per batch for next batch's context
             index_text = _get_index_text(db)
 
-        # Rebuild index page and backlinks
-        build_index_page(db)
-        compute_backlinks(db)
+        # Rebuild index page and backlinks — skip on cancel; these scan every
+        # page (O(N) over the whole wiki) and would add seconds to a Stop. A
+        # Resume (or the next completed build) rebuilds them.
+        if not _ingest_cancel:
+            build_index_page(db)
+            compute_backlinks(db)
 
         add_log_entry(db, "ingest",
                       f"Ingested {_ingest_status['processed_sources']} sources. "

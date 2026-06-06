@@ -219,11 +219,13 @@ async def stop_ingest():
     # scope + attempted so manual Resume picks up exactly where this left off.
     scheduler.update_settings(scheduled_run_active=False)
 
-    # Drain (wait for "stopped" phase) + shut down llama. Don't block the
-    # response on this — the frontend shows "Stopping..." while it polls.
+    # Drain (wait for the build to finish its in-flight work) + shut down llama.
+    # Don't block the response on this — the frontend shows "Stopping..." while
+    # it polls. Break as soon as the build is no longer running (covers the case
+    # where it was already idle/done, so we don't wait the full 10 minutes).
     async def _drain_and_shutdown():
         for _ in range(300):  # up to 10 minutes
-            if wiki_service.get_ingest_status()["phase"] == "stopped":
+            if not wiki_service.get_ingest_status()["is_running"]:
                 break
             await asyncio.sleep(2.0)
         await llama_supervisor.stop_all()
