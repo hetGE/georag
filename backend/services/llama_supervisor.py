@@ -59,6 +59,11 @@ _servers: dict[str, _ServerSpec] = {
 # is the safer reading.
 _starting: bool = False
 _intentionally_paused: bool = False
+# Latched by a manual pause (POST /system/llama/pause). Unlike _intentionally_paused
+# (also set by the scheduler's downtime stop), this means "the user wants llama
+# down" — the scheduler honours it so a manual pause survives the next reconcile
+# tick instead of being undone while a scheduled run is still queued.
+_user_paused: bool = False
 
 # Serialise start_all/stop_all so a click + scheduler tick don't race.
 _lifecycle_lock = asyncio.Lock()
@@ -90,6 +95,20 @@ async def _port_alive(base_url: str, timeout: float = 1.5) -> bool:
         return False
 
 
+async def _port_alive_tolerant(base_url: str, attempts: int = 3, timeout: float = 4.0) -> bool:
+    """Liveness check that tolerates a momentarily busy server. A single 1.5s
+    probe frequently times out while llama is mid-generation; treating that as
+    "down" made the scheduler relaunch an already-running server (and risk a
+    duplicate on the same port). Retry a few times with a longer timeout before
+    concluding it is really down."""
+    for attempt in range(attempts):
+        if await _port_alive(base_url, timeout=timeout):
+            return True
+        if attempt < attempts - 1:
+            await asyncio.sleep(0.5)
+    return False
+
+
 def _pid_listening_on(base_url: str) -> Optional[int]:
     """Look up the PID of the process listening on the port in base_url. macOS/Linux only."""
     try:
@@ -110,7 +129,16 @@ def _pid_listening_on(base_url: str) -> Optional[int]:
 
 
 async def is_running(name: str) -> bool:
-    return await _port_alive(_servers[name].base_url)
+    # Tolerant probe: this feeds the scheduler's restart decision, and a single
+    # 1.5s probe routinely times out on a busy (but alive) server.
+    return await _port_alive_tolerant(_servers[name].base_url)
+
+
+def is_user_paused() -> bool:
+    """True after a manual pause until the next start_all(). The scheduler
+    consults this so a user pause isn't reversed on the next tick. Transient —
+    lost on uvicorn reload, same as the other lifecycle flags."""
+    return _user_paused
 
 
 async def status() -> dict:
@@ -122,7 +150,7 @@ async def status() -> dict:
 
 
 async def _start_one(spec: _ServerSpec) -> None:
-    if await _port_alive(spec.base_url):
+    if await _port_alive_tolerant(spec.base_url):
         # Already up. Record a usable PID so a later stop_all() can kill it.
         if spec.process is None:
             existing = _read_pid_file(spec.pid_file)
@@ -139,6 +167,19 @@ async def _start_one(spec: _ServerSpec) -> None:
                 else:
                     logger.info("llama-server '%s' already up at %s (pid unknown)",
                                 spec.name, spec.base_url)
+        return
+
+    # Port isn't answering, but if we still hold a live pid the server is most
+    # likely busy/wedged rather than gone. Spawning now would put a second
+    # llama-server on the same port — leave the existing one and let the next
+    # tick re-check instead of stacking duplicates that waste memory.
+    existing = spec.process.pid if spec.process else _read_pid_file(spec.pid_file)
+    if existing and _is_pid_alive(existing):
+        logger.warning(
+            "llama-server '%s' pid %d alive but %s not responding; "
+            "skipping launch to avoid a duplicate",
+            spec.name, existing, spec.base_url,
+        )
         return
 
     spec.log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -169,9 +210,10 @@ async def _wait_ready(spec: _ServerSpec, timeout: float = 180.0) -> bool:
 async def start_all(wait: bool = True, timeout: float = 180.0) -> bool:
     """Start both servers (no-op if already up). Returns True iff both are ready
     (or True immediately when wait=False)."""
-    global _starting, _intentionally_paused
+    global _starting, _intentionally_paused, _user_paused
     async with _lifecycle_lock:
         _intentionally_paused = False
+        _user_paused = False
         _starting = True
         try:
             await asyncio.gather(*(_start_one(s) for s in _servers.values()))
@@ -259,8 +301,16 @@ async def _stop_one(spec: _ServerSpec) -> None:
         pass
 
 
-async def stop_all() -> None:
-    global _intentionally_paused
+async def stop_all(user_initiated: bool = False) -> None:
+    """Stop both servers. When user_initiated, also latch _user_paused so the
+    scheduler leaves llama down until it is explicitly started again."""
+    global _intentionally_paused, _user_paused
     async with _lifecycle_lock:
+        if user_initiated:
+            # Latch the intent before the kill, not after: a stubborn llama can
+            # take a couple of minutes to die (SIGTERM → SIGKILL), and a
+            # scheduler tick landing mid-shutdown must already see "user-paused"
+            # so it won't queue a restart while a scheduled run is still active.
+            _user_paused = True
         await asyncio.gather(*(_stop_one(s) for s in _servers.values()))
         _intentionally_paused = True

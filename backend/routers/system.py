@@ -143,7 +143,7 @@ async def pause_llama():
     reason = _busy_reason()
     if reason:
         raise HTTPException(status_code=409, detail=f"Cannot pause: {reason}.")
-    await llama_supervisor.stop_all()
+    await llama_supervisor.stop_all(user_initiated=True)
     return {"ok": True, "state": "paused"}
 
 

@@ -201,6 +201,9 @@ async def _ensure_llama_up_if_needed(s: dict, chat_up: bool) -> bool:
     global _pending_resume_after_downtime
     if chat_up:
         return True
+    if llama_supervisor.is_user_paused():
+        logger.info("Scheduler: llama stays down (user-paused)")
+        return False
     if not (_pending_resume_after_downtime or s["scheduled_run_active"]):
         logger.info("Scheduler: llama stays down (no pending resume, no scheduled run)")
         return False
