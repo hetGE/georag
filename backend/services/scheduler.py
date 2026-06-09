@@ -30,6 +30,13 @@ _force_uptime_until: Optional[datetime.datetime] = None  # "End downtime" overri
 # llama after a user-initiated auto-shutdown.
 _pending_resume_after_downtime: bool = False
 
+# Armed by enter_downtime() ONLY when it pauses a build that was actually
+# running in this process. It is the sole authorisation for auto-resuming a
+# wiki build. A persisted scheduled_run_active alone must never start a build —
+# otherwise every cold app launch would kick off the (huge) ingest. This flag
+# is transient (lost on restart), so a fresh launch never auto-resumes.
+_wiki_pending_downtime_resume: bool = False
+
 
 # ── Settings I/O ─────────────────────────────────────────────────────────
 
@@ -182,10 +189,14 @@ async def _wait_for_phase(target: str, timeout: float = 300.0) -> bool:
 
 
 async def enter_downtime():
-    global _pending_resume_after_downtime
+    global _pending_resume_after_downtime, _wiki_pending_downtime_resume
     logger.info("Scheduler: entering downtime window")
     _pending_resume_after_downtime = True
     if wiki_service.get_ingest_status()["is_running"]:
+        # A build was actively running when downtime hit — arm its resume for
+        # when the window ends. This is the only path that authorises an
+        # auto-resume; a cold launch (flag defaults False) never starts a build.
+        _wiki_pending_downtime_resume = True
         logger.info("Scheduler: stopping wiki ingest gracefully")
         await wiki_service.stop_ingest()
         reached = await _wait_for_phase("stopped", timeout=600.0)
@@ -220,23 +231,30 @@ async def _ensure_llama_up_if_needed(s: dict, chat_up: bool) -> bool:
 
 
 async def _resume_scheduled_wiki_if_needed(s: dict, chat_up: bool, wiki_running: bool):
-    """If a scheduled run is queued, llama is up, and no wiki ingest is
-    currently in flight, kick off ingest_sources. Idempotent — if the wiki
-    is still draining from a prior stop, we just try again next tick."""
+    """Resume a build that THIS process paused for downtime — never auto-start
+    one off a merely-persisted scheduled_run_active. A cold app launch must not
+    kick off a wiki build; the user starts/resumes builds explicitly. Idempotent
+    — if the wiki is still draining or llama isn't up yet, retry next tick."""
+    global _wiki_pending_downtime_resume
+    if not _wiki_pending_downtime_resume:
+        return
     if not s["scheduled_run_active"]:
+        # The run was cancelled/finished while paused — nothing to resume.
+        _wiki_pending_downtime_resume = False
         return
     if not chat_up or wiki_running:
         logger.info(
-            "Scheduler: scheduled run queued but not resuming yet "
+            "Scheduler: downtime build pending resume but not yet "
             "(chat_up=%s wiki_running=%s)", chat_up, wiki_running,
         )
         return
     tag_names = s["scheduled_tag_names"]
     file_ids = s["scheduled_file_ids"]
     logger.info(
-        "Scheduler: auto-resuming scheduled wiki ingest (tags=%s file_ids=%d)",
+        "Scheduler: auto-resuming wiki ingest paused for downtime (tags=%s file_ids=%d)",
         tag_names, len(file_ids),
     )
+    _wiki_pending_downtime_resume = False
     asyncio.create_task(
         wiki_service.ingest_sources(tag_names=tag_names, file_ids=file_ids)
     )
