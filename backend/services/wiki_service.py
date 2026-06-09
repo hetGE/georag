@@ -7,6 +7,7 @@ import time
 import datetime
 from typing import Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from backend.config import (
@@ -255,20 +256,25 @@ def search_pages(db: Session, query: str) -> list[WikiPage]:
 
 
 def get_stats(db: Session) -> dict:
-    """Get wiki statistics."""
+    """Get wiki statistics.
+
+    Uses column-only aggregate queries — never `query(WikiPage).all()`, which
+    would pull every page's full `content` (tens of MB across ~18k pages) off
+    disk on every poll. The frontend polls /wiki/stats every few seconds, so a
+    SELECT * here pegs several cores the whole time a build (or downtime) runs.
+    """
     total = db.query(WikiPage).count()
-    categories = {}
-    for page in db.query(WikiPage).all():
-        categories[page.category] = categories.get(page.category, 0) + 1
-    last_updated = (
-        db.query(WikiPage)
-        .order_by(WikiPage.updated_at.desc())
-        .first()
-    )
+    categories = {
+        cat: cnt
+        for cat, cnt in db.query(WikiPage.category, func.count(WikiPage.id))
+        .group_by(WikiPage.category)
+        .all()
+    }
+    last_updated = db.query(func.max(WikiPage.updated_at)).scalar()
     return {
         "total_pages": total,
         "categories": categories,
-        "last_updated": last_updated.updated_at.isoformat() if last_updated else None,
+        "last_updated": last_updated.isoformat() if last_updated else None,
     }
 
 
@@ -300,12 +306,18 @@ def get_sync_status(db: Session) -> dict:
 
     wiki_pages = db.query(WikiPage).count()
 
-    # Compute persistent coverage: which processed files appear in any wiki page's source_files
-    all_processed_files = db.query(File).filter(File.scan_status == "processed").all()
+    # Compute persistent coverage: which processed files appear in any wiki page's source_files.
+    # Select only the two columns we compare on — loading full File rows pulls
+    # extracted_text_preview for every file needlessly.
+    all_processed_files = (
+        db.query(File.relative_path, File.filename)
+        .filter(File.scan_status == "processed")
+        .all()
+    )
     covered_paths, covered_filenames = _wiki_covered_index(db)
     covered_count = sum(
-        1 for f in all_processed_files
-        if f.relative_path in covered_paths or f.filename in covered_filenames
+        1 for rel_path, filename in all_processed_files
+        if rel_path in covered_paths or filename in covered_filenames
     )
     pending_count = processed_count - covered_count
 
@@ -332,8 +344,10 @@ def _wiki_covered_index(db: Session) -> tuple[set[str], set[str]]:
     File.relative_path, but the filename field is reliable."""
     covered_paths: set[str] = set()
     covered_filenames: set[str] = set()
-    for page in db.query(WikiPage).all():
-        for sf in (page.source_files or []):
+    # Only source_files is needed — selecting the whole row would read every
+    # page's full content column (the bulk of the table) off disk per call.
+    for (source_files,) in db.query(WikiPage.source_files).all():
+        for sf in (source_files or []):
             if isinstance(sf, dict):
                 path = sf.get("file_path", "")
                 fn = sf.get("filename", "")
