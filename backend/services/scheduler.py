@@ -262,19 +262,24 @@ async def _tick():
 
     s = get_settings()
     in_dt = is_in_downtime(s)
-    chat_up = await llama_supervisor.is_running("chat")
+    chat_up, embed_up = await asyncio.gather(
+        llama_supervisor.is_running("chat"),
+        llama_supervisor.is_running("embed"),
+    )
     wiki_running = wiki_service.get_ingest_status()["is_running"]
 
     logger.info(
-        "Scheduler tick: in_dt=%s chat_up=%s wiki_running=%s "
+        "Scheduler tick: in_dt=%s chat_up=%s embed_up=%s wiki_running=%s "
         "scheduled_run_active=%s pending_resume=%s",
-        in_dt, chat_up, wiki_running,
+        in_dt, chat_up, embed_up, wiki_running,
         s["scheduled_run_active"], _pending_resume_after_downtime,
     )
 
     if in_dt:
-        # Should be paused. Stop wiki + llama if anything is still up.
-        if chat_up or wiki_running:
+        # Should be paused. Stop wiki + llama if anything is still up. Check BOTH
+        # servers — not just chat — so an embed-only survivor (e.g. an orphan from
+        # a uvicorn --reload) can't sit idle through downtime eating memory.
+        if chat_up or embed_up or wiki_running:
             await enter_downtime()
         return
 

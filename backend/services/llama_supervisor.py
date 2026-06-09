@@ -321,6 +321,34 @@ async def _stop_one(spec: _ServerSpec) -> None:
         pass
 
 
+async def _reap_orphan_on_port(spec: _ServerSpec) -> None:
+    """Kill any llama-server still listening on this server's port that _stop_one
+    didn't account for. A server launched with start_new_session=True survives a
+    uvicorn --reload as a detached orphan; if the new worker never adopted it
+    (port was momentarily unresponsive at adoption time), _stop_one only ever
+    knows the tracked pid and the orphan keeps the model weights resident through
+    the whole downtime window."""
+    pid = _pid_listening_on(spec.base_url)
+    if not pid or not _is_pid_alive(pid):
+        return
+    logger.warning("llama-server '%s' orphan still on %s (pid %d); killing",
+                   spec.name, spec.base_url, pid)
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as e:
+        logger.warning("SIGTERM to orphan %d failed: %s", pid, e)
+        return
+    for _ in range(20):  # safety cap ~5 s
+        if not _is_pid_alive(pid):
+            return
+        await asyncio.sleep(0.25)
+    logger.warning("orphan llama-server '%s' pid %d ignored SIGTERM; SIGKILL", spec.name, pid)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
 async def stop_all(user_initiated: bool = False) -> None:
     """Stop both servers. When user_initiated, also latch _user_paused so the
     scheduler leaves llama down until it is explicitly started again."""
@@ -333,4 +361,8 @@ async def stop_all(user_initiated: bool = False) -> None:
             # so it won't queue a restart while a scheduled run is still active.
             _user_paused = True
         await asyncio.gather(*(_stop_one(s) for s in _servers.values()))
+        # Belt-and-braces: _stop_one only kills the pid we tracked. Sweep the
+        # ports too so a detached orphan (untracked after a --reload) can't keep
+        # llama resident through downtime.
+        await asyncio.gather(*(_reap_orphan_on_port(s) for s in _servers.values()))
         _intentionally_paused = True
