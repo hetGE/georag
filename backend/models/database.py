@@ -55,6 +55,13 @@ def init_db():
             conn.execute(text(
                 "ALTER TABLE app_settings ADD COLUMN scheduled_processed_file_ids JSON DEFAULT '[]'"))
 
+    # Migration: persist the "paused for downtime" marker (replaces an old
+    # transient in-process flag, so a restart during the window still resumes).
+    if 'scheduled_paused_for_downtime' not in app_cols:
+        with engine.begin() as conn:
+            conn.execute(text(
+                "ALTER TABLE app_settings ADD COLUMN scheduled_paused_for_downtime BOOLEAN NOT NULL DEFAULT 0"))
+
     # Seed AppSettings row (id=1) if missing
     with engine.begin() as conn:
         row = conn.execute(text("SELECT id FROM app_settings WHERE id=1")).first()
@@ -62,6 +69,7 @@ def init_db():
             conn.execute(text(
                 "INSERT INTO app_settings (id, schedule_enabled, downtime_start, downtime_end, "
                 "auto_shutdown_on_manual_pause, scheduled_run_active, "
-                "scheduled_tag_names, scheduled_file_ids, scheduled_processed_file_ids) "
-                "VALUES (1, 0, '06:30', '09:30', 0, 0, '[]', '[]', '[]')"
+                "scheduled_tag_names, scheduled_file_ids, scheduled_processed_file_ids, "
+                "scheduled_paused_for_downtime) "
+                "VALUES (1, 0, '06:30', '09:30', 0, 0, '[]', '[]', '[]', 0)"
             ))

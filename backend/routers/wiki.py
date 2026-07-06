@@ -186,6 +186,7 @@ async def start_ingest(request: WikiIngestRequest):
     )
     fields = dict(
         scheduled_run_active=True,
+        scheduled_paused_for_downtime=False,  # an explicit start is not a paused build
         scheduled_tag_names=tag_names,
         scheduled_file_ids=file_ids,
     )
@@ -217,7 +218,8 @@ async def stop_ingest():
     await wiki_service.stop_ingest()
     # Clear the active flag so the scheduler won't auto-resume; but keep
     # scope + attempted so manual Resume picks up exactly where this left off.
-    scheduler.update_settings(scheduled_run_active=False)
+    # Also drop the downtime-pause marker — a manual Stop must not auto-resume.
+    scheduler.update_settings(scheduled_run_active=False, scheduled_paused_for_downtime=False)
 
     # Drain (wait for the build to finish its in-flight work) + shut down llama.
     # Don't block the response on this — the frontend shows "Stopping..." while
@@ -246,6 +248,7 @@ async def start_pending_ingest(db: Session = Depends(get_db)):
     # Durable build: persist scope so the scheduler auto-pauses/resumes it.
     scheduler.update_settings(
         scheduled_run_active=True,
+        scheduled_paused_for_downtime=False,  # an explicit start is not a paused build
         scheduled_tag_names=[],
         scheduled_file_ids=pending_ids,
         scheduled_processed_file_ids=[],

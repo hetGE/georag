@@ -30,12 +30,13 @@ _force_uptime_until: Optional[datetime.datetime] = None  # "End downtime" overri
 # llama after a user-initiated auto-shutdown.
 _pending_resume_after_downtime: bool = False
 
-# Armed by enter_downtime() ONLY when it pauses a build that was actually
-# running in this process. It is the sole authorisation for auto-resuming a
-# wiki build. A persisted scheduled_run_active alone must never start a build —
-# otherwise every cold app launch would kick off the (huge) ingest. This flag
-# is transient (lost on restart), so a fresh launch never auto-resumes.
-_wiki_pending_downtime_resume: bool = False
+# Authorisation to auto-resume a wiki build lives in the PERSISTED
+# AppSettings.scheduled_paused_for_downtime marker (set by enter_downtime() when
+# it pauses a running build, gated on in _resume_scheduled_wiki_if_needed). It is
+# persisted — not a transient in-process flag — so a restart *during* the window
+# still resumes when the window ends. A persisted scheduled_run_active alone must
+# never start a build (a build killed mid-flight leaves the marker False), so a
+# cold launch never kicks off the (huge) ingest.
 
 
 # ── Settings I/O ─────────────────────────────────────────────────────────
@@ -46,6 +47,7 @@ def _row_to_dict(s: AppSettings) -> dict:
         "downtime_start": s.downtime_start or "06:30",
         "downtime_end": s.downtime_end or "09:30",
         "scheduled_run_active": bool(s.scheduled_run_active),
+        "scheduled_paused_for_downtime": bool(s.scheduled_paused_for_downtime),
         "scheduled_tag_names": list(s.scheduled_tag_names or []),
         "scheduled_file_ids": list(s.scheduled_file_ids or []),
         "scheduled_processed_file_ids": list(s.scheduled_processed_file_ids or []),
@@ -74,7 +76,7 @@ def update_settings(**kwargs) -> dict:
     """Update one or more setting fields. Unknown keys are ignored."""
     allowed = {
         "schedule_enabled", "downtime_start", "downtime_end",
-        "scheduled_run_active",
+        "scheduled_run_active", "scheduled_paused_for_downtime",
         "scheduled_tag_names", "scheduled_file_ids",
         "scheduled_processed_file_ids",
     }
@@ -95,6 +97,7 @@ def clear_scheduled_run():
     """Called when the wiki build finishes naturally or is manually cancelled."""
     update_settings(
         scheduled_run_active=False,
+        scheduled_paused_for_downtime=False,
         scheduled_tag_names=[],
         scheduled_file_ids=[],
         scheduled_processed_file_ids=[],
@@ -189,14 +192,15 @@ async def _wait_for_phase(target: str, timeout: float = 300.0) -> bool:
 
 
 async def enter_downtime():
-    global _pending_resume_after_downtime, _wiki_pending_downtime_resume
+    global _pending_resume_after_downtime
     logger.info("Scheduler: entering downtime window")
     _pending_resume_after_downtime = True
     if wiki_service.get_ingest_status()["is_running"]:
-        # A build was actively running when downtime hit — arm its resume for
-        # when the window ends. This is the only path that authorises an
-        # auto-resume; a cold launch (flag defaults False) never starts a build.
-        _wiki_pending_downtime_resume = True
+        # A build was actively running when downtime hit — persist a marker so it
+        # auto-resumes when the window ends, even across a process restart during
+        # the window. This is the only path that authorises an auto-resume; a cold
+        # launch after a mid-build *kill* (marker stays False) never starts a build.
+        update_settings(scheduled_paused_for_downtime=True)
         logger.info("Scheduler: stopping wiki ingest gracefully")
         await wiki_service.stop_ingest()
         reached = await _wait_for_phase("stopped", timeout=600.0)
@@ -231,16 +235,18 @@ async def _ensure_llama_up_if_needed(s: dict, chat_up: bool) -> bool:
 
 
 async def _resume_scheduled_wiki_if_needed(s: dict, chat_up: bool, wiki_running: bool):
-    """Resume a build that THIS process paused for downtime — never auto-start
-    one off a merely-persisted scheduled_run_active. A cold app launch must not
-    kick off a wiki build; the user starts/resumes builds explicitly. Idempotent
-    — if the wiki is still draining or llama isn't up yet, retry next tick."""
-    global _wiki_pending_downtime_resume
-    if not _wiki_pending_downtime_resume:
+    """Resume a build the downtime scheduler paused — driven by the PERSISTED
+    scheduled_paused_for_downtime marker, so a restart during the window still
+    resumes. Never auto-starts off a merely-persisted scheduled_run_active: a
+    build killed mid-flight leaves the marker False, so a cold launch stays put
+    and the user starts/resumes builds explicitly. Idempotent — if the wiki is
+    still draining or llama isn't up yet, retry next tick."""
+    if not s["scheduled_paused_for_downtime"]:
         return
     if not s["scheduled_run_active"]:
-        # The run was cancelled/finished while paused — nothing to resume.
-        _wiki_pending_downtime_resume = False
+        # The run was cancelled/finished/stopped while paused — nothing to
+        # auto-resume (scope is preserved for a manual Resume). Clear the marker.
+        update_settings(scheduled_paused_for_downtime=False)
         return
     if not chat_up or wiki_running:
         logger.info(
@@ -254,7 +260,7 @@ async def _resume_scheduled_wiki_if_needed(s: dict, chat_up: bool, wiki_running:
         "Scheduler: auto-resuming wiki ingest paused for downtime (tags=%s file_ids=%d)",
         tag_names, len(file_ids),
     )
-    _wiki_pending_downtime_resume = False
+    update_settings(scheduled_paused_for_downtime=False)
     asyncio.create_task(
         wiki_service.ingest_sources(tag_names=tag_names, file_ids=file_ids)
     )
@@ -288,9 +294,10 @@ async def _tick():
 
     logger.info(
         "Scheduler tick: in_dt=%s chat_up=%s embed_up=%s wiki_running=%s "
-        "scheduled_run_active=%s pending_resume=%s",
+        "scheduled_run_active=%s paused_for_dt=%s pending_resume=%s",
         in_dt, chat_up, embed_up, wiki_running,
-        s["scheduled_run_active"], _pending_resume_after_downtime,
+        s["scheduled_run_active"], s["scheduled_paused_for_downtime"],
+        _pending_resume_after_downtime,
     )
 
     if in_dt:

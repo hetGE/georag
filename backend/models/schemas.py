@@ -131,5 +131,11 @@ class AppSettings(Base):
     # produced a page). Lets a paused/resumed build skip them so it converges
     # instead of re-processing no-page files (media, empty docs) every cycle.
     scheduled_processed_file_ids = Column(JSON, default=list, nullable=False)
+    # True while the active scheduled build has been paused by the downtime
+    # scheduler and is awaiting auto-resume at the window's end. Persisted (not a
+    # transient in-process flag) so a restart during the window still resumes; it
+    # distinguishes a clean downtime-pause from a build killed mid-flight, which
+    # must NOT auto-start on a cold launch.
+    scheduled_paused_for_downtime = Column(Boolean, default=False, nullable=False)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow,
                         onupdate=datetime.datetime.utcnow)
