@@ -527,14 +527,6 @@ nav ul:last-child li a.active:hover {
     color: var(--pico-muted-color);
 }
 
-.depth-info {
-    font-size: 0.7rem;
-    color: var(--pico-muted-color);
-    margin-top: 0.25rem;
-    margin-bottom: 0;
-    line-height: 1.4;
-}
-
 /* Documents Layout */
 .documents-layout {
     display: flex;

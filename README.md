@@ -108,23 +108,25 @@ Two pieces of software make this work:
 | **Operating system** | macOS 14+, Windows 10+, or Ubuntu 20.04+ | macOS with Apple Silicon (M1/M2/M3/M4) |
 | **Python** | 3.10 | 3.11 or newer |
 | **Tesseract OCR** | 4.x+ | Latest (`brew install tesseract` on macOS) |
-| **llama-server** | Recent build of [llama.cpp](https://github.com/ggml-org/llama.cpp) | Apple Silicon Metal build or CUDA build matching your GPU |
-| **GPU** | Not strictly required | Apple Silicon or NVIDIA GPU (much faster) |
+| **llama-server** | Recent build of [llama.cpp](https://github.com/ggml-org/llama.cpp), on your `PATH` | Apple Silicon Metal build or CUDA build matching your GPU |
+| **GPU / VRAM** | 12 GB VRAM (or Apple Silicon unified memory) | 16 GB+ — Apple Silicon (M1/M2/M3/M4) or NVIDIA GPU |
+
+> **Why 12 GB?** GeoRAG always launches its chat model with a fixed 131,072-token (128K) context window, so every Retrieval Depth level — including Ludicrous — works out of the box without any reconfiguration. The Qwen 3.5 9B weights, the vision projector, and the 128K KV cache (quantized to q8_0) together need roughly 12 GB of GPU/unified memory; the embedding model adds a bit more. Machines with less will fall back to slow CPU inference or fail to load the model.
 
 ## Step 1: Set Up llama-server
 
-GeoRAG expects **two separate `llama-server` processes** (from [llama.cpp](https://github.com/ggml-org/llama.cpp)) to be running before you start the app:
+GeoRAG launches and manages **two `llama-server` processes** (from [llama.cpp](https://github.com/ggml-org/llama.cpp)) itself — you don't start them by hand:
 
 | Role | Port | Default model | Alias |
 |------|------|---------------|-------|
 | Chat (with vision) | 8001 | Qwen 3.5 9B + mmproj sidecar | `qwen3.5-9B` |
 | Embeddings | 8002 | Nomic embed text v1.5 | `nomic-embed-text-v1.5` |
 
-GeoRAG does not start, restart, or manage these processes. Run them yourself in two separate terminals (or under a supervisor like `tmux` / `launchd` / `systemd`).
+The FastAPI backend (`backend/services/llama_supervisor.py`) spawns both processes on startup, tracks their PIDs, and can stop/restart them — for a manual pause from the UI, or automatically during a scheduled downtime window. All you need to do is install `llama-server` and point GeoRAG at your model files.
 
 ### Install llama.cpp
 
-Build or install from the upstream project: <https://github.com/ggml-org/llama.cpp>. On macOS the simplest route is `brew install llama.cpp`. After install, `llama-server --version` should print a version.
+Build or install from the upstream project: <https://github.com/ggml-org/llama.cpp>. On macOS the simplest route is `brew install llama.cpp`. After install, `llama-server --version` should print a version, and `llama-server` must be on your `PATH` (the app shells out to the `llama-server` binary by name).
 
 ### Download the GGUF model files
 
@@ -140,7 +142,14 @@ The `mmproj-*.gguf` sidecar is the multimodal projector for the chat model. With
 
 Both Qwen GGUFs ship together in `lmstudio-community/Qwen3.5-9B-GGUF`; the embedding GGUF lives in `second-state/Nomic-embed-text-v1.5-Embedding-GGUF`.
 
-### Start the chat llama-server (port 8001)
+Point GeoRAG at your model file paths by editing `LLAMA_CHAT_MODEL`, `LLAMA_CHAT_MMPROJ`, and `LLAMA_EMBED_MODEL` in `backend/config.py`.
+
+### Reference: exact launch arguments
+
+You don't need to run these yourself — this is what `llama_supervisor.py` launches automatically, shown here for reference (e.g. if you want to reproduce the exact behavior outside the app, or tune parameters in `backend/config.py`).
+
+<details>
+<summary>Chat server (port 8001)</summary>
 
 ```bash
 llama-server \
@@ -163,9 +172,12 @@ llama-server \
   --chat-template-kwargs '{"preserve_thinking": true}'
 ```
 
-`--chat-template-kwargs '{"preserve_thinking": true}'` keeps Qwen 3.5's `<think>...</think>` reasoning blocks in the streamed reply. The chat UI auto-collapses them after the model finishes thinking, with a click-to-expand toggle.
+`--chat-template-kwargs '{"preserve_thinking": true}'` keeps Qwen 3.5's `<think>...</think>` reasoning blocks in the streamed reply. The chat UI auto-collapses them after the model finishes thinking, with a click-to-expand toggle. `-c 131072` is fixed regardless of the Retrieval Depth setting — see the note above.
 
-### Start the embedding llama-server (port 8002)
+</details>
+
+<details>
+<summary>Embedding server (port 8002)</summary>
 
 ```bash
 llama-server \
@@ -183,16 +195,11 @@ llama-server \
   -ngl 99
 ```
 
-### Verify both servers are up
-
-```bash
-curl http://127.0.0.1:8001/v1/models   # should list qwen3.5-9B
-curl http://127.0.0.1:8002/v1/models   # should list nomic-embed-text-v1.5
-```
+</details>
 
 The `--alias` values **must match** `CHAT_MODEL` and `EMBEDDING_MODEL` in `backend/config.py`. If you change one, change the other.
 
-> **Both llama-server processes must be running before you start GeoRAG.** `start.sh` and the in-app modal both probe ports 8001 and 8002 and warn (with a pointer back to this section) if either is unreachable.
+> GeoRAG starts both servers automatically when the app launches. Watch the status pill in the top bar: it reads "Starting LLMs" while the models load, "LLMs paused" if manually paused (click to resume), and shows a warning if a server fails to start — check `data/logs/llama-chat.log` / `data/logs/llama-embed.log` for details. Both processes are also stopped and restarted automatically during any scheduled downtime window you configure.
 
 ## Step 2: Start GeoRAG
 
@@ -282,10 +289,10 @@ When you first open GeoRAG, the **Library Panel** on the right side walks you th
 
 | Depth Level | Speed | Detail | Good For |
 |-------------|-------|--------|----------|
-| Quick | Fastest | Brief answers | Simple factual lookups |
-| Standard | Balanced | Good detail | Most questions (default) |
-| Deep | Slower | Thorough | Multi-document analysis |
-| Extreme | Slow | Very detailed | Complex technical questions |
+| Quick and less demanding | Fastest | Brief answers | Simple factual lookups |
+| Optimal and balanced | Balanced | Good detail | Most questions (default) |
+| Deep and demanding | Slower | Thorough | Multi-document analysis |
+| Deeper and very demanding | Slow | Very detailed | Complex technical questions |
 | Ludicrous | Slowest | Maximum context | When you need everything |
 
 - **Conversations are saved**: Use the sidebar on the left to switch between past conversations.
@@ -356,16 +363,20 @@ You can also create your own custom tags through the Documents page or the API.
 - For non-English documents, add the language code to `OCR_LANGUAGES` in `backend/config.py` (e.g., `["eng", "tur"]` for English + Turkish). You may also need to install the Tesseract language pack (e.g., `brew install tesseract-lang`).
 
 ### "Local LLM Servers Not Available" / "llama-server not detected"
-One or both of the llama-server instances isn't running. Start them in two terminals using the commands in [Step 1: Set Up llama-server](#step-1-set-up-llama-server). Verify with:
+GeoRAG auto-launches both llama-server instances on startup; this means one or both failed to come up. Check:
+- `llama-server` is installed and on your `PATH` (`llama-server --version`)
+- The model files exist at the paths configured in `backend/config.py` (`LLAMA_CHAT_MODEL`, `LLAMA_CHAT_MMPROJ`, `LLAMA_EMBED_MODEL`)
+- `data/logs/llama-chat.log` and `data/logs/llama-embed.log` for the actual startup error
+
+Once running, verify with:
 ```bash
 curl http://127.0.0.1:8001/v1/models   # chat
 curl http://127.0.0.1:8002/v1/models   # embeddings
 ```
 
 ### Chat gives empty or broken responses
-- Make sure the chat llama-server (port 8001) is running and `--alias qwen3.5-9B` matches `CHAT_MODEL` in `backend/config.py`
-- If you changed the model, update both `--alias` and `CHAT_MODEL` to match
-- Try increasing `-c` (context length) on the chat server — 131072 for Wiki ingest, 8192+ for chat-only
+- Check `data/logs/llama-chat.log` for errors from the chat llama-server (port 8001)
+- Make sure `--alias qwen3.5-9B` matches `CHAT_MODEL` in `backend/config.py` — if you changed the model, update both `LLAMA_CHAT_MODEL`/`--alias` and `CHAT_MODEL` to match
 
 ### Processing fails on embeddings
 - Make sure the embedding llama-server (port 8002) is running with `--embeddings` and `--alias nomic-embed-text-v1.5`
@@ -598,11 +609,13 @@ When a user sends a message via `POST /api/chat`:
 
 | Level | Top K Per Tag | Max Context Chunks |
 |-------|--------------|-------------------|
-| Quick | 3 | 4 |
-| Standard | 5 | 8 |
-| Deep | 8 | 12 |
-| Extreme | 12 | 20 |
-| Ludicrous | 15 | 25 |
+| Quick and less demanding | 5 | 8 |
+| Optimal and balanced | 10 | 16 |
+| Deep and demanding | 20 | 32 |
+| Deeper and very demanding | 50 | 80 |
+| Ludicrous | 100 | 200 |
+
+All levels are served by the same chat llama-server, which always launches with a fixed 131,072-token context window — no restart or reconfiguration is needed when switching depths (see [What You Need](#what-you-need)).
 
 ## Concurrency Model
 
