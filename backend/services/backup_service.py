@@ -191,7 +191,7 @@ class BackupExporter:
         file_cols = [
             "id", "relative_path", "filename", "extension", "size_bytes",
             "modified_time", "parent_directory", "content_hash", "scan_status",
-            "extracted_text_preview", "chunk_count", "processed_at",
+            "extracted_text_preview", "chunk_count", "processed_at", "wiki_attempted_at",
             "auto_tagged", "auto_tag_confidence",
         ]
         count = 0
@@ -580,6 +580,7 @@ class BackupImporter:
                     extracted_text_preview=d.get("extracted_text_preview"),
                     chunk_count=d.get("chunk_count", 0),
                     processed_at=_parse_datetime(d.get("processed_at")),
+                    wiki_attempted_at=_parse_datetime(d.get("wiki_attempted_at")),
                     auto_tagged=d.get("auto_tagged", 0),
                     auto_tag_confidence=d.get("auto_tag_confidence"),
                 ))

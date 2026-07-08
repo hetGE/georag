@@ -62,6 +62,22 @@ def init_db():
             conn.execute(text(
                 "ALTER TABLE app_settings ADD COLUMN scheduled_paused_for_downtime BOOLEAN NOT NULL DEFAULT 0"))
 
+    # Migration: durable per-file wiki-attempt marker (replaces the scope-keyed
+    # app_settings.scheduled_processed_file_ids blob). One-time backfill rescues
+    # the attempts that blob recorded for the active build, then drains the blob
+    # (all three statements share one transaction, so mark+drain is atomic).
+    file_cols = [c['name'] for c in insp.get_columns('files')]
+    if 'wiki_attempted_at' not in file_cols:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE files ADD COLUMN wiki_attempted_at DATETIME"))
+            conn.execute(text(
+                "UPDATE files SET wiki_attempted_at = datetime('now') WHERE id IN ("
+                "SELECT je.value FROM app_settings, "
+                "json_each(app_settings.scheduled_processed_file_ids) je "
+                "WHERE app_settings.id = 1)"))
+            conn.execute(text(
+                "UPDATE app_settings SET scheduled_processed_file_ids = '[]' WHERE id = 1"))
+
     # Seed AppSettings row (id=1) if missing
     with engine.begin() as conn:
         row = conn.execute(text("SELECT id FROM app_settings WHERE id=1")).first()

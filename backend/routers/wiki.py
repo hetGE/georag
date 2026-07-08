@@ -159,9 +159,9 @@ async def start_ingest(request: WikiIngestRequest):
     """Start (or resume) a wiki build from source documents. Runs in background.
 
     Every build is durable: its scope is persisted as the active build so the
-    downtime scheduler auto-pauses/resumes it. Resuming the same scope keeps the
-    per-build "attempted files" set so the build converges; a different scope is
-    a new build and resets it.
+    downtime scheduler auto-pauses/resumes it. Per-file progress is tracked on
+    File.wiki_attempted_at, so any resume — same scope or not — skips files
+    already attempted and converges instead of re-grinding them.
     """
     status = wiki_service.get_ingest_status()
     if status["is_running"]:
@@ -169,30 +169,15 @@ async def start_ingest(request: WikiIngestRequest):
 
     tag_names = request.tag_names or []
     file_ids = request.file_ids or []
-    prev = scheduler.get_settings()
-    # "Same scope" covers both a fresh resume of an in-progress build and a
-    # resume after manual Stop (which leaves active=False but keeps scope +
-    # attempted so progress isn't lost). The scope must be non-trivial — i.e.
-    # we previously had a build at all (non-empty scope or attempted history).
-    prev_had_build = bool(
-        prev["scheduled_tag_names"]
-        or prev["scheduled_file_ids"]
-        or prev["scheduled_processed_file_ids"]
-    )
-    same_scope = (
-        prev_had_build
-        and sorted(prev["scheduled_tag_names"]) == sorted(tag_names)
-        and sorted(prev["scheduled_file_ids"]) == sorted(file_ids)
-    )
-    fields = dict(
+    # Persist the scope so the downtime scheduler can auto-pause/resume this
+    # build. No same-scope bookkeeping — resume progress is durable per-file
+    # (File.wiki_attempted_at), so any scope converges.
+    scheduler.update_settings(
         scheduled_run_active=True,
         scheduled_paused_for_downtime=False,  # an explicit start is not a paused build
         scheduled_tag_names=tag_names,
         scheduled_file_ids=file_ids,
     )
-    if not same_scope:
-        fields["scheduled_processed_file_ids"] = []  # new build → nothing attempted yet
-    scheduler.update_settings(**fields)
 
     if not await llama_supervisor.ensure_running():
         raise HTTPException(status_code=503, detail="Local LLM servers did not start in time.")
@@ -216,9 +201,9 @@ async def stop_ingest():
     build's scope + progress (attempted files) are preserved so the user can
     Resume later. The scheduler will not auto-resume (active flag is cleared)."""
     await wiki_service.stop_ingest()
-    # Clear the active flag so the scheduler won't auto-resume; but keep
-    # scope + attempted so manual Resume picks up exactly where this left off.
-    # Also drop the downtime-pause marker — a manual Stop must not auto-resume.
+    # Clear the active flag so the scheduler won't auto-resume. Per-file progress
+    # (File.wiki_attempted_at) survives independently, so a manual Resume picks
+    # up exactly where this left off. Also drop the downtime-pause marker.
     scheduler.update_settings(scheduled_run_active=False, scheduled_paused_for_downtime=False)
 
     # Drain (wait for the build to finish its in-flight work) + shut down llama.
@@ -251,7 +236,6 @@ async def start_pending_ingest(db: Session = Depends(get_db)):
         scheduled_paused_for_downtime=False,  # an explicit start is not a paused build
         scheduled_tag_names=[],
         scheduled_file_ids=pending_ids,
-        scheduled_processed_file_ids=[],
     )
     if not await llama_supervisor.ensure_running():
         raise HTTPException(status_code=503, detail="Local LLM servers did not start in time.")
@@ -352,10 +336,20 @@ def get_stats(db: Session = Depends(get_db)):
     on the loop. The frontend polls this every few seconds during a build."""
     stats = wiki_service.get_stats(db)
     sync = wiki_service.get_sync_status(db)
-    # scheduled_run_active distinguishes a paused-but-active build (auto-resumes)
-    # from a cancelled one, so the UI knows whether to show the "Paused" state.
     settings = scheduler.get_settings()
-    return {**stats, **sync, "scheduled_run_active": settings["scheduled_run_active"]}
+    # A build that's active-but-not-running (persisted scope, nothing in flight)
+    # was interrupted — killed mid-flight or paused — and can be resumed. The
+    # in-memory was_stopped flag is lost on restart, so OR it with this persisted
+    # signal; that lets the UI offer Resume even after an app restart.
+    # scheduled_run_active also tells the UI a paused build auto-resumes.
+    stopped = sync["wiki_ingest_stopped"] or (
+        settings["scheduled_run_active"] and not sync["wiki_ingest_running"]
+    )
+    return {
+        **stats, **sync,
+        "wiki_ingest_stopped": stopped,
+        "scheduled_run_active": settings["scheduled_run_active"],
+    }
 
 
 # ── Reset ─────────────────────────────────────────────────────────────────
@@ -363,5 +357,7 @@ def get_stats(db: Session = Depends(get_db)):
 @router.delete("/wiki/reset")
 async def reset_wiki(db: Session = Depends(get_db)):
     """Delete all wiki pages, logs, and vectors. Resets wiki to uninitialized state."""
+    if wiki_service.get_ingest_status()["is_running"]:
+        raise HTTPException(status_code=409, detail="Stop the running build before resetting the wiki")
     wiki_service.reset_wiki(db)
     return {"ok": True}

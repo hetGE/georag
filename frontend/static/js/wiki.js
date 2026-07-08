@@ -478,8 +478,7 @@
             const s = await apiGet('/api/system/settings');
             const hasSaved = s && (
                 (s.scheduled_tag_names && s.scheduled_tag_names.length) ||
-                (s.scheduled_file_ids && s.scheduled_file_ids.length) ||
-                (s.scheduled_processed_file_ids && s.scheduled_processed_file_ids.length)
+                (s.scheduled_file_ids && s.scheduled_file_ids.length)
             );
             if (hasSaved) {
                 scope = { tag_names: s.scheduled_tag_names || [], file_ids: s.scheduled_file_ids || [] };

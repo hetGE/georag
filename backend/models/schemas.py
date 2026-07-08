@@ -22,6 +22,10 @@ class File(Base):
     extracted_text_preview = Column(Text)
     chunk_count = Column(Integer, default=0)
     processed_at = Column(DateTime)
+    # Last wiki-ingest attempt (page created/updated, LLM skip, or error).
+    # NULL = never attempted. Durable per-file resume marker that replaces the
+    # scope-keyed AppSettings.scheduled_processed_file_ids blob.
+    wiki_attempted_at = Column(DateTime)
     auto_tagged = Column(Integer, default=0)  # 0=no, 1=yes
     auto_tag_confidence = Column(Float)
 
@@ -127,9 +131,9 @@ class AppSettings(Base):
     scheduled_run_active = Column(Boolean, default=False, nullable=False)
     scheduled_tag_names = Column(JSON, default=list, nullable=False)
     scheduled_file_ids = Column(JSON, default=list, nullable=False)
-    # File IDs already attempted by the active build (whether or not they
-    # produced a page). Lets a paused/resumed build skip them so it converges
-    # instead of re-processing no-page files (media, empty docs) every cycle.
+    # DEPRECATED — superseded by File.wiki_attempted_at (a durable per-file
+    # marker). Kept for schema/API compat; drained to [] by migration and no
+    # longer written with real data.
     scheduled_processed_file_ids = Column(JSON, default=list, nullable=False)
     # True while the active scheduled build has been paused by the downtime
     # scheduler and is awaiting auto-resume at the window's end. Persisted (not a

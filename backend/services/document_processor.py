@@ -1,5 +1,6 @@
 """Orchestrates extract -> chunk -> embed -> store pipeline with concurrency."""
 import asyncio
+import datetime
 import logging
 import time
 import traceback
@@ -338,6 +339,7 @@ class DocumentProcessor:
                 logger.error("  Embedding failed for %s: %s", file_record.filename, e)
                 async with _db_lock:
                     file_record.scan_status = "processed"
+                    file_record.processed_at = datetime.datetime.utcnow()
                     db.commit()
                 raise Exception(f"Embedding failed: {e}")
 
@@ -350,4 +352,5 @@ class DocumentProcessor:
 
         async with _db_lock:
             file_record.scan_status = "processed"
+            file_record.processed_at = datetime.datetime.utcnow()
             db.commit()

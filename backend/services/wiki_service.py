@@ -7,7 +7,7 @@ import time
 import datetime
 from typing import Optional
 
-from sqlalchemy import func
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from backend.config import (
@@ -310,16 +310,22 @@ def get_sync_status(db: Session) -> dict:
     # Select only the two columns we compare on — loading full File rows pulls
     # extracted_text_preview for every file needlessly.
     all_processed_files = (
-        db.query(File.relative_path, File.filename)
+        db.query(File.relative_path, File.filename,
+                 File.wiki_attempted_at, File.processed_at)
         .filter(File.scan_status == "processed")
         .all()
     )
     covered_paths, covered_filenames = _wiki_covered_index(db)
-    covered_count = sum(
-        1 for rel_path, filename in all_processed_files
-        if rel_path in covered_paths or filename in covered_filenames
-    )
-    pending_count = processed_count - covered_count
+    # covered = matched by a wiki page (unchanged). pending = not covered AND
+    # still attempt-needed. The remainder (not covered, already attempted —
+    # e.g. skip-reason media) is done, and correctly excluded from pending.
+    covered_count = 0
+    pending_count = 0
+    for rel_path, filename, attempted_at, proc_at in all_processed_files:
+        if rel_path in covered_paths or filename in covered_filenames:
+            covered_count += 1
+        elif _wiki_attempt_needed(attempted_at, proc_at):
+            pending_count += 1
 
     return {
         "library_processed_files": processed_count,
@@ -361,14 +367,42 @@ def _wiki_covered_index(db: Session) -> tuple[set[str], set[str]]:
     return covered_paths, covered_filenames
 
 
-def get_pending_file_ids(db: Session) -> list[int]:
-    """Return IDs of processed files not yet covered by any wiki page."""
+def _wiki_attempt_sql_filter():
+    """SQLAlchemy criterion: a processed file still needs a wiki attempt if it
+    was never attempted, or was re-processed since its last attempt. (When
+    processed_at is NULL, `processed_at > x` is NULL/false, so this degrades to
+    `wiki_attempted_at IS NULL`.)"""
     from backend.models.schemas import File
-    all_processed = db.query(File).filter(File.scan_status == "processed").all()
+    return or_(
+        File.wiki_attempted_at.is_(None),
+        File.processed_at > File.wiki_attempted_at,
+    )
+
+
+def _wiki_attempt_needed(wiki_attempted_at, processed_at) -> bool:
+    """Python mirror of _wiki_attempt_sql_filter for already-loaded rows. The
+    explicit None-guard is required — SQL NULL semantics don't apply in Python
+    (None > datetime raises)."""
+    return wiki_attempted_at is None or (
+        processed_at is not None and processed_at > wiki_attempted_at
+    )
+
+
+def get_pending_file_ids(db: Session) -> list[int]:
+    """Return IDs of processed files that still need a wiki attempt: not covered
+    by any page AND not already attempted (unless re-processed since). Mirrors
+    the pending count in get_sync_status."""
+    from backend.models.schemas import File
+    rows = (
+        db.query(File.id, File.relative_path, File.filename)
+        .filter(File.scan_status == "processed")
+        .filter(_wiki_attempt_sql_filter())
+        .all()
+    )
     covered_paths, covered_filenames = _wiki_covered_index(db)
     return [
-        f.id for f in all_processed
-        if f.relative_path not in covered_paths and f.filename not in covered_filenames
+        r.id for r in rows
+        if r.relative_path not in covered_paths and r.filename not in covered_filenames
     ]
 
 
@@ -376,9 +410,13 @@ def get_pending_file_ids(db: Session) -> list[int]:
 
 def reset_wiki(db: Session):
     """Delete all wiki pages, logs, vectors, and reset ingest state."""
+    from backend.models.schemas import File
+    from backend.services import scheduler as _sched
     # Delete all pages
     db.query(WikiPage).delete()
     db.query(WikiLog).delete()
+    # Clear durable per-file attempt markers so a reset re-ingests everything.
+    db.query(File).update({File.wiki_attempted_at: None}, synchronize_session=False)
     db.commit()
 
     # Clear wiki vector collection
@@ -388,10 +426,12 @@ def reset_wiki(db: Session):
     except Exception:
         pass
 
-    # Clear ingest state
+    # Clear in-memory ingest state + the persisted scheduled-run scope, so no
+    # stale Resume view survives a reset.
     _reset_ingest_state()
+    _sched.clear_scheduled_run()
 
-    logger.info("Wiki reset: all pages, logs, and vectors deleted")
+    logger.info("Wiki reset: all pages, logs, vectors, and attempt markers deleted")
 
 
 # ── Backlinks ─────────────────────────────────────────────────────────────
@@ -772,21 +812,9 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
     _ingest_last_tag_names[:] = tag_names
     _ingest_last_file_ids[:] = file_ids
 
-    # Convergence: if this run is the active scheduled build (same scope), seed
-    # the skip set with files already attempted in prior (paused) runs. Without
-    # this, files that legitimately produce no page (videos, images, empty docs)
-    # are never "covered" and get re-processed on every resume, so the build
-    # never converges and the remaining-sources count stays stuck.
-    from backend.services import scheduler as _sched
-    _settings = _sched.get_settings()
-    _is_active_build = (
-        _settings["scheduled_run_active"]
-        and sorted(_settings["scheduled_tag_names"]) == sorted(tag_names)
-        and sorted(_settings["scheduled_file_ids"]) == sorted(file_ids)
-    )
-    attempted_ids: set[int] = (
-        set(_settings["scheduled_processed_file_ids"]) if _is_active_build else set()
-    )
+    # Per-file resume progress lives on File.wiki_attempted_at (a durable marker
+    # set below as each file is attempted), so the skip set is rebuilt from the
+    # files table every run — no scope-keyed bookkeeping, no cold-start reset.
 
     db = SessionLocal()
     try:
@@ -803,23 +831,29 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
             )
         all_files = query.all()
 
-        # Skip files already covered by existing wiki pages (persistent resume).
-        # Match on either relative_path or filename — see _wiki_covered_index.
+        # Skip files already covered by a wiki page OR already attempted this or
+        # a prior build (durable File.wiki_attempted_at), unless re-processed
+        # since. Match covered on relative_path or filename — see
+        # _wiki_covered_index.
         covered_paths, covered_filenames = _wiki_covered_index(db)
         files = [
             f for f in all_files
             if f.relative_path not in covered_paths
             and f.filename not in covered_filenames
-            and f.id not in attempted_ids
+            and _wiki_attempt_needed(f.wiki_attempted_at, f.processed_at)
         ]
+        attempted_marked = sum(
+            1 for f in all_files
+            if not _wiki_attempt_needed(f.wiki_attempted_at, f.processed_at)
+        )
 
         _ingest_status["total_sources"] = len(files)
         _ingest_status["previously_covered"] = len(all_files) - len(files)
         logger.info(
             "Wiki ingest: matched=%d to_process=%d already_done=%d "
-            "(covered_index: %d paths, %d filenames; attempted_this_build=%d; active_build=%s)",
+            "(covered_index: %d paths, %d filenames; attempted_marked=%d)",
             len(all_files), len(files), _ingest_status["previously_covered"],
-            len(covered_paths), len(covered_filenames), len(attempted_ids), _is_active_build,
+            len(covered_paths), len(covered_filenames), attempted_marked,
         )
         if all_files and not files:
             logger.warning(
@@ -979,14 +1013,18 @@ async def ingest_sources(tag_names: list[str] = None, file_ids: list[int] = None
                 _ingest_processed_file_ids.add(f.id)
                 _ingest_status["processed_sources"] = len(_ingest_processed_file_ids)
 
-            # Persist only the files we actually attempted (a mid-batch Stop may
-            # have abandoned some) so a pause/resume converges without skipping
-            # files that never ran. Re-check the active flag first so a
-            # concurrent Cancel (which clears the record) isn't undone by a late
-            # batch write from the draining task.
-            if _is_active_build and _sched.get_settings()["scheduled_run_active"]:
-                attempted_ids.update(f.id for f in applied_files)
-                _sched.update_settings(scheduled_processed_file_ids=list(attempted_ids))
+            # Durably mark every file attempted this batch (page created/updated,
+            # LLM skip, or error) so a restart/resume never re-grinds it.
+            # Cancelled-mid-batch tasks are excluded above (task.cancelled() →
+            # continue), so they stay unmarked and are retried on resume. Errored
+            # files ARE marked (optional refinement: skip on task.exception() to
+            # auto-retry). Marks are idempotent, so a late write from a draining
+            # batch after a Stop is correct, not a hazard.
+            if applied_files:
+                _attempt_now = datetime.datetime.utcnow()
+                for f in applied_files:
+                    f.wiki_attempted_at = _attempt_now
+                db.commit()
 
             # A Stop during this batch: leave now, before the heavy finalizers.
             if _ingest_cancel:
