@@ -34,10 +34,22 @@ EMBEDDING_BASE_URL = "http://127.0.0.1:8002"
 CHAT_URL = f"{CHAT_BASE_URL}/v1/chat/completions"
 EMBEDDING_URL = f"{EMBEDDING_BASE_URL}/v1/embeddings"
 
-# llama-server model files
-LLAMA_CHAT_MODEL = "/Users/bora/Desktop/LLMs/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"
-LLAMA_CHAT_MMPROJ = "/Users/bora/Desktop/LLMs/lmstudio-community/Qwen3.5-9B-GGUF/mmproj-Qwen3.5-9B-BF16.gguf"
-LLAMA_EMBED_MODEL = "/Users/bora/Desktop/LLMs/second-state/Nomic-embed-text-v1.5-Embedding-GGUF/nomic-embed-text-v1.5-Q8_0.gguf"
+# llama-server model files.
+# Each path can be overridden with its own env var (absolute path). Otherwise
+# they resolve under GEORAG_LLM_DIR (default: ~/LLMs), matching the README layout.
+LLM_DIR = Path(os.environ.get("GEORAG_LLM_DIR", Path.home() / "LLMs"))
+LLAMA_CHAT_MODEL = os.environ.get(
+    "LLAMA_CHAT_MODEL",
+    str(LLM_DIR / "lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf"),
+)
+LLAMA_CHAT_MMPROJ = os.environ.get(
+    "LLAMA_CHAT_MMPROJ",
+    str(LLM_DIR / "lmstudio-community/Qwen3.5-9B-GGUF/mmproj-Qwen3.5-9B-BF16.gguf"),
+)
+LLAMA_EMBED_MODEL = os.environ.get(
+    "LLAMA_EMBED_MODEL",
+    str(LLM_DIR / "second-state/Nomic-embed-text-v1.5-Embedding-GGUF/nomic-embed-text-v1.5-Q8_0.gguf"),
+)
 
 # llama-server launch argv (used by backend.services.llama_supervisor)
 LLAMA_CHAT_LAUNCH = [
