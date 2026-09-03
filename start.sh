@@ -4,15 +4,20 @@ set -e
 # Model file paths are defined in backend/config.py; the FastAPI app launches
 # llama-server itself via backend.services.llama_supervisor so the scheduler
 # can stop/start them during downtime windows.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+VENV_DIR="$SCRIPT_DIR/venv"
+
+# Optional per-machine overrides (untracked): e.g. GEORAG_LLM_DIR, LLAMA_EMBED_MODEL.
+if [ -f "$SCRIPT_DIR/.env" ]; then
+    set -a; . "$SCRIPT_DIR/.env"; set +a
+fi
+
 # Override any path with its own env var (absolute); otherwise they resolve
 # under GEORAG_LLM_DIR (default: ~/LLMs), matching the README layout.
 LLM_DIR="${GEORAG_LLM_DIR:-$HOME/LLMs}"
 CHAT_MODEL="${LLAMA_CHAT_MODEL:-$LLM_DIR/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf}"
 CHAT_MMPROJ="${LLAMA_CHAT_MMPROJ:-$LLM_DIR/lmstudio-community/Qwen3.5-9B-GGUF/mmproj-Qwen3.5-9B-BF16.gguf}"
 EMBED_MODEL="${LLAMA_EMBED_MODEL:-$LLM_DIR/second-state/Nomic-embed-text-v1.5-Embedding-GGUF/nomic-embed-text-v1.5-Q8_0.gguf}"
-
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-VENV_DIR="$SCRIPT_DIR/venv"
 DATA_DIR="$SCRIPT_DIR/data"
 
 echo "==============================="
