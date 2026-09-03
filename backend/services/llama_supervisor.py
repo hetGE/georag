@@ -182,6 +182,12 @@ async def _start_one(spec: _ServerSpec) -> None:
         )
         return
 
+    missing = [a for a in spec.launch[1:] if a.endswith(".gguf") and not os.path.exists(a)]
+    if missing:
+        logger.error("llama-server '%s' not launched: model file(s) missing: %s",
+                     spec.name, ", ".join(missing))
+        return
+
     spec.log_file.parent.mkdir(parents=True, exist_ok=True)
     log_fh = open(spec.log_file, "ab", buffering=0)
     logger.info("Launching llama-server '%s' → %s", spec.name, spec.log_file)
@@ -201,6 +207,14 @@ async def _wait_ready(spec: _ServerSpec, timeout: float = 180.0) -> bool:
         if await _port_alive(spec.base_url):
             logger.info("llama-server '%s' ready at %s", spec.name, spec.base_url)
             return True
+        # A child we launched that has already exited (bad model path, port in
+        # use, ...) will never answer — fail fast instead of burning the timeout.
+        if spec.process is not None and spec.process.poll() is not None:
+            logger.error(
+                "llama-server '%s' exited with code %s before becoming ready; see %s",
+                spec.name, spec.process.returncode, spec.log_file,
+            )
+            return False
         await asyncio.sleep(1.0)
     logger.error("llama-server '%s' did not become ready within %.0fs",
                  spec.name, timeout)
