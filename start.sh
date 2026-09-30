@@ -13,11 +13,13 @@ if [ -f "$SCRIPT_DIR/.env" ]; then
 fi
 
 # Override any path with its own env var (absolute); otherwise they resolve
-# under GEORAG_LLM_DIR (default: ~/LLMs), matching the README layout.
-LLM_DIR="${GEORAG_LLM_DIR:-$HOME/LLMs}"
+# under GEORAG_LLM_DIR (default: ~/Apps/LLMs).
+LLM_DIR="${GEORAG_LLM_DIR:-$HOME/Apps/LLMs}"
 CHAT_MODEL="${LLAMA_CHAT_MODEL:-$LLM_DIR/lmstudio-community/Qwen3.5-9B-GGUF/Qwen3.5-9B-Q4_K_M.gguf}"
 CHAT_MMPROJ="${LLAMA_CHAT_MMPROJ:-$LLM_DIR/lmstudio-community/Qwen3.5-9B-GGUF/mmproj-Qwen3.5-9B-BF16.gguf}"
 EMBED_MODEL="${LLAMA_EMBED_MODEL:-$LLM_DIR/second-state/Nomic-embed-text-v1.5-Embedding-GGUF/nomic-embed-text-v1.5-Q8_0.gguf}"
+# Export so backend/config.py (which launches llama-server) sees the same paths
+export GEORAG_LLM_DIR="$LLM_DIR" LLAMA_CHAT_MODEL="$CHAT_MODEL" LLAMA_CHAT_MMPROJ="$CHAT_MMPROJ" LLAMA_EMBED_MODEL="$EMBED_MODEL"
 DATA_DIR="$SCRIPT_DIR/data"
 
 echo "==============================="
