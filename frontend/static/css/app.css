@@ -385,6 +385,29 @@ nav ul:last-child li a.active:hover {
     font-weight: 500;
 }
 
+.message-actions {
+    display: flex;
+    justify-content: flex-end;
+    margin-top: 0.375rem;
+}
+
+.message-actions .copy-md-btn {
+    width: auto;
+    margin: 0;
+    padding: 0.15rem 0.5rem;
+    font-size: 0.7rem;
+    line-height: 1.4;
+    background: transparent;
+    color: var(--pico-muted-color);
+    border: 1px solid var(--pico-muted-border-color);
+    border-radius: 0.25rem;
+}
+
+.message-actions .copy-md-btn:hover {
+    color: var(--pico-primary);
+    border-color: var(--pico-primary);
+}
+
 .source-item {
     padding: 0.1rem 0;
     font-family: monospace;

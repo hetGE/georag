@@ -21,6 +21,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["documents"])
 
 
+@router.get("/documents/root")
+def documents_root():
+    """Folder that document paths are relative to, as a path and a file:// URL."""
+    root = ENGINEERING_ROOT.resolve()
+    return {"root": str(root), "root_uri": root.as_uri()}
+
+
 @router.get("/documents")
 async def list_documents(
     search: str = Query("", description="Search filename or path"),

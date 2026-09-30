@@ -1130,6 +1130,7 @@ async function handleSubmit(e) {
         const decoder = new TextDecoder();
         let buffer = '';
         let fullText = '';
+        let replySources = [];
 
         while (true) {
             const {done, value} = await reader.read();
@@ -1172,11 +1173,16 @@ async function handleSubmit(e) {
                             }
                         }
                         if (doneData.sources && doneData.sources.length) {
+                            replySources = doneData.sources;
                             appendSources(assistantDiv, doneData.sources);
                         }
                     } catch {}
                 }
             }
+        }
+
+        if (fullText.trim() && !contentEl.textContent.startsWith('Error: ')) {
+            appendCopyButton(assistantDiv, fullText, replySources);
         }
 
     } catch (err) {
@@ -1223,6 +1229,10 @@ function appendMessage(role, content, sources = null, streaming = false) {
         appendSources(div, sources);
     }
 
+    if (role === 'assistant' && !streaming && content) {
+        appendCopyButton(div, content, sources);
+    }
+
     messagesEl.appendChild(div);
     scrollToBottom();
     return div;
@@ -1256,7 +1266,86 @@ function appendSources(messageDiv, sources) {
         sourcesEl.appendChild(item);
     });
 
-    messageDiv.appendChild(sourcesEl);
+    messageDiv.insertBefore(sourcesEl, messageDiv.querySelector('.message-actions'));
+}
+
+// Replies are stored as Markdown; this copies that Markdown (minus any
+// <think> reasoning block) so it can be pasted into a .md file or editor.
+// The sources follow as a numbered list (matching the [n] numbers shown under
+// the reply) of file:// links that open the local documents.
+function replyMarkdown(text, sources, rootUri) {
+    let md = text.replace(/<think>[\s\S]*?(<\/think>|$)/g, '').trim() + '\n';
+    if (sources && sources.length) {
+        md += '\n## Sources\n\n';
+        sources.forEach((src, idx) => {
+            const name = (src.filename || src.file_path).replace(/([\[\]\\])/g, '\\$1');
+            const page = src.page ? `, p. ${src.page}` : '';
+            const link = rootUri ? `[${name}](${fileUrl(rootUri, src.file_path)})` : name;
+            md += `${idx + 1}. ${link}${page}\n`;
+        });
+    }
+    return md;
+}
+
+// Percent-encode each path segment, including the parentheses that
+// encodeURIComponent leaves alone but that would end a Markdown link.
+function fileUrl(rootUri, relPath) {
+    const encoded = relPath.split('/')
+        .map(seg => encodeURIComponent(seg).replace(/[()'!*]/g,
+            c => '%' + c.charCodeAt(0).toString(16).toUpperCase()))
+        .join('/');
+    return `${rootUri.replace(/\/$/, '')}/${encoded}`;
+}
+
+let documentsRootUri = null;
+async function getDocumentsRootUri() {
+    if (!documentsRootUri) {
+        try {
+            documentsRootUri = (await apiGet('/api/documents/root')).root_uri || null;
+        } catch {
+            // Links are left out; retried on the next copy.
+        }
+    }
+    return documentsRootUri || '';
+}
+
+async function copyText(text) {
+    try {
+        await navigator.clipboard.writeText(text);
+        return true;
+    } catch {
+        // Fallback for browsers that block the async clipboard API.
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        const ok = document.execCommand('copy');
+        ta.remove();
+        return ok;
+    }
+}
+
+function appendCopyButton(messageDiv, markdown, sources = null) {
+    const existing = messageDiv.querySelector('.message-actions');
+    if (existing) existing.remove();
+
+    const actions = document.createElement('div');
+    actions.className = 'message-actions';
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'copy-md-btn';
+    btn.textContent = 'Copy Markdown';
+    btn.title = 'Copy this reply and its sources as Markdown to the clipboard';
+    btn.addEventListener('click', async () => {
+        const ok = await copyText(replyMarkdown(markdown, sources, await getDocumentsRootUri()));
+        btn.textContent = ok ? 'Copied' : 'Copy failed';
+        clearTimeout(btn._resetTimer);
+        btn._resetTimer = setTimeout(() => { btn.textContent = 'Copy Markdown'; }, 1500);
+    });
+    actions.appendChild(btn);
+    messageDiv.appendChild(actions);
 }
 
 function scrollToBottom() {
