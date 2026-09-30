@@ -84,7 +84,6 @@ const LibraryPanel = (() => {
                 || status.phase === 'ocr_processing' || status.phase === 'ocr_stopping';
             if (wasProcessing !== window.libraryIsProcessing) {
                 window.updateChatInputState?.();
-                window.updateWikiQueryState?.();
             }
 
             // Detect new llama-server errors during processing/explore
@@ -674,7 +673,7 @@ const LibraryPanel = (() => {
             btn.setAttribute('aria-busy', 'true');
         }
         try {
-            await apiPost('/api/backup/export', { include_wiki: true, include_rag: true });
+            await apiPost('/api/backup/export', { include_rag: true });
             pollBackupProgress('export');
         } catch (e) {
             alert('Export failed: ' + (e.message || e));
@@ -736,7 +735,6 @@ const LibraryPanel = (() => {
         if (s.files) body += `<li>${s.files.toLocaleString()} files</li>`;
         if (s.tags) body += `<li>${s.tags} tags</li>`;
         if (s.file_tags) body += `<li>${s.file_tags.toLocaleString()} tag assignments</li>`;
-        if (includes.wiki && s.wiki_pages) body += `<li>${s.wiki_pages} wiki pages</li>`;
         if (s.total_chunks) body += `<li>${s.total_chunks.toLocaleString()} vector chunks</li>`;
         body += `</ul>`;
         body += `<p style="font-size:0.8rem;color:var(--pico-muted-color)">From: ${m.source_platform || 'unknown'} | Model: ${m.embedding_model || 'unknown'}</p>`;

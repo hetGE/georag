@@ -5,11 +5,8 @@ Produces a cross-platform .georag archive (ZIP) containing:
   files.jsonl          - file metadata rows
   tags.json            - tag definitions
   file_tags.jsonl      - file-tag associations
-  wiki_pages.jsonl     - wiki page rows
-  wiki_log.jsonl       - operation log
   vectors/
     tag_<name>.npz     - per-collection embeddings (float32 numpy)
-    wiki.npz           - wiki page vectors
 """
 import asyncio
 import datetime
@@ -28,11 +25,11 @@ from sqlalchemy.orm import Session
 
 from backend.config import (
     DATA_DIR, EMBEDDING_MODEL, EMBEDDING_DIM,
-    CHUNK_SIZE, CHUNK_OVERLAP, WIKI_COLLECTION_NAME, METADATA_DB,
+    CHUNK_SIZE, CHUNK_OVERLAP, METADATA_DB,
 )
 from backend.models.database import SessionLocal
 from backend.models.schemas import (
-    File, Tag, FileTag, WikiPage, WikiLog, Conversation, Message,
+    File, Tag, FileTag, Conversation, Message,
 )
 from backend.services.vector_store import (
     _client as chroma_client,
@@ -101,7 +98,7 @@ class BackupExporter:
     def stop(self):
         self._cancel = True
 
-    async def run(self, include_wiki: bool = True, include_rag: bool = True):
+    async def run(self, include_rag: bool = True):
         if self.is_running:
             return
         self.is_running = True
@@ -126,7 +123,7 @@ class BackupExporter:
                 self.phase = "sqlite"
                 await asyncio.sleep(0)
 
-                stats = await self._export_sqlite(db, tmp_dir, include_wiki)
+                stats = await self._export_sqlite(db, tmp_dir)
             finally:
                 db.close()
 
@@ -135,7 +132,7 @@ class BackupExporter:
 
             # ── Phase: vectors ──
             self.phase = "vectors"
-            await self._export_vectors(tmp_dir, include_wiki, include_rag, stats)
+            await self._export_vectors(tmp_dir, include_rag, stats)
 
             if self._cancel:
                 return
@@ -155,7 +152,6 @@ class BackupExporter:
                 "chunk_overlap": CHUNK_OVERLAP,
                 "stats": stats,
                 "includes": {
-                    "wiki": include_wiki,
                     "rag": include_rag,
                 },
             }
@@ -182,8 +178,7 @@ class BackupExporter:
             if tmp_dir and tmp_dir.exists():
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 
-    async def _export_sqlite(self, db: Session, tmp_dir: Path,
-                             include_wiki: bool) -> dict:
+    async def _export_sqlite(self, db: Session, tmp_dir: Path) -> dict:
         """Export SQLite tables to JSONL files. Returns stats dict."""
         stats = {}
 
@@ -191,7 +186,7 @@ class BackupExporter:
         file_cols = [
             "id", "relative_path", "filename", "extension", "size_bytes",
             "modified_time", "parent_directory", "content_hash", "scan_status",
-            "extracted_text_preview", "chunk_count", "processed_at", "wiki_attempted_at",
+            "extracted_text_preview", "chunk_count", "processed_at",
             "auto_tagged", "auto_tag_confidence",
         ]
         count = 0
@@ -223,31 +218,9 @@ class BackupExporter:
                 count += 1
         stats["file_tags"] = count
 
-        # Wiki
-        if include_wiki:
-            count = 0
-            with open(tmp_dir / "wiki_pages.jsonl", "w", encoding="utf-8") as f:
-                for row in db.query(WikiPage).yield_per(500):
-                    f.write(json.dumps(_row_to_dict(row, [
-                        "id", "slug", "title", "content", "category", "summary",
-                        "source_files", "backlinks", "created_at", "updated_at",
-                    ]), default=_serialize_datetime) + "\n")
-                    count += 1
-            stats["wiki_pages"] = count
-
-            count = 0
-            with open(tmp_dir / "wiki_log.jsonl", "w", encoding="utf-8") as f:
-                for row in db.query(WikiLog).yield_per(500):
-                    f.write(json.dumps(_row_to_dict(row, [
-                        "id", "operation", "detail", "pages_affected", "created_at",
-                    ]), default=_serialize_datetime) + "\n")
-                    count += 1
-            stats["wiki_log_entries"] = count
-
         return stats
 
-    async def _export_vectors(self, tmp_dir: Path, include_wiki: bool,
-                              include_rag: bool, stats: dict):
+    async def _export_vectors(self, tmp_dir: Path, include_rag: bool, stats: dict):
         """Export ChromaDB collections to .npz files."""
         vectors_dir = tmp_dir / "vectors"
         vectors_dir.mkdir()
@@ -257,9 +230,7 @@ class BackupExporter:
         target_collections = []
         for col in collections:
             name = col if isinstance(col, str) else col.name
-            if name == WIKI_COLLECTION_NAME and include_wiki:
-                target_collections.append(name)
-            elif name.startswith("tag_") and include_rag:
+            if name.startswith("tag_") and include_rag:
                 target_collections.append(name)
 
         self.collections_total = len(target_collections)
@@ -464,9 +435,6 @@ class BackupImporter:
                 db.query(FileTag).delete()
                 db.query(File).delete()
                 db.query(Tag).delete()
-                if includes.get("wiki", False):
-                    db.query(WikiLog).delete()
-                    db.query(WikiPage).delete()
                 db.commit()
             except Exception as e:
                 db.rollback()
@@ -517,15 +485,6 @@ class BackupImporter:
                         FileTag.tag_id == tag.id
                     ).count()
                 db.commit()
-
-                # Rebuild wiki index and backlinks if wiki was imported
-                if includes.get("wiki", False):
-                    from backend.services.wiki_service import (
-                        compute_backlinks, build_index_page,
-                    )
-                    compute_backlinks(db)
-                    build_index_page(db)
-
             finally:
                 db.close()
 
@@ -580,7 +539,6 @@ class BackupImporter:
                     extracted_text_preview=d.get("extracted_text_preview"),
                     chunk_count=d.get("chunk_count", 0),
                     processed_at=_parse_datetime(d.get("processed_at")),
-                    wiki_attempted_at=_parse_datetime(d.get("wiki_attempted_at")),
                     auto_tagged=d.get("auto_tagged", 0),
                     auto_tag_confidence=d.get("auto_tag_confidence"),
                 ))
@@ -602,41 +560,6 @@ class BackupImporter:
                 ))
             db.flush()
 
-        # Wiki pages
-        if includes.get("wiki", False) and "wiki_pages.jsonl" in zf.namelist():
-            for line in zf.read("wiki_pages.jsonl").decode("utf-8").splitlines():
-                if not line.strip():
-                    continue
-                d = json.loads(line)
-                db.add(WikiPage(
-                    id=d["id"],
-                    slug=d["slug"],
-                    title=d["title"],
-                    content=d.get("content", ""),
-                    category=d.get("category", "general"),
-                    summary=d.get("summary"),
-                    source_files=d.get("source_files", []),
-                    backlinks=d.get("backlinks", []),
-                    created_at=_parse_datetime(d.get("created_at")),
-                    updated_at=_parse_datetime(d.get("updated_at")),
-                ))
-            db.flush()
-
-        # Wiki logs
-        if includes.get("wiki", False) and "wiki_log.jsonl" in zf.namelist():
-            for line in zf.read("wiki_log.jsonl").decode("utf-8").splitlines():
-                if not line.strip():
-                    continue
-                d = json.loads(line)
-                db.add(WikiLog(
-                    id=d["id"],
-                    operation=d["operation"],
-                    detail=d.get("detail"),
-                    pages_affected=d.get("pages_affected", []),
-                    created_at=_parse_datetime(d.get("created_at")),
-                ))
-            db.flush()
-
     async def _import_vectors(self, zf: zipfile.ZipFile):
         """Import ChromaDB collections from .npz files."""
         vector_files = [n for n in zf.namelist()
@@ -648,6 +571,10 @@ class BackupImporter:
                 return
             # Extract collection name: "vectors/tag_piling.npz" -> "tag_piling"
             col_name = Path(vf_name).stem
+            if col_name == "wiki":
+                # Older archives carry wiki vectors; the wiki feature is gone.
+                self.collections_total -= 1
+                continue
             self.current_collection = col_name
 
             npz_bytes = zf.read(vf_name)
@@ -674,13 +601,7 @@ class BackupImporter:
         if not ids:
             return
 
-        # Determine if this is a tag collection or the wiki collection
-        if col_name == WIKI_COLLECTION_NAME:
-            collection = chroma_client.get_or_create_collection(
-                name=WIKI_COLLECTION_NAME,
-                metadata={"hnsw:space": "cosine"},
-            )
-        elif col_name.startswith("tag_"):
+        if col_name.startswith("tag_"):
             tag_name = col_name[4:]  # strip "tag_" prefix
             collection = get_or_create_collection(tag_name)
         else:

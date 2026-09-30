@@ -19,18 +19,15 @@ def _check_busy():
     """Raise 409 if any background operation is running."""
     # Lazy imports to avoid circular deps
     from backend.routers.processing import _processor
-    from backend.services import wiki_service
 
     if _processor.is_running:
         raise HTTPException(409, "Document processing is running — try again later")
-    if wiki_service._ingest_running:
-        raise HTTPException(409, "Wiki ingest is running — try again later")
 
 
 # ── Export ────────────────────────────────────────────────────────────────────
 
 @router.post("/backup/export")
-async def start_export(include_wiki: bool = True, include_rag: bool = True):
+async def start_export(include_rag: bool = True):
     """Start a background backup export."""
     if exporter.is_running:
         raise HTTPException(409, "Export already running")
@@ -38,7 +35,7 @@ async def start_export(include_wiki: bool = True, include_rag: bool = True):
         raise HTTPException(409, "Import is running")
     _check_busy()
 
-    asyncio.create_task(exporter.run(include_wiki=include_wiki, include_rag=include_rag))
+    asyncio.create_task(exporter.run(include_rag=include_rag))
     return {"ok": True}
 
 

@@ -1,0 +1,3 @@
+# Runtime for the optional MLX chat model (Apple Silicon only).
+# Installed into its own virtualenv (venv-mlx), not the app's: see start.sh.
+mlx-lm==0.31.3

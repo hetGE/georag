@@ -111,7 +111,7 @@ templates = Jinja2Templates(directory=str(BUNDLE_DIR / "frontend" / "templates")
 # Import and include routers
 from backend.routers import (  # noqa: E402
     documents, tags, chat, conversations, processing, explore, ocr,
-    health, wiki, backup, system,
+    health, backup, system,
 )
 
 app.include_router(documents.router, prefix="/api")
@@ -122,7 +122,6 @@ app.include_router(processing.router, prefix="/api")
 app.include_router(explore.router, prefix="/api")
 app.include_router(ocr.router, prefix="/api")
 app.include_router(health.router, prefix="/api")
-app.include_router(wiki.router, prefix="/api")
 app.include_router(backup.router, prefix="/api")
 app.include_router(system.router, prefix="/api")
 
@@ -135,8 +134,3 @@ async def index(request: Request):
 @app.get("/documents")
 async def documents_page(request: Request):
     return templates.TemplateResponse("spa.html", {"request": request, "active_page": "documents"})
-
-
-@app.get("/wiki")
-async def wiki_page(request: Request):
-    return templates.TemplateResponse("spa.html", {"request": request, "active_page": "wiki"})

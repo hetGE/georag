@@ -22,10 +22,6 @@ class File(Base):
     extracted_text_preview = Column(Text)
     chunk_count = Column(Integer, default=0)
     processed_at = Column(DateTime)
-    # Last wiki-ingest attempt (page created/updated, LLM skip, or error).
-    # NULL = never attempted. Durable per-file resume marker that replaces the
-    # scope-keyed AppSettings.scheduled_processed_file_ids blob.
-    wiki_attempted_at = Column(DateTime)
     auto_tagged = Column(Integer, default=0)  # 0=no, 1=yes
     auto_tag_confidence = Column(Float)
 
@@ -67,31 +63,6 @@ class FileTag(Base):
     )
 
 
-class WikiPage(Base):
-    __tablename__ = "wiki_pages"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    slug = Column(String, unique=True, nullable=False, index=True)
-    title = Column(String, nullable=False)
-    content = Column(Text, nullable=False, default="")
-    category = Column(String, default="general", index=True)  # entity, concept, source_summary, comparison, topic, index, log
-    summary = Column(Text)
-    source_files = Column(JSON, default=list)
-    backlinks = Column(JSON, default=list)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.datetime.utcnow, onupdate=datetime.datetime.utcnow)
-
-
-class WikiLog(Base):
-    __tablename__ = "wiki_log"
-
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    operation = Column(String, nullable=False)  # ingest, query, lint, chat_growth
-    detail = Column(Text)
-    pages_affected = Column(JSON, default=list)
-    created_at = Column(DateTime, default=datetime.datetime.utcnow)
-
-
 class Conversation(Base):
     __tablename__ = "conversations"
 
@@ -128,18 +99,5 @@ class AppSettings(Base):
     downtime_start = Column(String, default="06:30", nullable=False)  # local "HH:MM"
     downtime_end = Column(String, default="09:30", nullable=False)
     auto_shutdown_on_manual_pause = Column(Boolean, default=False, nullable=False)
-    scheduled_run_active = Column(Boolean, default=False, nullable=False)
-    scheduled_tag_names = Column(JSON, default=list, nullable=False)
-    scheduled_file_ids = Column(JSON, default=list, nullable=False)
-    # DEPRECATED — superseded by File.wiki_attempted_at (a durable per-file
-    # marker). Kept for schema/API compat; drained to [] by migration and no
-    # longer written with real data.
-    scheduled_processed_file_ids = Column(JSON, default=list, nullable=False)
-    # True while the active scheduled build has been paused by the downtime
-    # scheduler and is awaiting auto-resume at the window's end. Persisted (not a
-    # transient in-process flag) so a restart during the window still resumes; it
-    # distinguishes a clean downtime-pause from a build killed mid-flight, which
-    # must NOT auto-start on a cold launch.
-    scheduled_paused_for_downtime = Column(Boolean, default=False, nullable=False)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow,
                         onupdate=datetime.datetime.utcnow)

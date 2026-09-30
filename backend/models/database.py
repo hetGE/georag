@@ -9,11 +9,9 @@ engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 
 @event.listens_for(engine, "connect")
 def _set_sqlite_pragmas(dbapi_conn, _conn_record):
-    """WAL lets readers and a writer run concurrently, so the wiki build's
-    writes (offloaded to worker threads) don't lock out the API's reads — and a
-    busy_timeout makes any remaining contention wait briefly instead of raising
-    "database is locked". Without WAL, moving the build off the event loop would
-    just trade loop-blocking for lock errors."""
+    """WAL lets readers and a writer run concurrently, and a busy_timeout makes
+    any remaining contention wait briefly instead of raising "database is
+    locked"."""
     cur = dbapi_conn.cursor()
     cur.execute("PRAGMA journal_mode=WAL")
     cur.execute("PRAGMA busy_timeout=5000")
@@ -48,44 +46,12 @@ def init_db():
         with engine.begin() as conn:
             conn.execute(text("ALTER TABLE conversations ADD COLUMN deleted_at DATETIME"))
 
-    # Migration: add per-build attempted-file tracking to an existing app_settings table
-    app_cols = [c['name'] for c in insp.get_columns('app_settings')]
-    if 'scheduled_processed_file_ids' not in app_cols:
-        with engine.begin() as conn:
-            conn.execute(text(
-                "ALTER TABLE app_settings ADD COLUMN scheduled_processed_file_ids JSON DEFAULT '[]'"))
-
-    # Migration: persist the "paused for downtime" marker (replaces an old
-    # transient in-process flag, so a restart during the window still resumes).
-    if 'scheduled_paused_for_downtime' not in app_cols:
-        with engine.begin() as conn:
-            conn.execute(text(
-                "ALTER TABLE app_settings ADD COLUMN scheduled_paused_for_downtime BOOLEAN NOT NULL DEFAULT 0"))
-
-    # Migration: durable per-file wiki-attempt marker (replaces the scope-keyed
-    # app_settings.scheduled_processed_file_ids blob). One-time backfill rescues
-    # the attempts that blob recorded for the active build, then drains the blob
-    # (all three statements share one transaction, so mark+drain is atomic).
-    file_cols = [c['name'] for c in insp.get_columns('files')]
-    if 'wiki_attempted_at' not in file_cols:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE files ADD COLUMN wiki_attempted_at DATETIME"))
-            conn.execute(text(
-                "UPDATE files SET wiki_attempted_at = datetime('now') WHERE id IN ("
-                "SELECT je.value FROM app_settings, "
-                "json_each(app_settings.scheduled_processed_file_ids) je "
-                "WHERE app_settings.id = 1)"))
-            conn.execute(text(
-                "UPDATE app_settings SET scheduled_processed_file_ids = '[]' WHERE id = 1"))
-
     # Seed AppSettings row (id=1) if missing
     with engine.begin() as conn:
         row = conn.execute(text("SELECT id FROM app_settings WHERE id=1")).first()
         if row is None:
             conn.execute(text(
                 "INSERT INTO app_settings (id, schedule_enabled, downtime_start, downtime_end, "
-                "auto_shutdown_on_manual_pause, scheduled_run_active, "
-                "scheduled_tag_names, scheduled_file_ids, scheduled_processed_file_ids, "
-                "scheduled_paused_for_downtime) "
-                "VALUES (1, 0, '06:30', '09:30', 0, 0, '[]', '[]', '[]', 0)"
+                "auto_shutdown_on_manual_pause) "
+                "VALUES (1, 0, '06:30', '09:30', 0)"
             ))

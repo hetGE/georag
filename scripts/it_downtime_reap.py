@@ -6,8 +6,7 @@ Launches the REAL llama-servers via the supervisor, simulates the uvicorn
   2. drives a REAL scheduler._tick() inside a downtime window       -> the fix
 and asserts both ports are freed, both processes dead, and RAM reclaimed.
 
-Isolated: monkeypatches get_settings so it never touches the prod DB and never
-starts the scheduled wiki ingest.
+Isolated: monkeypatches get_settings so it never touches the prod DB.
 """
 import asyncio
 import datetime
@@ -87,8 +86,6 @@ async def main() -> int:
     end = (now + datetime.timedelta(hours=1)).strftime("%H:%M")
     settings = {
         "schedule_enabled": True, "downtime_start": start, "downtime_end": end,
-        "scheduled_run_active": False, "scheduled_tag_names": [],
-        "scheduled_file_ids": [], "scheduled_processed_file_ids": [],
     }
     sch.get_settings = lambda: settings  # isolate from prod DB
     print(f"  downtime window {start}-{end} (now {now.strftime('%H:%M:%S')}) -> in_dt expected True")

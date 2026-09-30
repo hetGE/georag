@@ -188,13 +188,21 @@ let isTrashViewOpen = false;
 
 // Retrieval depth settings (persisted in localStorage)
 let currentDepth = localStorage.getItem('georag-depth') || 'optimal';
-const DEPTH_LEVELS = [
-    { key: 'quick',    label: 'Quick and less demanding',  topK: 5,  maxCtx: 8,   desc: '5 sources per topic, 8 max context chunks' },
-    { key: 'optimal',  label: 'Optimal and balanced',      topK: 10, maxCtx: 16,  desc: '10 sources per topic, 16 max context chunks' },
-    { key: 'deep',     label: 'Deep and demanding',        topK: 20, maxCtx: 32,  desc: '20 sources per topic, 32 max context chunks' },
-    { key: 'deeper',   label: 'Deeper and very demanding', topK: 50, maxCtx: 80,  desc: '50 sources per topic, 80 max context chunks' },
-    { key: 'ludicrous',label: 'Ludicrous',                 topK: 100,maxCtx: 200, desc: '100 sources per topic, 200 max context chunks' },
+// Replaced at startup by the backend's list (GET /api/system/chat-depths, the
+// source of truth: config.CHAT_DEPTH_LEVELS). This copy only covers the moment
+// before that answer arrives, or an unreachable backend.
+let DEPTH_LEVELS = [
+    { key: 'quick',     label: 'Quick and less demanding',  top_k: 5,   max_chunks: 8 },
+    { key: 'optimal',   label: 'Optimal and balanced',      top_k: 10,  max_chunks: 16 },
+    { key: 'deep',      label: 'Deep and demanding',        top_k: 20,  max_chunks: 32 },
+    { key: 'deeper',    label: 'Deeper and very demanding', top_k: 50,  max_chunks: 80 },
+    { key: 'ludicrous', label: 'Ludicrous',                 top_k: 100, max_chunks: 200 },
 ];
+
+// Chat models (config.CHAT_MODELS) and the one the server is using. The model
+// is a server-side setting, shared by every browser; the depth is per browser.
+let CHAT_MODELS = [];
+let currentModel = null;
 
 // Cross-tab streaming lock via BroadcastChannel (status only, no token relay)
 const streamingChannel = new BroadcastChannel('chat-streaming');
@@ -222,12 +230,10 @@ streamingChannel.onmessage = (e) => {
         showRemoteStream(msg.conversationId, msg.selectedTags);
         enterRemoteStopMode();
         updateInputState();
-        window.updateWikiQueryState?.();
     } else {
         remoteStreaming = false;
         closeMirrorStream();
         exitRemoteStopMode();
-        window.updateWikiQueryState?.();
         if (!isStreaming) {
             document.body.classList.remove('chat-streaming');
             document.getElementById('new-chat-btn').disabled = false;
@@ -469,13 +475,37 @@ document.addEventListener('DOMContentLoaded', async () => {
     // Depth settings dialog
     const depthDialog = document.getElementById('depth-settings-dialog');
     const depthOptionsEl = document.getElementById('depth-options');
+    const modelOptionsEl = document.getElementById('model-options');
     renderDepthOptions(depthOptionsEl, depthDialog);
     updateDepthIndicator();
+    const loadDepthSettings = () => apiGet('/api/system/chat-depths').then(data => {
+        if (!data.levels || !data.levels.length) return;
+        DEPTH_LEVELS = data.levels;
+        CHAT_MODELS = data.models || [];
+        currentModel = data.model || null;
+        // A level remembered by this browser that the active model cannot run
+        // here (e.g. the model was switched elsewhere): fall back and say why.
+        const remembered = DEPTH_LEVELS.find(l => l.key === currentDepth);
+        if (remembered && remembered.fits === false) {
+            currentDepth = data.default;
+            localStorage.setItem('georag-depth', currentDepth);
+            showDepthError(remembered.fit_error);
+        }
+        renderModelOptions(modelOptionsEl, depthOptionsEl, depthDialog);
+        renderDepthOptions(depthOptionsEl, depthDialog);
+        updateDepthIndicator();
+    }).catch(() => {});
+    loadDepthSettings();
     document.getElementById('depth-settings-btn').addEventListener('click', () => {
+        loadDepthSettings();  // the model may have been changed from another browser
         depthDialog.showModal();
     });
+    depthDialog.addEventListener('close', () => showDepthError(''));
     depthDialog.addEventListener('click', (e) => {
-        if (e.target === depthDialog) depthDialog.close();
+        if (e.target === depthDialog && !depthCheckInProgress) depthDialog.close();
+    });
+    depthDialog.addEventListener('cancel', (e) => {
+        if (depthCheckInProgress) e.preventDefault();
     });
 
     // Input validation — respects welcome state
@@ -582,33 +612,142 @@ function updateDepthIndicator() {
     const el = document.getElementById('depth-indicator');
     if (!el) return;
     const level = DEPTH_LEVELS.find(l => l.key === currentDepth) || DEPTH_LEVELS[1];
-    el.textContent = '\u2699 ' + level.label;
+    const model = CHAT_MODELS.find(m => m.key === currentModel);
+    el.textContent = '\u2699 ' + (model ? model.label + ' \u00b7 ' : '') + level.label;
+}
+
+let depthCheckInProgress = false;
+
+function showDepthError(message) {
+    const el = document.getElementById('depth-error');
+    if (!el) return;
+    el.textContent = message;
+    el.style.display = message ? '' : 'none';
+}
+
+function depthOptionHtml(level) {
+    const n = (v) => Number(v).toLocaleString('en-US');
+    const memory = level.vram_gb
+        ? `<span class="depth-option-vram">${level.vram_gb} ${escapeHtml(level.memory_label || 'GB VRAM')}</span>` : '';
+    let html = `<div class="depth-option-label"><span>${escapeHtml(level.label)}</span>${memory}</div>`
+        + `<div class="depth-option-desc">${level.top_k} sources per topic, ${level.max_chunks} max context chunks</div>`;
+    if (level.ctx) {
+        html += `<div class="depth-option-desc">${n(level.ctx)}-token context window</div>`;
+    }
+    return html + '<div class="depth-option-status" aria-live="polite"></div>';
+}
+
+function renderModelOptions(container, depthContainer, dialog) {
+    if (!container) return;
+    container.innerHTML = '';
+    CHAT_MODELS.forEach(model => {
+        const card = document.createElement('div');
+        card.className = 'depth-option model-option'
+            + (model.key === currentModel ? ' active' : '')
+            + (model.available ? '' : ' unavailable');
+        card.innerHTML = `<div class="depth-option-label"><span>${escapeHtml(model.label)}</span></div>`
+            + `<div class="depth-option-desc">${escapeHtml(model.available ? model.detail : model.unavailable_reason)}</div>`
+            + '<div class="depth-option-status" aria-live="polite"></div>';
+        if (model.available) {
+            card.addEventListener('click', () => selectModel(model, card, container, depthContainer, dialog));
+        }
+        container.appendChild(card);
+    });
+}
+
+// Switching model restarts the chat server with the other model's backend.
+// The depth level is carried over when the new model can run it on this
+// machine; otherwise the server says which level it fell back to and why.
+async function selectModel(model, card, container, depthContainer, dialog) {
+    if (depthCheckInProgress || model.key === currentModel) return;
+
+    depthCheckInProgress = true;
+    showDepthError('');
+    container.classList.add('checking');
+    depthContainer.classList.add('checking');
+    card.classList.add('checking');
+    card.querySelector('.depth-option-status').textContent = 'Loading model\u2026 this can take a minute.';
+
+    let result;
+    try {
+        result = await apiPost('/api/system/chat-model', { model: model.key, depth: currentDepth });
+    } catch (err) {
+        result = { ok: false, error: 'Could not reach the server to switch model: ' + err.message };
+    }
+
+    depthCheckInProgress = false;
+    container.classList.remove('checking');
+    depthContainer.classList.remove('checking');
+
+    if (!result.ok) {
+        card.classList.remove('checking');
+        card.querySelector('.depth-option-status').textContent = '';
+        showDepthError(result.error || result.detail || 'The model could not be switched.');
+        return;
+    }
+    currentModel = result.model;
+    DEPTH_LEVELS = result.levels;
+    currentDepth = result.depth;
+    localStorage.setItem('georag-depth', currentDepth);
+    renderModelOptions(container, depthContainer, dialog);
+    renderDepthOptions(depthContainer, dialog);
+    updateDepthIndicator();
+    showDepthError(result.notice || '');
 }
 
 function renderDepthOptions(container, dialog) {
     container.innerHTML = '';
     DEPTH_LEVELS.forEach(level => {
         const card = document.createElement('div');
-        card.className = 'depth-option' + (level.key === currentDepth ? ' active' : '');
-        card.innerHTML = `
-            <div class="depth-option-label">${level.label}</div>
-            <div class="depth-option-desc">${level.desc}</div>
-        `;
-        card.addEventListener('click', () => {
-            currentDepth = level.key;
-            localStorage.setItem('georag-depth', currentDepth);
-            container.querySelectorAll('.depth-option').forEach(el => el.classList.remove('active'));
-            card.classList.add('active');
-            updateDepthIndicator();
-            dialog.close();
-        });
+        card.className = 'depth-option' + (level.key === currentDepth ? ' active' : '')
+            + (level.fits === false ? ' unavailable' : '');
+        card.innerHTML = depthOptionHtml(level);
+        if (level.fits === false) {
+            card.querySelector('.depth-option-status').textContent = 'Not enough memory on this machine with this model.';
+            card.addEventListener('click', () => showDepthError(level.fit_error));
+        } else {
+            card.addEventListener('click', () => selectDepth(level, card, container, dialog));
+        }
         container.appendChild(card);
     });
 }
 
-function getDepthParams() {
-    const level = DEPTH_LEVELS.find(l => l.key === currentDepth) || DEPTH_LEVELS[1];
-    return { top_k_per_tag: level.topK, max_context_chunks: level.maxCtx };
+// Picking a level asks the backend to get the chat model ready for it. A level
+// in a higher VRAM tier needs the model reloaded with a larger context window;
+// if llama.cpp cannot fit that in memory the level is refused and the previous
+// one stays selected.
+async function selectDepth(level, card, container, dialog) {
+    if (depthCheckInProgress) return;
+    if (level.key === currentDepth) { dialog.close(); return; }
+
+    depthCheckInProgress = true;
+    showDepthError('');
+    container.classList.add('checking');
+    card.classList.add('checking');
+    card.querySelector('.depth-option-status').textContent = 'Checking memory\u2026 the model may reload, this takes a few seconds.';
+
+    let result;
+    try {
+        result = await apiPost('/api/system/chat-depth', { depth: level.key });
+    } catch (err) {
+        result = { ok: false, error: 'Could not reach the server to apply this level: ' + err.message };
+    }
+
+    depthCheckInProgress = false;
+    container.classList.remove('checking');
+    card.classList.remove('checking');
+    card.querySelector('.depth-option-status').textContent = '';
+
+    if (!result.ok) {
+        showDepthError(result.error || result.detail || 'This level could not be applied.');
+        return;
+    }
+    currentDepth = level.key;
+    localStorage.setItem('georag-depth', currentDepth);
+    container.querySelectorAll('.depth-option').forEach(el => el.classList.remove('active'));
+    card.classList.add('active');
+    updateDepthIndicator();
+    dialog.close();
 }
 
 function updateInputState() {
@@ -927,7 +1066,6 @@ async function handleSubmit(e) {
     // Enter streaming UI
     isStreaming = true;
     document.body.classList.add('chat-streaming');
-    window.updateWikiQueryState?.();
     const sendBtn = document.getElementById('send-btn');
     sendBtn.textContent = 'Stop';
     sendBtn.type = 'button';
@@ -952,7 +1090,6 @@ async function handleSubmit(e) {
         sendBtn.classList.remove('stop-mode');
         document.getElementById('new-chat-btn').disabled = false;
         document.querySelector('.chat-sidebar').classList.remove('streaming-locked');
-        window.updateWikiQueryState?.();
         if (wasWelcome) {
             document.getElementById('chat-messages').innerHTML = `
         <div class="chat-welcome" id="chat-welcome">
@@ -977,7 +1114,6 @@ async function handleSubmit(e) {
     let broadcastedStart = false;
 
     try {
-        const depthParams = getDepthParams();
         const response = await fetch('/api/chat', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
@@ -985,8 +1121,7 @@ async function handleSubmit(e) {
                 message: message,
                 conversation_id: currentConversationId,
                 tag_names: Array.from(selectedTags),
-                top_k_per_tag: depthParams.top_k_per_tag,
-                max_context_chunks: depthParams.max_context_chunks,
+                depth: currentDepth,
             }),
             signal: controller.signal,
         });
@@ -1039,10 +1174,6 @@ async function handleSubmit(e) {
                         if (doneData.sources && doneData.sources.length) {
                             appendSources(assistantDiv, doneData.sources);
                         }
-                        // Wiki/RAG source indicator
-                        if (doneData.context_source && doneData.context_source !== 'none') {
-                            appendContextBadge(assistantDiv, doneData.context_source, doneData.wiki_pages_used);
-                        }
                     } catch {}
                 }
             }
@@ -1061,7 +1192,6 @@ async function handleSubmit(e) {
     sendBtn.type = 'submit';
     sendBtn.classList.remove('stop-mode');
     isStreaming = false;
-    window.updateWikiQueryState?.();
     streamingChannel.postMessage({ streaming: false, conversationId: currentConversationId });
     if (!remoteStreaming) document.body.classList.remove('chat-streaming');
     document.getElementById('new-chat-btn').disabled = false;
@@ -1127,41 +1257,6 @@ function appendSources(messageDiv, sources) {
     });
 
     messageDiv.appendChild(sourcesEl);
-}
-
-function appendContextBadge(messageDiv, contextSource, wikiPagesUsed) {
-    const badgeEl = document.createElement('span');
-    badgeEl.className = `chat-source-badge ${contextSource}`;
-    const labels = { wiki: 'Wiki', rag: 'Documents', hybrid: 'Wiki + Docs' };
-    badgeEl.textContent = labels[contextSource] || contextSource;
-
-    // Insert badge into the message header area
-    const contentEl = messageDiv.querySelector('.message-content');
-    if (contentEl) {
-        contentEl.insertAdjacentElement('afterend', badgeEl);
-    }
-
-    // Show wiki page links if applicable
-    if (wikiPagesUsed && wikiPagesUsed.length > 0) {
-        const wikiLinksEl = document.createElement('div');
-        wikiLinksEl.className = 'chat-wiki-pages';
-        wikiLinksEl.innerHTML = 'Wiki: ' + wikiPagesUsed.map(p =>
-            `<a href="/wiki" data-slug="${escapeHtml(p.slug)}" title="${escapeHtml(p.title)}">${escapeHtml(p.title)}</a>`
-        ).join(', ');
-        wikiLinksEl.querySelectorAll('a').forEach(a => {
-            a.addEventListener('click', (e) => {
-                e.preventDefault();
-                // Navigate to wiki page
-                window.history.pushState({}, '', '/wiki');
-                window.dispatchEvent(new PopStateEvent('popstate'));
-                // After navigation, try to open the specific page
-                setTimeout(() => {
-                    document.dispatchEvent(new CustomEvent('wiki:navigate', { detail: { slug: a.dataset.slug } }));
-                }, 100);
-            });
-        });
-        messageDiv.appendChild(wikiLinksEl);
-    }
 }
 
 function scrollToBottom() {

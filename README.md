@@ -29,7 +29,6 @@
 - [Step 2: Start GeoRAG](#step-2-start-georag)
 - [Step 3: First-Time Walkthrough](#step-3-first-time-walkthrough)
 - [Using the Chat](#using-the-chat)
-- [Building and Using the Wiki](#building-and-using-the-wiki)
 - [Managing Your Documents](#managing-your-documents)
 - [Scheduled Downtime](#scheduled-downtime)
 - [Backup and Restore](#backup-and-restore)
@@ -43,7 +42,6 @@
 - [Data Flow](#data-flow)
 - [Processing Pipeline Deep Dive](#processing-pipeline-deep-dive)
 - [Chat & Retrieval Internals](#chat--retrieval-internals)
-- [Wiki System](#wiki-system)
 - [Scheduler & Downtime](#scheduler--downtime)
 - [llama-server Supervisor](#llama-server-supervisor)
 - [Concurrency Model](#concurrency-model)
@@ -76,14 +74,13 @@ It's like having a colleague who has read every document in your library and can
 | **OCR scanned PDFs** | Automatically OCR scanned/image-based PDFs that have no embedded text, making them permanently searchable |
 | **Organize by topic** | Automatically classifies documents into geotechnical categories (piling, tunneling, ground improvement, etc.) |
 | **Answer questions** | Ask anything about your documents and get answers with source citations |
-| **Build a living wiki** | An LLM reads your library and compiles interlinked wiki pages (entities, concepts, topics) with cross-references and source citations; chat answers prefer this curated knowledge when it covers the question |
 | **Stream responses** | See the AI's answer appear word by word in real time |
 | **Remember conversations** | All chat history is saved and can be revisited later |
 | **Semantic document search** | On the Documents page, search file contents by meaning (embedding similarity), not just filename |
 | **Work across tabs** | Open multiple browser tabs and they stay in sync |
 | **Open source files** | Click any cited document to open it directly on your machine |
-| **Schedule downtime** | Define a daily window in which the wiki build pauses and the local LLMs shut down to free memory, then resume automatically afterwards |
-| **Back up and restore** | Export the wiki and/or RAG data to a portable `.georag` archive and import it on another machine |
+| **Schedule downtime** | Define a daily window in which the local LLMs shut down to free memory, then restart automatically when the window ends |
+| **Back up and restore** | Export your RAG data to a portable `.georag` archive and import it on another machine |
 
 ## How Does It Work (in 30 Seconds)?
 
@@ -119,9 +116,27 @@ Two pieces of software make this work:
 | **Python** | 3.10 | 3.11 to 3.13 |
 | **Tesseract OCR** | 4.x+ | Latest (`brew install tesseract` on macOS) |
 | **llama-server** | Recent build of [llama.cpp](https://github.com/ggml-org/llama.cpp), on your `PATH` | Apple Silicon Metal build or CUDA build matching your GPU |
-| **GPU / VRAM** | 8 GB VRAM, or any 16 GB Apple Silicon Mac (unified memory) | 16 GB+ VRAM or a 16 GB+ Apple Silicon Mac |
+| **GPU / VRAM** | 8 GB VRAM, or any 16 GB Apple Silicon Mac (unified memory). Runs the Quick and Optimal Retrieval Depth levels with the default Qwen 3.5 9B model | 16 GB VRAM for Deep and Deeper, 24 GB for Ludicrous (see [Retrieval Depth Presets](#retrieval-depth-presets)) |
+| **Optional larger model** | Not needed | Qwen 3.8 27B (MLX): an Apple Silicon Mac with 32 GB for Quick and Optimal, 36 GB for Deep and Deeper, 48 GB for Ludicrous (see [Optional: the MLX chat model](#optional-the-mlx-chat-model)) |
 
-> **Memory footprint.** The default chat model is Qwen 3.5 9B (a 4-bit `Q4_K_M` quant), not a large one. GeoRAG always launches it with a fixed 131,072-token (128K) context window, so every Retrieval Depth level, including Ludicrous, works out of the box without any reconfiguration. llama.cpp is launched with `--fit on`, which sizes the KV cache to the memory it has. In practice the 9B weights, the vision projector, the 128K KV cache (quantized to q8_0), and the small embedding model together run comfortably on a 16 GB Apple Silicon machine, and the three GGUF model files are only around 7 GB on disk. Much smaller machines can still run it, falling back to slower CPU inference.
+> **Memory footprint (default model).** The default chat model is Qwen 3.5 9B (a 4-bit `Q4_K_M` quant), and the three GGUF model files are only around 7 GB on disk. What decides GPU memory beyond the weights is the **context window** the chat model is loaded with, because it has to hold the retrieved chunks, the conversation history and the reply. GeoRAG therefore loads a different context size per VRAM tier, chosen by the Retrieval Depth level in use:
+>
+> | Assumed VRAM | Retrieval Depth levels | Context window | Chat model | Total with vision projector + embedding model |
+> |---|---|---|---|---|
+> | 8 GB | Quick, Optimal | 32,768 tokens | ~5.9 GB | ~7.7 GB |
+> | 16 GB | Deep, Deeper | 131,072 tokens | ~7.5 GB | ~9.3 GB |
+> | 24 GB | Ludicrous | 262,144 tokens (the model's maximum) | ~10.0 GB | ~11.8 GB |
+>
+> The memory figures are llama.cpp's own projections for this model with a q8_0 KV cache, measured on Apple Silicon; the vision projector adds about 1.1 GB and the embedding model about 0.7 GB. These are GPU-memory figures; each server also holds roughly 0.5 to 1 GB of ordinary RAM for CPU-side buffers, so the "frees about" total in the pause dialog, which counts everything actually allocated, is higher (13.6 GB with Ludicrous loaded). The 8 GB tier is a tight fit, while the 16 GB and 24 GB tiers leave generous headroom for the desktop, other applications and llama.cpp's 1 GB safety margin. The tier is an assumption, not a gate: when you pick a level, GeoRAG reloads the model with that context and asks llama.cpp whether it actually fits. If it does not, the level is refused with an error before any chat starts, and the previous context is restored. The base tier is the exception: it always runs, and on machines smaller than the minimum llama.cpp (`--fit on`) moves some layers to the CPU, which is slower.
+> **Memory footprint (Qwen 3.8 27B, MLX).** The optional larger model behaves differently. Its weights alone take 15 GB, nothing is preallocated, and the MLX runtime's context cache costs about 0.25 GB per 1,000 tokens (roughly 16 times llama.cpp's quantized cache for the 9B). Its tiers therefore use much smaller context budgets:
+>
+> | Assumed Mac (unified memory) | Retrieval Depth levels | Context budget | Estimated need with a full context |
+> |---|---|---|---|
+> | 32 GB | Quick, Optimal | 24,576 tokens | ~22.6 GB |
+> | 36 GB | Deep, Deeper | 40,960 tokens | ~26.8 GB |
+> | 48 GB | Ludicrous | 73,728 tokens | ~35.0 GB |
+>
+> Measured on a 36 GB M4 Max with mlx-lm 0.31: 15.0 GB loaded, 18.0 GB with a 12,000-token prompt, 21.0 GB with 24,000 tokens. macOS lets the GPU use about 28 GB on that machine, so Quick through Deeper run and Ludicrous is refused. The need is an estimate checked before a chat starts (there is no load-time verdict to read as with llama.cpp); typical use stays well below it because the context is rarely full.
 
 ## Step 1: Set Up llama-server
 
@@ -129,7 +144,7 @@ GeoRAG launches and manages **two `llama-server` processes** (from [llama.cpp](h
 
 | Role | Port | Default model | Alias |
 |------|------|---------------|-------|
-| Chat (with vision) | 8001 | Qwen 3.5 9B + mmproj sidecar | `qwen3.5-9B` |
+| Chat (with vision) | 8001 | Qwen 3.5 9B + mmproj sidecar (or, when selected, Qwen 3.8 27B served by `mlx_lm.server`) | `qwen3.5-9B` |
 | Embeddings | 8002 | Nomic embed text v1.5 | `nomic-embed-text-v1.5` |
 
 The FastAPI backend (`backend/services/llama_supervisor.py`) spawns both processes on startup, tracks their PIDs, and can stop/restart them, whether for a manual pause from the UI or automatically during a scheduled downtime window. All you need to do is install `llama-server` and point GeoRAG at your model files.
@@ -167,8 +182,8 @@ llama-server \
   --mmproj ~/LLMs/lmstudio-community/Qwen3.5-9B-GGUF/mmproj-Qwen3.5-9B-BF16.gguf \
   --port 8001 \
   --alias qwen3.5-9B \
-  -c 131072 \
-  -n 32768 \
+  -c 32768 \
+  -n -1 \
   --no-context-shift \
   --temp 0.6 \
   --top-p 0.95 \
@@ -182,7 +197,7 @@ llama-server \
   --chat-template-kwargs '{"preserve_thinking": true}'
 ```
 
-`--chat-template-kwargs '{"preserve_thinking": true}'` keeps Qwen 3.5's `<think>...</think>` reasoning blocks in the streamed reply. The chat UI auto-collapses them after the model finishes thinking, with a click-to-expand toggle. `-c 131072` is fixed regardless of the Retrieval Depth setting; see the note above.
+Qwen can reason ("think") before it answers, but GeoRAG turns that off for chat (`CHAT_THINKING = False` in `backend/config.py`, sent with every chat request as `chat_template_kwargs: {"enable_thinking": false}`): the answer is grounded in the retrieved text, and the reasoning pass mostly added waiting. With `CHAT_THINKING = True` the reasoning is streamed separately from the answer (`reasoning_content`), forwarded wrapped in `<think>...</think>`, and shown in the chat as a block that auto-collapses once the model finishes thinking, with a click-to-expand toggle. The reply is not limited either way: `-n -1` lets the model generate until it stops by itself or the context window is full. `-c` is shown here for the base tier; the app sets it to 32768, 131072 or 262144 according to the Retrieval Depth level in use (see the note above).
 
 </details>
 
@@ -207,9 +222,42 @@ llama-server \
 
 </details>
 
-The `--alias` values **must match** `CHAT_MODEL` and `EMBEDDING_MODEL` in `backend/config.py`. If you change one, change the other.
+The `--alias` values **must match** the chat model's `request_model` in `CHAT_MODELS` and `EMBEDDING_MODEL` in `backend/config.py`. If you change one, change the other.
 
 > GeoRAG starts both servers automatically when the app launches. Watch the status pill in the top bar: it reads "Starting LLMs" while the models load, "LLMs paused" if manually paused (click to resume), and shows a warning if a server fails to start; check `data/logs/llama-chat.log` / `data/logs/llama-embed.log` for details. Both processes are also stopped and restarted automatically during any scheduled downtime window you configure.
+
+### Optional: the MLX chat model
+
+On an Apple Silicon Mac, GeoRAG can serve a second, larger chat model, **Qwen 3.8 27B (MLX 4-bit)**, in place of the 9B. You choose between them in the **Model and Retrieval Depth** dialog (the gear icon in the chat), and the choice is remembered across restarts. Only one chat model is loaded at a time: switching stops one server and starts the other on the same port.
+
+MLX models cannot be loaded by llama.cpp, so this model is served by `mlx_lm.server` from the [mlx-lm](https://github.com/ml-explore/mlx-lm) package. That runtime lives in its own virtualenv, `venv-mlx/`, because it needs a newer `tokenizers` than the `chromadb` pinned in `requirements.txt` allows.
+
+Setup:
+
+1. Put the model folder at `~/LLMs/lmstudio-community/Qwen3.8-27B-MLX-4bit` (about 15 GB), or point `MLX_CHAT_MODEL` at it in `.env`.
+2. Run `./start.sh`. When it finds the model folder on an Apple Silicon Mac it creates `venv-mlx/` and installs `requirements-mlx.txt` (one time, about 430 MB). To do it by hand:
+
+```bash
+python3 -m venv venv-mlx
+venv-mlx/bin/pip install -r requirements-mlx.txt
+```
+
+3. Open the dialog and pick **Qwen 3.8 27B**. If the model folder or the runtime is missing, or the Mac does not have the memory, the card says why and the 9B stays active.
+
+What to expect compared with the 9B (measured on a 36 GB M4 Max):
+
+| | Qwen 3.5 9B (llama.cpp) | Qwen 3.8 27B (MLX) |
+|---|---|---|
+| Reading the retrieved context | about 465 tokens/s | about 130 to 175 tokens/s (a 24,000-token prompt takes 3 minutes before the first word) |
+| Writing the answer | about 35 tokens/s | 21 tokens/s on a short prompt, 12 to 14 at 24,000 tokens |
+| Memory | 8 to 14 GB depending on depth | 15 GB plus about 0.25 GB per 1,000 tokens in use |
+| Image description during library processing | Yes | No: `mlx_lm.server` is text only, so images indexed while it is selected get no description |
+| Reply length | Unlimited: the model answers until it stops or its context window is full | The same, except for a crash guard at 8,192 tokens (the MLX server fails on much longer replies) |
+| Memory check | llama.cpp's own fit report at load | Estimate against the Mac's GPU working set, before each chat |
+
+Process your library with the 9B selected if it contains images, then switch to the 27B for chat if you want its answers.
+
+If the MLX server stops producing output part-way through a reply (it does not report its own failures; the request would otherwise hang), GeoRAG gives up after 180 seconds of silence, shows an error in the chat and restarts the model.
 
 ## Step 2: Start GeoRAG
 
@@ -297,41 +345,20 @@ When you first open GeoRAG, the **Library Panel** on the right side walks you th
 - **Select topics first**: On the welcome screen, click one or more topic tags (e.g., "Piling", "Deep Excavation"). This tells GeoRAG which document collections to search.
 - **Ask anything**: Type your question and press Send. The AI will find relevant document sections and write an answer.
 - **Check the sources**: Below each answer, you'll see which documents were cited, with page numbers and relevance scores. Click a source to open the original file.
-- **Adjust depth**: Click the gear icon next to the tag bar to control how many document chunks the AI considers:
+- **Choose the model and depth**: Click the gear icon next to the tag bar. The dialog has two parts. **Chat model** switches between Qwen 3.5 9B and, on an Apple Silicon Mac with it installed, Qwen 3.8 27B (see [Optional: the MLX chat model](#optional-the-mlx-chat-model)). **Retrieval depth** controls how many document chunks the AI considers:
 
-| Depth Level | Speed | Detail | Good For |
-|-------------|-------|--------|----------|
-| Quick and less demanding | Fastest | Brief answers | Simple factual lookups |
-| Optimal and balanced | Balanced | Good detail | Most questions (default) |
-| Deep and demanding | Slower | Thorough | Multi-document analysis |
-| Deeper and very demanding | Slow | Very detailed | Complex technical questions |
-| Ludicrous | Slowest | Maximum context | When you need everything |
+| Depth Level | Speed | Detail | Good For | Assumes (9B) | Assumes (27B MLX) |
+|-------------|-------|--------|----------|--------------|-------------------|
+| Quick and less demanding | Fastest | Brief answers | Simple factual lookups | 8 GB VRAM | 32 GB Mac |
+| Optimal and balanced | Balanced | Good detail | Most questions (default) | 8 GB VRAM | 32 GB Mac |
+| Deep and demanding | Slower | Thorough | Multi-document analysis | 16 GB VRAM | 36 GB Mac |
+| Deeper and very demanding | Slow | Very detailed | Complex technical questions | 16 GB VRAM | 36 GB Mac |
+| Ludicrous | Slowest | Maximum context | When you need everything | 24 GB VRAM | 48 GB Mac |
+
+  Deeper levels need a larger context window and so more memory. Picking a model, or a level in a higher tier, reloads the chat model if needed (a few seconds) and checks that it fits; if your machine does not have the memory, the dialog shows an error and stays on the previous choice. When you switch model, your depth level is kept if the new model can run it here; otherwise the dialog falls back to Optimal and tells you why. The exact limits per level are listed under [Retrieval Depth Presets](#retrieval-depth-presets).
 
 - **Conversations are saved**: Use the sidebar on the left to switch between past conversations.
 - **Trash and restore**: Delete a conversation and it goes to trash. You can restore it or permanently delete it.
-- **Wiki-first answers**: If you have built a wiki (see below), chat automatically checks it first. When a curated wiki page covers your question well, the answer is drawn from that page (cited as `[Wiki: Page Title]`); otherwise GeoRAG falls back to searching your documents, and can blend both. Answers built from documents are also quietly distilled back into the wiki in the background so it keeps growing.
-
-## Building and Using the Wiki
-
-The **Wiki** page (`/wiki`) is an LLM-maintained knowledge base compiled from your own documents. Instead of retrieving raw chunks at question time, an LLM reads your processed files ahead of time and writes interlinked wiki pages: entities, concepts, topics, source summaries, and comparisons, each with `[[Wiki Links]]` cross-references, backlinks, and inline `[Source: filename (page N)]` citations.
-
-**Build it:**
-
-1. Process your library first (Wiki needs processed documents to read).
-2. Open the Wiki page. When documents are ready, click **Initialize Wiki**, or use **Rebuild for Tag** to build only from documents carrying selected tags.
-3. The build runs in the background. A progress bar shows how many source documents have been processed, how many pages were created/updated, and which file is being read now.
-4. You can **Stop** a build at any time. Progress is durable and per-file, so **Resume** picks up exactly where it left off; already-covered files are skipped rather than re-read. A restart of the app, or a scheduled downtime pause, resumes the same way.
-
-**Keep it fresh:** After you process new documents, the Wiki page shows how many files are not yet covered and offers **Process Pending Files** to ingest only those.
-
-**Use it:**
-
-- **Browse**: The sidebar lists pages, filterable by category, with a search box (title/content plus vector similarity). Click a page to read it, follow wiki links, and see its backlinks and source references.
-- **Ask**: The **Ask** bar answers a question from compiled wiki knowledge only, streaming the response. Optionally click **Save as Page** to persist the answer as a new topic page.
-- **Health Check** (beta): Runs an LLM audit that reports orphan pages, missing/stale pages, missing cross-references, and suggested new pages. You can then apply selected fixes, which the LLM performs as a background task.
-- **Manual Entry / Delete / Reset**: Create a page by hand, delete a single page, or **Reset Wiki** to wipe all pages, logs, and vectors and start over.
-
-> A wiki build is heavy: it makes one LLM call per source document across your whole library. It is designed to run for a long time (optionally overnight, see [Scheduled Downtime](#scheduled-downtime)) and to survive stops, restarts, and downtime windows without losing progress.
 
 ## Managing Your Documents
 
@@ -347,23 +374,23 @@ Go to the **Documents** page (`/documents`) to:
 
 ## Scheduled Downtime
 
-A long wiki build can hold the LLM models in memory for hours. If you want your machine free during working hours, define a daily **downtime window** in the system settings (the gear/status area in the top bar).
+The local LLM models hold GPU/unified memory while the app runs. If you want your machine free during working hours, define a daily **downtime window** in the system settings (the gear/status area in the top bar).
 
-- During the window, any running wiki build is gracefully paused (it finishes the current document first) and **both llama-servers are shut down** to free GPU/unified memory.
-- When the window ends, the servers come back up and the paused build **resumes automatically**, right where it left off.
-- The pause marker is persisted, so even if you restart the app in the middle of the window the build still resumes when the window closes.
+- During the window, **both llama-servers are shut down** to free GPU/unified memory.
+- When the window ends, the servers are restarted automatically.
+- If you restart the app in the middle of the window, the servers stay down until the window closes.
 - Click **End downtime now** to override the current window immediately (the saved schedule still applies tomorrow).
 - The window can wrap past midnight (e.g. `22:00` to `06:00`).
 
-The status pill in the top bar reflects all of this: `Starting LLMs`, `LLMs idle`, `LLMs paused`, `Wiki building`, `Scheduled pause`, and so on. You can also manually pause the LLMs (to free memory) by clicking the pill; GeoRAG refuses if any LLM work is currently active.
+The status pill in the top bar reflects all of this: `Starting LLMs`, `LLMs idle`, `LLMs paused`, `Scheduled pause`, and so on. You can also manually pause the LLMs (to free memory) by clicking the pill; GeoRAG refuses if any LLM work is currently active. The pause confirmation lists what is loaded (the chat model with its current context window, and the embedding model) and how much memory pausing will free, read from llama.cpp's load logs.
 
 ## Backup and Restore
 
 From the system menu you can export your data to a single portable `.georag` archive and import it on another machine.
 
-- **Export**: Choose whether to include the **wiki** (pages, logs, vectors) and/or the **RAG** data (document metadata, tags, vector collections). The export runs in the background; download the archive when it completes.
-- **Import**: Upload a `.georag` archive. It is validated first, then imported in the background.
-- Export and import are mutually exclusive with each other and with document processing / wiki builds; GeoRAG returns a busy error rather than corrupting state.
+- **Export**: Exports include the **RAG** data (document metadata, tags, vector collections). The export runs in the background; download the archive when it completes.
+- **Import**: Upload a `.georag` archive. It is validated first, then imported in the background. Older archives that contain wiki data are still accepted; the wiki parts are ignored.
+- Export and import are mutually exclusive with each other and with document processing; GeoRAG returns a busy error rather than corrupting state.
 
 ## Stopping the Server
 
@@ -442,6 +469,7 @@ curl http://127.0.0.1:8002/v1/models   # embeddings
 
 ### Image extraction fails
 - The chat llama-server must be started with `--mmproj <path-to-mmproj.gguf>`. Without it, llama-server cannot accept images and `image_extractor.py` will mark image files as failed.
+- Image description is not available while the MLX chat model (Qwen 3.8 27B) is selected: `mlx_lm.server` is text only. Select Qwen 3.5 9B before processing a library that contains images.
 
 ### Processing is really slow
 The local llama-servers are doing all the AI work. To speed things up:
@@ -537,13 +565,13 @@ rm -rf data/         # Deletes all processed data (your source documents are saf
 ```
 
 **Three tier layout:**
-- **Browser**: Vanilla JS frontend served as static files. Chat page, documents page, wiki page, library panel, and a system status pill. Tabs sync via BroadcastChannel API.
+- **Browser**: Vanilla JS frontend served as static files. Chat page, documents page, library panel, and a system status pill. Tabs sync via BroadcastChannel API.
 - **FastAPI Backend** (port 3000): Python async server handling API requests, orchestrating the RAG pipeline, and streaming responses via SSE.
 - **Two `llama-server` instances** (ports 8001 / 8002): Local LLM runtimes exposing OpenAI-compatible APIs. The chat server runs the chat model plus its multimodal projector for image captioning; the embedding server runs the embedding model.
 
 **Storage:**
-- **ChromaDB**: On disk vector database. One collection per topic tag plus a dedicated `wiki` collection, cosine distance metric, 768 dim vectors.
-- **SQLite**: File metadata, tag associations, conversations, messages, source citations, wiki pages/logs, and the single-row app settings (downtime schedule + wiki-build state). Runs in WAL mode.
+- **ChromaDB**: On disk vector database. One collection per topic tag, cosine distance metric, 768 dim vectors.
+- **SQLite**: File metadata, tag associations, conversations, messages, source citations, and the single-row app settings (downtime schedule). Runs in WAL mode.
 
 ## Data Flow
 
@@ -565,16 +593,13 @@ Engineering/ directory
 ```
 User message + selected tags
     → Embed query via embedding llama-server /v1/embeddings
-    → Wiki-first: search the wiki collection; if a page scores ≥ WIKI_CHAT_THRESHOLD
-      use curated wiki pages as context (source = "wiki")
-    → Otherwise / to supplement: query each selected tag's ChromaDB collection (top K per tag)
-    → Deduplicate across tags, rank by cosine similarity (source = "rag" or "hybrid")
-    → Assemble system prompt with wiki pages and/or top context chunks
+    → Query each selected tag's ChromaDB collection (top K per tag)
+    → Deduplicate across tags, rank by cosine similarity
+    → Assemble system prompt with the top document chunks
     → Append last 4 conversation turns (8 messages)
     → Stream completion from chat llama-server /v1/chat/completions
     → Deliver tokens to browser via SSE
     → Save message + source citations to SQLite
-    → If the answer used documents, distill the Q&A back into the wiki (background)
 ```
 
 ## Processing Pipeline Deep Dive
@@ -652,16 +677,19 @@ Chunks are upserted into ChromaDB:
 
 When a user sends a message via `POST /api/chat`:
 
-1. The user's query is embedded using the same Nomic model
-2. **Wiki-first retrieval**: the wiki collection is searched. If the best page scores at or above `WIKI_CHAT_THRESHOLD` (0.7), up to `WIKI_CHAT_TOP_K` (5) curated wiki pages become the context and the system prompt tells the model to cite `[Wiki: Page Title]`. The retrieval source is tagged `wiki`, `rag`, or `hybrid`.
-3. **RAG fallback / supplement**: if the wiki is insufficient (or to supplement it), for each selected tag the corresponding ChromaDB collection is queried for the `top_k_per_tag` most similar chunks (default: 5)
-3. Results from all tags are merged and deduplicated by chunk ID
-4. The top `max_context_chunks` (default: 8) are selected by relevance score
-5. A system prompt is built containing the context chunks with source metadata
-6. The last `CONVERSATION_HISTORY_TURNS` turns (default: 4 turns = 8 messages) are appended
-7. The full prompt is streamed to the chat llama-server via `/v1/chat/completions` with `stream=true`
-8. Tokens are forwarded to the client as SSE events (`event: token`, `data: {"token": "..."}`)
-9. On completion, a `done` event sends `{conversation_id, sources}` and the message is persisted
+1. The request's Retrieval Depth level is resolved for the chat model in use and the chat server is checked against it (`llama_supervisor.ensure_chat_ctx`): with llama.cpp the model is reloaded first if the level needs a larger context, with MLX the level's memory estimate is checked. If it does not fit in memory the request ends with an `error` event before anything else happens
+2. The user's query is embedded using the same Nomic model
+3. For each selected tag, the corresponding ChromaDB collection is queried for the level's `top_k` most similar chunks
+4. Results from all tags are merged and deduplicated by chunk ID
+5. The level's top `max_chunks` are selected by relevance score
+6. A system prompt is built containing the context chunks with source metadata
+7. The last `CONVERSATION_HISTORY_TURNS` turns (default: 4 turns = 8 messages) are appended, newest first, for as long as they fit: half of the level's context window is kept free for the reply, and older messages that would push the prompt past the other half are dropped
+8. The full prompt is streamed to the chat llama-server via `/v1/chat/completions` with `stream=true`, thinking switched off (unless `CHAT_THINKING` is on) and no `max_tokens`, so the model answers for as long as it wants (the MLX server is the exception: it is given what is left of the level's context budget, capped by its crash guard)
+9. Tokens are forwarded to the client as SSE events (`event: token`, `data: {"token": "..."}`). With `CHAT_THINKING` on, reasoning tokens arrive first, wrapped in `<think>...</think>`, followed by the answer
+10. If the reply ends because the context window filled up, or on MLX at the crash guard (`finish_reason: "length"`), a visible "response cut off" note is appended so a truncated reply is never mistaken for a complete one
+11. On completion, a `done` event sends `{conversation_id, sources}` and the message is persisted
+
+Replies stored while thinking was on keep their `<think>` block for display, but it is stripped from the conversation history sent back to the model on later turns.
 
 **Stream mirroring:** Other browser tabs can connect to `GET /api/chat/stream-mirror` to receive the same token stream in real time via async queues.
 
@@ -669,59 +697,52 @@ When a user sends a message via `POST /api/chat`:
 
 ### Retrieval Depth Presets
 
-| Level | Top K Per Tag | Max Context Chunks |
-|-------|--------------|-------------------|
-| Quick and less demanding | 5 | 8 |
-| Optimal and balanced | 10 | 16 |
-| Deep and demanding | 20 | 32 |
-| Deeper and very demanding | 50 | 80 |
-| Ludicrous | 100 | 200 |
+The levels are defined in `backend/config.py` as `CHAT_DEPTH_LEVELS`, each naming a memory tier (`base`, `mid`, `top`). What a tier means, its context window and the memory it assumes, is defined per chat model in `CHAT_MODELS`. The chat UI loads the result for the active model from `GET /api/system/chat-depths`.
 
-All levels are served by the same chat llama-server, which always launches with a fixed 131,072-token context window, so no restart or reconfiguration is needed when switching depths (see [What You Need](#what-you-need)).
+Retrieval is the same for both models:
 
-## Wiki System
+| Level | Tier | Top K Per Tag | Max Context Chunks |
+|-------|------|--------------|-------------------|
+| Quick and less demanding | base | 5 | 8 |
+| Optimal and balanced | base | 10 | 16 |
+| Deep and demanding | mid | 20 | 32 |
+| Deeper and very demanding | mid | 50 | 80 |
+| Ludicrous | top | 100 | 200 |
 
-The wiki (`backend/services/wiki_service.py`, `backend/routers/wiki.py`) is an LLM-maintained knowledge base compiled from the document library. Pages live in the `wiki_pages` SQLite table and are separately embedded into a dedicated ChromaDB collection (`wiki`) so both chat and the wiki's own Ask feature can retrieve them.
+| Level | Context Window, Qwen 3.5 9B | Assumed VRAM | Context Budget, Qwen 3.8 27B (MLX) | Assumed Mac |
+|-------|-----------------------------|--------------|------------------------------------|-------------|
+| Quick and less demanding | 32,768 | 8 GB | 24,576 | 32 GB |
+| Optimal and balanced | 32,768 | 8 GB | 24,576 | 32 GB |
+| Deep and demanding | 131,072 | 16 GB | 40,960 | 36 GB |
+| Deeper and very demanding | 131,072 | 16 GB | 40,960 | 36 GB |
+| Ludicrous | 262,144 | 24 GB | 73,728 | 48 GB |
 
-### Page model
+- **No thinking, no reply limit.** The model answers directly (`CHAT_THINKING = False`) and for as long as it wants. A reply ends when the model stops by itself, when you press Stop, or when the context window is full, in which case it ends with a visible "response cut off" note and you can send "continue". The context window is shared by the prompt and the reply, so half of it is kept free for the reply when the prompt is assembled (earlier messages are dropped first).
+- **Why thinking is off.** Measured on a 36 GB M4 Max: for a two-sentence question the 9B reasoned for 3,537 tokens (76 seconds) before answering, against 0.6 seconds to the first word with thinking off; on a 50-source question the 27B reasoned for about 7,700 tokens (over 9 minutes) and reached its crash guard without writing an answer. Set `CHAT_THINKING = True` to bring reasoning back; it is then unlimited.
+- **One exception on MLX.** `mlx_lm.server` 0.31 fails with a Metal "Resource limit exceeded" error roughly 10,000 tokens into a reply, losing the reply and leaving the request hanging. The 27B therefore has a crash guard, not a budget: a reply stops at 8,192 tokens (`reply_guard_tokens` in `CHAT_MODELS`; set it to `None` to remove it). If the server does fail, GeoRAG reports it after 180 seconds of silence and restarts the model.
+- **Context Window / Budget** is what costs memory; see [What You Need](#what-you-need) for the measured figures. For the 9B it is the `-c` llama-server is loaded with. For the 27B nothing is preallocated, so it is a budget: the prompt and reply together are kept inside it, and the memory it would take when full is what gets checked. The 27B's budgets are far smaller because its context cache costs about 16 times more memory per token.
 
-Each page has a `slug`, `title`, markdown `content`, a `category` (`entity`, `concept`, `topic`, `source_summary`, `comparison`, plus the auto-generated `index`), a one-line `summary`, `source_files` (JSON: which documents it drew from), and `backlinks` (JSON: slugs of pages that link to it). Cross-references are written inline as `[[Page Title]]`; `compute_backlinks()` scans all pages and populates the reverse index. `build_index_page()` regenerates a special `index` page grouping every page by category, which also seeds the LLM's context on future builds.
+**Switching levels (llama.cpp).** Selecting a level calls `POST /api/system/chat-depth`. If the loaded context is already large enough nothing is restarted. Otherwise the chat server is relaunched with the level's context (a few seconds) and llama.cpp's `--fit` report is read from `data/logs/llama-chat.log`: llama.cpp never refuses an oversized context outright, it logs that it cannot meet its memory target and moves model layers to the CPU, and that log line is what GeoRAG treats as "does not fit". The level is then refused with llama.cpp's numbers, and the server is put back on its previous context. A process that fails to load at all is handled the same way. The context only grows while the app is running (going back to a lower level does not reload the model), and the server is never restarted while other LLM work (library processing, OCR, tag exploration, a streaming chat) is in progress.
 
-### Ingest (build)
+**Switching levels (MLX).** `mlx_lm.server` allocates on demand, so there is nothing to reload and no load-time verdict to read: a context that is too big would only show up mid-answer, as swapping or an out-of-memory failure. Instead the level's need is estimated (`llama_supervisor.mlx_memory_estimate`: the weights on disk, plus `kv_bytes_per_token` for every token of the context budget, plus `overhead_bytes`) and compared with the memory macOS lets the GPU use (`max_recommended_working_set_size`, as reported by MLX, less what the embedding server holds). A level that does not fit is refused with those numbers.
 
-`POST /api/wiki/ingest` (or `/wiki/ingest/pending` for only not-yet-covered files) starts a background build:
+**Switching models.** `POST /api/system/chat-model` stops the chat server and starts the other model's backend at its base tier. If the new model cannot be served on this machine (not an Apple Silicon Mac, runtime or model folder missing, not enough memory, or it fails to load) the previous model is restored and the reason returned. The depth level sent with the request is carried over when the new model can run it; otherwise the response falls back to the default level and says why.
 
-1. Source files are gathered from the library (`scan_status=processed`), scoped by `tag_names` or explicit `file_ids`.
-2. Files already covered by a wiki page, or already attempted (durable per-file marker `File.wiki_attempted_at`), are skipped, unless re-processed since. This is what makes **Resume** cheap: a restart never re-grinds the ~thousands of files it already touched.
-3. Files are processed in batches of `LLM_PARALLEL_SLOTS`. For each file, its chunks (up to `WIKI_INGEST_MAX_SOURCE_CHARS` of source text) plus a capped copy of the wiki index are sent to the chat model, which returns JSON describing pages to create/update. Qwen's thinking is disabled for this call (both via `chat_template_kwargs` and a `/no_think` suffix) so the token budget goes to JSON, not `<think>` blocks; unusable responses are retried once with a stricter prompt.
-4. Applying results (SQLite writes, embedding new/updated pages) is offloaded off the event loop. The index page is rebuilt only every `WIKI_INDEX_REBUILD_EVERY` (25) changed pages, and backlinks are rebuilt once at the end, because those scans are O(all pages) and dominated build time.
-5. **Stop** (`/wiki/ingest/stop`) sets a cancel flag, lets in-flight LLM calls finish or abandons them within ~1s, preserves progress, then drains and shuts down the llama-servers to free memory.
-
-Progress and phase (`idle` → `ingesting` → `stopping`/`stopped`/`done`) are exposed via `GET /api/wiki/ingest/status`. `GET /api/wiki/stats` reports totals, per-category counts, and library-sync coverage (covered vs. pending files), and is a plain sync endpoint run in the threadpool so its multi-second scan can't stall the event loop.
-
-### Query, chat integration, and growth
-
-- **Ask** (`POST /api/wiki/query`, SSE): embeds the question, retrieves up to `WIKI_QUERY_MAX_CONTEXT_PAGES` pages, streams an answer citing `[Wiki: Page Title]`, and can optionally save the answer as a new page.
-- **Chat integration**: `search_wiki_for_chat()` is the wiki-first step in the main chat flow (threshold `WIKI_CHAT_THRESHOLD`).
-- **Wiki growth**: after any chat answer that used documents, `grow_wiki_from_chat()` runs in the background to distill the Q&A into page creates/updates, so the wiki compounds over normal use.
-
-### Health check (lint)
-
-`POST /api/wiki/lint` runs an LLM audit returning orphan pages, missing/stale pages, missing cross-references, and suggested new pages. `POST /api/wiki/lint/apply` applies selected fixes as a background task (inserting wikilinks, creating missing/suggested pages, de-orphaning, refreshing stale pages), with its own status/stop endpoints. `DELETE /api/wiki/reset` wipes all pages, logs, vectors, and per-file attempt markers.
+The same checks run at the start of every chat request, so a level remembered by the browser but no longer runnable is caught before the chat starts. The model in use is stored in `data/chat-model` and the context of the level last selected in `data/llama-chat.ctx`; both are used the next time the chat server starts.
 
 ## Scheduler & Downtime
 
-`backend/services/scheduler.py` runs a periodic reconcile loop (every 30s) that drives the daily downtime window and wiki-resume lifecycle. All settings live in a single-row `app_settings` table (id=1).
+`backend/services/scheduler.py` runs a periodic reconcile loop (every 30s) that drives the daily downtime window. Settings live in a single-row `app_settings` table (id=1).
 
 - **Downtime math**: a window is `downtime_start`/`downtime_end` (local `HH:MM`, default 06:30 to 09:30), enabled by `schedule_enabled`. Windows may wrap past midnight.
-- **Entering downtime**: if a wiki build is running it is gracefully stopped and the persisted `scheduled_paused_for_downtime` marker is set; then both llama-servers are stopped (including a sweep for orphaned servers left by a `uvicorn --reload`).
-- **Exiting downtime**: llama-servers are restarted and, only if `scheduled_paused_for_downtime` is set, the build auto-resumes with its persisted scope (`scheduled_tag_names` / `scheduled_file_ids`). A build merely killed mid-flight leaves the marker false, so a cold app launch never auto-starts a huge ingest.
+- **Entering downtime**: both llama-servers are stopped (including a sweep for orphaned servers left by a `uvicorn --reload`).
+- **Exiting downtime**: when the window ends, both llama-servers are restarted.
 - **Overrides**: `POST /api/system/end-downtime` forces uptime until the current window's end. A **manual pause** latches a user-paused flag that the scheduler honours so it won't undo the pause on the next tick.
 - The reconcile loop is idempotent, so it self-heals if any single transition didn't fully take.
 
 ## llama-server Supervisor
 
-`backend/services/llama_supervisor.py` owns the two `llama-server` subprocesses so the app (and scheduler) can stop/start them.
+`backend/services/llama_supervisor.py` owns the two model-server subprocesses so the app (and scheduler) can stop/start them: the embedding `llama-server`, and the chat server, which is `llama-server` or `mlx_lm.server` depending on the chat model selected. The `llama-chat.*` pid, log and context files belong to whichever chat backend is active.
 
 - On app startup (`lifespan` in `backend/app.py`) both servers are launched unless the app started inside a downtime window. They are **not** stopped on app shutdown, so a fresh instance (or a `--reload`) can adopt them via their pid files and keep the warm KV cache.
 - Startup is **idempotent**: if a port already answers, the running process is adopted (pid discovered via the pid file or `lsof`) rather than launching a duplicate.
@@ -737,9 +758,7 @@ Progress and phase (`idle` → `ingesting` → `stopping`/`stopped`/`done`) are 
 | Embedding requests | 3 | `asyncio.Semaphore(3)` | Balance throughput vs. embedding llama-server capacity |
 | Database writes | 1 | `asyncio.Lock` | SQLite transaction safety |
 | OCR processing | 1 file | Sequential | CPU-intensive Tesseract, avoids thrashing |
-| Wiki ingest | `LLM_PARALLEL_SLOTS` per batch | Async batch + cancel-polling | Uses the chat server's parallel slots; abandonable so Stop lands in ~1s |
-| Wiki ingest / lint fix | 1 at a time | Module flags | Only one wiki LLM operation runs at once |
-| Pipeline exclusion | 1 pipeline | Mutual exclusion checks | Processing, OCR, exploration, wiki build, and backup/restore block each other |
+| Pipeline exclusion | 1 pipeline | Mutual exclusion checks | Processing, OCR, exploration, and backup/restore block each other |
 | Embedding batch size | 128 texts | Config constant | llama-server request size limit |
 | Processing batch | 10 files | Config constant | Memory bounded pipeline stage |
 
@@ -772,10 +791,10 @@ Progress and phase (`idle` → `ingesting` → `stopping`/`stopped`/`done`) are 
 |-----------|------|
 | Vanilla JavaScript | No framework; direct DOM manipulation, module pattern controllers |
 | PicoCSS | Minimal classless CSS framework |
-| Marked.js | Markdown to HTML rendering for assistant and wiki responses |
+| Marked.js | Markdown to HTML rendering for assistant responses |
 | KaTeX | LaTeX math rendering in chat responses (loaded from CDN) |
 | Inter (Google Fonts) | UI typography |
-| EventSource API | SSE streaming for real time chat and wiki Ask |
+| EventSource API | SSE streaming for real time chat |
 | BroadcastChannel API | Cross tab state synchronization |
 | History API | Client side SPA routing |
 | localStorage | Persists retrieval depth setting and panel state |
@@ -786,6 +805,7 @@ Progress and phase (`idle` → `ingesting` → `stopping`/`stopped`/`done`) are 
 |-----------|------|------|
 | GeoRAG (Uvicorn) | 3000 | Web server + API |
 | llama-server (chat) | 8001 | Local chat model + vision (OpenAI compatible API) |
+| mlx_lm.server (chat, optional) | 8001 | Replaces the chat llama-server while the MLX model is selected; text only, Apple Silicon only |
 | llama-server (embeddings) | 8002 | Local embedding model (OpenAI compatible API) |
 | Tesseract OCR | N/A | System binary for OCR (used by `ocrmypdf`) |
 
@@ -799,7 +819,8 @@ _0RAG/
 ├── run_server.py                   # Standalone entry point (used by the PyInstaller EXE)
 ├── georag.spec                     # PyInstaller spec for the Windows EXE build
 ├── requirements.txt                # Pinned Python dependencies
-├── .gitignore                      # Excludes venv/, data/, __pycache__/
+├── requirements-mlx.txt            # MLX runtime for the optional MLX chat model (installed into venv-mlx/)
+├── .gitignore                      # Excludes venv/, venv-mlx/, data/, __pycache__/
 │
 ├── backend/
 │   ├── app.py                      # FastAPI app entry point, lifespan (llama + scheduler)
@@ -808,18 +829,17 @@ _0RAG/
 │   ├── models/
 │   │   ├── database.py             # SQLAlchemy engine (WAL), session factory, migrations
 │   │   ├── schemas.py              # ORM: File, Tag, FileTag, Conversation, Message,
-│   │   │                           #      WikiPage, WikiLog, AppSettings
+│   │   │                           #      AppSettings
 │   │   └── pydantic_models.py      # Request/response validation schemas
 │   │
 │   ├── routers/
-│   │   ├── chat.py                 # POST /api/chat (SSE, wiki-first), stream mirror, stop
+│   │   ├── chat.py                 # POST /api/chat (SSE), stream mirror, stop
 │   │   ├── conversations.py        # CRUD, soft delete, trash, restore
 │   │   ├── documents.py            # Search (name + semantic), filter, paginate, tag, open
 │   │   ├── tags.py                 # Tag CRUD
 │   │   ├── processing.py           # Scan, start/stop pipeline, onboarding
 │   │   ├── explore.py              # Tag exploration: discover new categories
 │   │   ├── ocr.py                  # OCR start/stop/status for failed PDFs
-│   │   ├── wiki.py                 # Wiki CRUD, ingest, query, lint, stats, reset
 │   │   ├── backup.py               # Export/import .georag archives
 │   │   ├── system.py               # Settings, status pill, downtime, llama pause/start
 │   │   └── health.py               # llama-server health probe
@@ -833,8 +853,7 @@ _0RAG/
 │       ├── vector_store.py         # ChromaDB per tag collection management
 │       ├── llm_client.py           # Chat completions + vision (streaming)
 │       ├── tagger.py               # 94 pattern heuristic + LLM classification
-│       ├── wiki_service.py         # Wiki pages, vectors, ingest/query/lint/growth
-│       ├── scheduler.py            # Downtime window + wiki-resume reconcile loop
+│       ├── scheduler.py            # Downtime window reconcile loop
 │       ├── llama_supervisor.py     # Owns the two llama-server subprocesses
 │       ├── backup_service.py       # .georag export/import (exporter, importer)
 │       └── extractors/
@@ -848,7 +867,7 @@ _0RAG/
 ├── frontend/
 │   ├── templates/
 │   │   ├── base.html               # Shared nav, status pill, library panel, about/settings modals
-│   │   ├── spa.html                # SPA shell (chat + documents + wiki in one page)
+│   │   ├── spa.html                # SPA shell (chat + documents in one page)
 │   │   ├── index.html              # Server rendered chat page
 │   │   └── documents.html          # Server rendered documents page
 │   │
@@ -860,7 +879,6 @@ _0RAG/
 │       │   ├── chat.js             # Chat: SSE streaming, tags, conversations, depth
 │       │   ├── documents.js        # Documents: search (name + semantic), filter, batch tag
 │       │   ├── panel.js            # Library: scan, process, OCR, explore, progress polling
-│       │   ├── wiki.js             # Wiki: browse, build/resume, ask, health check, reset
 │       │   ├── system_status.js    # Status pill, downtime settings, llama pause/start
 │       │   ├── router.js           # SPA routing via History API
 │       │   ├── utils.js            # HTTP helpers, tag badges, sync channel
@@ -868,12 +886,14 @@ _0RAG/
 │       └── images/                 # Logo, icons, favicons
 │
 └── data/                           # Runtime data (gitignored)
-    ├── metadata.db                 # SQLite: files, tags, conversations, wiki, settings
-    ├── chroma/                     # ChromaDB: vector collections (per tag + wiki)
+    ├── metadata.db                 # SQLite: files, tags, conversations, settings
+    ├── chroma/                     # ChromaDB: vector collections (per tag)
     ├── cache/                      # Application cache
     ├── exports/                    # Backup .georag archives + uploads
     ├── logs/                       # app.log, llama-chat.log, llama-embed.log
-    ├── llama-chat.pid              # PID of the chat llama-server (for adopt/stop)
+    ├── chat-model                  # Key of the chat model in use (config.CHAT_MODELS)
+    ├── llama-chat.pid              # PID of the chat server (for adopt/stop)
+    ├── llama-chat.ctx              # Context window (or budget) of the chat server
     ├── llama-embed.pid             # PID of the embedding llama-server
     └── onboarding_dismissed        # Flag file
 ```
@@ -886,7 +906,7 @@ FastAPI auto generates interactive docs at `/docs` (Swagger) and `/redoc`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/chat` | Stream a chat response via SSE. Body: `{message, conversation_id?, tag_names?, top_k_per_tag?, max_context_chunks?}`. Events: `token` then `done` then `error`. |
+| `POST` | `/api/chat` | Stream a chat response via SSE. Body: `{message, conversation_id?, tag_names?, depth?, top_k_per_tag?, max_context_chunks?}`; `depth` is a Retrieval Depth level key (default `optimal`), and the last two override that level's retrieval sizes. Events: `token` then `done`, or `error`. |
 | `GET` | `/api/chat/streaming` | Check streaming status. Returns `{streaming: bool, conversation_id: int or null}`. |
 | `POST` | `/api/chat/stop` | Cancel the active stream. |
 | `GET` | `/api/chat/stream-mirror` | SSE mirror of active stream for cross tab sync. |
@@ -944,29 +964,6 @@ FastAPI auto generates interactive docs at `/docs` (Swagger) and `/redoc`.
 | `POST` | `/api/ocr/stop` | Gracefully stop OCR after current file. |
 | `GET` | `/api/ocr/status` | OCR state: `{is_running, total_files, processed_files, ocr_success, ocr_failed, current_file, errors}`. |
 
-### Wiki Endpoints
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/wiki/pages` | List pages. Params: `category?`, `limit?` (newest N, for incremental sidebar refresh). |
-| `GET` | `/api/wiki/pages/{slug}` | Full page (content, backlinks, source files). |
-| `POST` | `/api/wiki/pages` | Create a page. Body: `{title, content, category?, summary?, source_files?}`. |
-| `PUT` | `/api/wiki/pages/{slug}` | Update a page; re-embeds and rebuilds index/backlinks. |
-| `DELETE` | `/api/wiki/pages/{slug}` | Delete a page and its vectors. |
-| `GET` | `/api/wiki/search?q=` | Hybrid search: SQLite LIKE + vector similarity. |
-| `POST` | `/api/wiki/ingest` | Start/resume a build. Body: `{tag_names?, file_ids?}`. Persists scope for downtime resume. |
-| `POST` | `/api/wiki/ingest/pending` | Build only processed files not yet covered by any page. |
-| `GET` | `/api/wiki/ingest/status` | Build state: `{is_running, phase, total_sources, processed_sources, previously_covered, pages_created, pages_updated, current_source, errors}`. |
-| `POST` | `/api/wiki/ingest/stop` | Gracefully stop the build (preserves progress), then free the LLMs. |
-| `POST` | `/api/wiki/query` | Ask the wiki (SSE). Body: `{question, save_as_page?}`. Events: `token`, `done`. |
-| `POST` | `/api/wiki/lint` | Run the LLM health check; returns orphan/missing/stale/crossref/suggested lists. |
-| `POST` | `/api/wiki/lint/apply` | Apply selected fixes (background). Body: the lint result subset to apply. |
-| `GET` | `/api/wiki/lint/apply/status` | Lint-fix state. |
-| `POST` | `/api/wiki/lint/apply/stop` | Stop the running lint fix. |
-| `GET` | `/api/wiki/stats` | Totals, per-category counts, and library-sync coverage (covered/pending). |
-| `GET` | `/api/wiki/log` | Recent wiki operation log. Param: `limit` (default 50). |
-| `DELETE` | `/api/wiki/reset` | Delete all pages, logs, vectors, and per-file attempt markers. |
-
 ### System Endpoints
 
 | Method | Path | Description |
@@ -975,6 +972,10 @@ FastAPI auto generates interactive docs at `/docs` (Swagger) and `/redoc`.
 | `PUT` | `/api/system/settings` | Update settings. Body: `{schedule_enabled?, downtime_start?, downtime_end?}` (HH:MM). |
 | `GET` | `/api/system/status` | Composite status: llama state, downtime, next boundary, and the status-pill `{state_label, state_severity}`. |
 | `POST` | `/api/system/end-downtime` | Force uptime until the current window's end. |
+| `GET` | `/api/system/chat-depths` | Chat models and Retrieval Depth levels: `{default, model, models, levels, server_ctx}`. `models` lists each chat model with `available` and, if not, `unavailable_reason`; `levels` are resolved for the active model with each level's limits, context window and assumed memory. |
+| `POST` | `/api/system/chat-depth` | Prepare the chat server for a level. Body: `{depth}`. Reloads the model with a larger context if needed (llama.cpp) or checks the memory estimate (MLX) and returns `{ok, checked}`, or `{ok: false, error}` if it does not fit in memory. |
+| `POST` | `/api/system/chat-model` | Switch the chat model. Body: `{model, depth?}`. Returns `{ok, model, depth, notice, levels}`, where `depth` is the level to use (the requested one, or the default with a `notice` if the new model cannot run it here), or `{ok: false, error}` with the previous model restored. |
+| `GET` | `/api/system/llama/memory` | What is loaded and the memory it holds: `{chat_up, embed_up, chat_model, chat_backend, chat_ctx, chat_mib, embed_mib, total_mib}`. llama-server sizes are summed from its load logs; the MLX server's is its measured process footprint. Shown in the pause dialog. |
 | `POST` | `/api/system/llama/pause` | Manually stop both llama-servers to free memory (409 if LLM work is active). |
 | `POST` | `/api/system/llama/start` | Manually start both llama-servers (returns immediately). |
 
@@ -982,7 +983,7 @@ FastAPI auto generates interactive docs at `/docs` (Swagger) and `/redoc`.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/api/backup/export` | Start a background export. Params: `include_wiki`, `include_rag` (both default true). |
+| `POST` | `/api/backup/export` | Start a background export. Params: `include_rag` (default true). |
 | `GET` | `/api/backup/export/status` | Poll export progress. |
 | `GET` | `/api/backup/export/download` | Download the completed `.georag` archive. |
 | `POST` | `/api/backup/export/stop` | Cancel a running export. |
@@ -1020,14 +1021,17 @@ All values live in `backend/config.py`.
 | `EMBEDDING_BASE_URL` | `http://127.0.0.1:8002` | Embedding llama-server root |
 | `CHAT_URL` | `{CHAT_BASE_URL}/v1/chat/completions` | Chat completion endpoint |
 | `EMBEDDING_URL` | `{EMBEDDING_BASE_URL}/v1/embeddings` | Embedding endpoint |
-| `CHAT_MODEL` | `qwen3.5-9B` | Chat model name (must match `--alias` on the chat llama-server) |
 | `EMBEDDING_MODEL` | `nomic-embed-text-v1.5` | Embedding model name (must match `--alias` on the embedding llama-server) |
 | `EMBEDDING_DIM` | `768` | Vector dimensionality |
-| `LLM_PARALLEL_SLOTS` | `1` | Concurrent inference slots (must match the chat server's `-np`); also the wiki ingest batch size |
+| `LLM_PARALLEL_SLOTS` | `1` | Concurrent inference slots (must match the chat server's `-np`) |
+| `CHAT_MODELS` | (2 models) | The selectable chat models: backend (`llama` or `mlx`), path, the name sent in requests, whether it describes images, and its memory tiers (context and assumed memory per tier), plus the memory-estimate constants and the crash guard for MLX |
+| `DEFAULT_CHAT_MODEL` | `qwen3.5-9b` | Chat model used until one is chosen in the dialog. Env: `GEORAG_CHAT_MODEL` |
 | `LLAMA_CHAT_MODEL` | (GGUF path) | Chat model GGUF file the supervisor launches |
 | `LLAMA_CHAT_MMPROJ` | (GGUF path) | Multimodal projector GGUF for image captioning |
 | `LLAMA_EMBED_MODEL` | (GGUF path) | Embedding model GGUF file |
-| `LLAMA_CHAT_LAUNCH` / `LLAMA_EMBED_LAUNCH` | (argv lists) | Exact `llama-server` command lines the supervisor spawns |
+| `MLX_CHAT_MODEL` | (model folder) | MLX chat model directory. Env: `MLX_CHAT_MODEL` |
+| `MLX_LM_SERVER` | `venv-mlx/bin/mlx_lm.server` | The MLX runtime's server executable. Env: `MLX_LM_SERVER` |
+| `chat_launch(model, ctx)` / `LLAMA_EMBED_LAUNCH` | (argv lists) | Exact command lines the supervisor spawns; the chat one takes the model key and the context window size |
 
 ### Processing Tuning
 
@@ -1037,24 +1041,14 @@ All values live in `backend/config.py`.
 | `CHUNK_OVERLAP` | `200` | Overlap between adjacent chunks |
 | `EMBEDDING_BATCH_SIZE` | `128` | Texts per embedding API call |
 | `BATCH_SIZE` | `10` | Files processed concurrently per batch |
-| `TOP_K_PER_TAG` | `5` | Chunks retrieved per tag during chat |
-| `MAX_CONTEXT_CHUNKS` | `8` | Max chunks assembled into the LLM prompt |
+| `TOP_K_PER_TAG` | `5` | Default chunks retrieved per tag by a vector search (chat uses its depth level's `top_k`) |
 | `CONVERSATION_HISTORY_TURNS` | `4` | Past turns (8 messages) included in prompt |
+| `CHAT_THINKING` | `False` | Whether the chat model reasons before answering. Off by default; when on, the reasoning is unlimited and shown as a collapsible block |
+| `CHAT_DEPTH_LEVELS` | (5 levels) | Retrieval Depth levels: `tier`, `top_k` and `max_chunks` for each; see [Retrieval Depth Presets](#retrieval-depth-presets) |
+| `chat_depth_levels(model)` | (function) | The levels as they apply to one model: context and assumed memory of each level's tier |
+| `DEFAULT_CHAT_DEPTH` | `optimal` | Level used when a chat request names none |
 
-### Wiki
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `WIKI_COLLECTION_NAME` | `wiki` | ChromaDB collection for wiki page vectors |
-| `WIKI_INGEST_MAX_TOKENS` | `8192` | Max output tokens per ingest LLM call |
-| `WIKI_INGEST_MAX_SOURCE_CHARS` | `24000` | Cap on source text per file sent to the LLM (~6K tokens) |
-| `WIKI_INGEST_MAX_INDEX_CHARS` | `6000` | Cap on the wiki index injected into the ingest prompt |
-| `WIKI_INDEX_REBUILD_EVERY` | `25` | Rebuild the index page once per this many changed pages during a build |
-| `WIKI_QUERY_MAX_CONTEXT_PAGES` | `5` | Pages retrieved for a wiki Ask |
-| `WIKI_CHAT_THRESHOLD` | `0.7` | Min similarity for chat to use the wiki instead of RAG |
-| `WIKI_CHAT_TOP_K` | `5` | Max wiki pages retrieved for a chat query |
-
-> The daily downtime window (`schedule_enabled`, `downtime_start`, `downtime_end`) and wiki-build scope are **not** in `config.py`; they live in the single-row `app_settings` table and are edited from the UI (defaults: disabled, 06:30 to 09:30).
+> The daily downtime window (`schedule_enabled`, `downtime_start`, `downtime_end`) is **not** in `config.py`; they live in the single-row `app_settings` table and are edited from the UI (defaults: disabled, 06:30 to 09:30).
 
 ### OCR
 
@@ -1097,31 +1091,22 @@ All values live in `backend/config.py`.
                     └───────────────┘       └──────────────┘
 ```
 
-Beyond the tables above, the schema adds:
-
-- **`File.wiki_attempted_at`** (DATETIME, nullable): durable per-file wiki-ingest marker. `NULL` = never attempted; set when a file is attempted (page created/updated, LLM skip, or error). This is what makes a wiki build resumable across stops, restarts, and downtime without re-grinding thousands of files.
-
-### Wiki & Settings Tables
+### Settings Table
 
 ```
-┌────────────────────┐   ┌──────────────────┐   ┌──────────────────────────────┐
-│    WikiPage        │   │    WikiLog       │   │   AppSettings (single row)   │
-│                    │   │                  │   │                              │
-│ id (PK)            │   │ id (PK)          │   │ id = 1                       │
-│ slug (UNIQUE)      │   │ operation        │   │ schedule_enabled             │
-│ title              │   │ detail           │   │ downtime_start / _end (HH:MM)│
-│ content (md)       │   │ pages_affected   │   │ scheduled_run_active         │
-│ category           │   │ created_at       │   │ scheduled_paused_for_downtime│
-│ summary            │   └──────────────────┘   │ scheduled_tag_names (JSON)   │
-│ source_files (JSON)│                          │ scheduled_file_ids (JSON)    │
-│ backlinks (JSON)   │                          │ auto_shutdown_on_manual_pause│
-│ created / updated  │                          │ updated_at                   │
-└────────────────────┘                          └──────────────────────────────┘
+┌──────────────────────────────┐
+│   AppSettings (single row)   │
+│                              │
+│ id = 1                       │
+│ schedule_enabled             │
+│ downtime_start / _end (HH:MM)│
+│ auto_shutdown_on_manual_pause│
+│ updated_at                   │
+└──────────────────────────────┘
 ```
 
-- **`WikiPage.category`** ∈ `entity`, `concept`, `topic`, `source_summary`, `comparison`, `index` (auto), `general`.
-- **`WikiLog.operation`** ∈ `ingest`, `query`, `lint`, `lint_fix`, `chat_growth`.
-- **`AppSettings`** is a single row (id=1) holding the downtime schedule and the persisted scope/markers the scheduler uses to auto-pause and resume a wiki build.
+- **`AppSettings`** is a single row (id=1) holding the downtime schedule and the manual-pause behavior.
+- Legacy `wiki_pages` / `wiki_log` tables and the `wiki` Chroma collection may still exist in older databases but are unused.
 
 ### Key Field Values
 
@@ -1139,11 +1124,8 @@ Beyond the tables above, the schema adds:
 On startup, `init_db()` creates all tables if missing and runs lightweight `ALTER TABLE` migrations against existing databases:
 
 - add `deleted_at` to `conversations` (soft delete)
-- add `scheduled_processed_file_ids` to `app_settings` (now deprecated, drained to `[]`)
-- add `scheduled_paused_for_downtime` to `app_settings` (persisted downtime-pause marker)
-- add `wiki_attempted_at` to `files`, with a one-time backfill from the old per-build blob
 
-It also seeds the `app_settings` row (id=1) if missing. `seed_tags()` inserts the 34 default geotechnical tags (`DEFAULT_TAGS`) if the tag table is empty. SQLite runs in WAL mode with a `busy_timeout` so the wiki build's offloaded writes don't lock out API reads.
+It also seeds the `app_settings` row (id=1) if missing. `seed_tags()` inserts the 34 default geotechnical tags (`DEFAULT_TAGS`) if the tag table is empty. SQLite runs in WAL mode with a `busy_timeout` so background writes don't lock out API reads.
 
 ## Frontend Architecture
 
@@ -1158,9 +1140,8 @@ The frontend is intentionally **framework free**. Vanilla JavaScript with module
 | `chat.js` | ~1170 | Welcome state, tag selection, message submission, SSE streaming, KaTeX rendering, conversation sidebar, trash management, depth settings, cross tab mirroring |
 | `documents.js` | ~690 | File table rendering, name + semantic search, type/status/tag filters, pagination, single and batch tagging, mark-as-new/skipped, tag modal, Manage Tags |
 | `panel.js` | ~915 | Library panel lifecycle (scan, process, OCR, explore, complete), processing status polling (2s interval), OCR start/stop, reprocess all confirmation |
-| `wiki.js` | ~1415 | Wiki page: browse/search/read, build (init, rebuild-for-tag, resume, stop), process-pending, Ask + save-as-page, health check + apply fixes, manual entry, reset |
 | `system_status.js` | ~290 | Status pill rendering + polling, downtime schedule settings, manual llama pause/start, upcoming-event indicator |
-| `router.js` | 55 | SPA routing via History API, page toggle (chat/documents/wiki), `spa:pageshow` custom event for lazy init |
+| `router.js` | 55 | SPA routing via History API, page toggle (chat/documents), `spa:pageshow` custom event for lazy init |
 | `utils.js` | ~125 | `apiGet`/`apiPost`/`apiDelete` wrappers, `escapeHtml`, tag badge factory, `syncChannel` (BroadcastChannel) |
 
 ### Cross Tab Communication
@@ -1194,6 +1175,7 @@ The SPA router fires a custom `spa:pageshow` event, which triggers lazy initiali
 ```
 1. Detect Python 3.13 (fallback to 3.12 → 3.11 → python3)
 2. Create venv/ if missing, then pip install requirements.txt
+   (on Apple Silicon, if the MLX model folder exists: also create venv-mlx/ and install requirements-mlx.txt)
 3. mkdir -p data/{chroma,cache,logs}
 4. Verify the llama-server binary and all three model files exist (fail fast)
 5. exec uvicorn backend.app:app --host 0.0.0.0 --port 3000 --reload

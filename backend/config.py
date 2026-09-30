@@ -51,27 +51,186 @@ LLAMA_EMBED_MODEL = os.environ.get(
     str(LLM_DIR / "second-state/Nomic-embed-text-v1.5-Embedding-GGUF/nomic-embed-text-v1.5-Q8_0.gguf"),
 )
 
-# llama-server launch argv (used by backend.services.llama_supervisor)
-LLAMA_CHAT_LAUNCH = [
-    "llama-server",
-    "--model", LLAMA_CHAT_MODEL,
-    "--mmproj", LLAMA_CHAT_MMPROJ,
-    "--port", "8001",
-    "--alias", "qwen3.5-9B",
-    "-c", "131072",
-    "-n", "32768",
-    "--no-context-shift",
-    "--temp", "0.6",
-    "--top-p", "0.95",
-    "--top-k", "20",
-    "--repeat-penalty", "1.00",
-    "--presence-penalty", "0.00",
-    "--fit", "on",
-    "-fa", "on",
-    "-ctk", "q8_0",
-    "-ctv", "q8_0",
-    "--chat-template-kwargs", '{"preserve_thinking": true}',
+# MLX model directory and runtime (Apple Silicon only). MLX models are served
+# by mlx_lm.server, which lives in its own virtualenv: mlx-lm needs a newer
+# tokenizers/transformers than the chromadb pinned in requirements.txt allows.
+MLX_CHAT_MODEL = os.environ.get(
+    "MLX_CHAT_MODEL",
+    str(LLM_DIR / "lmstudio-community/Qwen3.8-27B-MLX-4bit"),
+)
+MLX_LM_SERVER = os.environ.get(
+    "MLX_LM_SERVER",
+    str(RAG_DIR / "venv-mlx" / "bin" / "mlx_lm.server"),
+)
+
+# ── Chat models ──────────────────────────────────────────────────────────
+# The chat model is chosen in the Retrieval Depth dialog (or preset with
+# GEORAG_CHAT_MODEL) and served on CHAT_BASE_URL by one of two backends:
+#
+#   llama  llama-server with a GGUF model. The context window (-c) is allocated
+#          when the model loads, so each memory tier has its own context size
+#          and moving up a tier reloads the model. llama.cpp reports whether it
+#          fits in GPU memory (see llama_supervisor.ensure_chat_ctx).
+#   mlx    mlx_lm.server with an MLX model. Nothing is preallocated: memory is
+#          the weights plus a KV cache that grows with the tokens in use, so a
+#          tier's context is a budget, checked against the Mac's GPU working
+#          set from the figures below before a chat starts. Text only (no image
+#          description).
+#
+# "tiers" maps each Retrieval Depth tier to its context window and to the
+# memory it assumes: dedicated VRAM for llama, total unified memory of the Mac
+# for mlx. The assumed figure is a label; the real check is the backend's.
+#
+# Measured for Qwen3.5-9B Q4_K_M with a q8_0 KV cache (llama.cpp's own GPU
+# projection; add ~1.8 GB for the vision projector and the embedding model):
+#   32,768 tokens -> 5.9 GB    131,072 -> 7.5 GB    262,144 -> 10.0 GB
+CHAT_MODELS = {
+    "qwen3.5-9b": {
+        "label": "Qwen 3.5 9B",
+        "detail": "GGUF Q4_K_M on llama.cpp. Fast, runs from 8 GB VRAM, describes images.",
+        "backend": "llama",
+        "path": LLAMA_CHAT_MODEL,
+        "mmproj": LLAMA_CHAT_MMPROJ,
+        "request_model": "qwen3.5-9B",       # the --alias llama-server is launched with
+        "vision": True,
+        "memory_label": "GB VRAM",
+        "memory_phrase": "{} GB of VRAM",
+        "tiers": {
+            "base": {"ctx": 32768, "memory_gb": 8},
+            "mid": {"ctx": 131072, "memory_gb": 16},
+            "top": {"ctx": 262144, "memory_gb": 24},   # the model's full trained context
+        },
+    },
+    "qwen3.8-27b-mlx": {
+        "label": "Qwen 3.8 27B",
+        "detail": "MLX 4-bit, Apple Silicon only. Larger model: slower, needs a 32 GB+ Mac, text only.",
+        "backend": "mlx",
+        "path": MLX_CHAT_MODEL,
+        "request_model": "default_model",    # mlx_lm.server's name for the model it was started with
+        "vision": False,
+        "memory_label": "GB Mac",
+        "memory_phrase": "a {} GB Mac",
+        # Measured on an M4 Max with mlx-lm 0.31: the KV cache costs 190-265 KB
+        # per token of context (about 16x llama.cpp's q8_0 cache for the 9B),
+        # and up to ~1 GB more is in flight while a new prompt replaces the
+        # previous one. Weights are read from disk (15 GB).
+        "kv_bytes_per_token": 270_000,
+        "overhead_bytes": 1536 * 1024 * 1024,
+        # The contexts are sized by that cost.
+        "tiers": {
+            "base": {"ctx": 24576, "memory_gb": 32},
+            "mid": {"ctx": 40960, "memory_gb": 36},
+            "top": {"ctx": 73728, "memory_gb": 48},
+        },
+        # Not a reply budget but a crash guard: mlx_lm.server 0.31 died with a
+        # Metal "Resource limit exceeded" about 10,000 tokens into a reply,
+        # losing the whole reply and hanging the request (see llm_client),
+        # while 8,192 tokens completes. Set to None to let it run unguarded.
+        "reply_guard_tokens": 8192,
+    },
+}
+DEFAULT_CHAT_MODEL = os.environ.get("GEORAG_CHAT_MODEL", "qwen3.5-9b")
+if DEFAULT_CHAT_MODEL not in CHAT_MODELS:
+    DEFAULT_CHAT_MODEL = "qwen3.5-9b"
+
+# ── Retrieval Depth levels ───────────────────────────────────────────────
+# Each level sets how much is retrieved (top_k per tag, max_chunks in the
+# prompt) and which memory tier it needs.
+#
+# There is no limit on the reply: the model answers for as long as it wants,
+# and stops on its own or when its context window is full.
+CHAT_DEPTH_LEVELS = [
+    {"key": "quick", "label": "Quick and less demanding", "tier": "base",
+     "top_k": 5, "max_chunks": 8},
+    {"key": "optimal", "label": "Optimal and balanced", "tier": "base",
+     "top_k": 10, "max_chunks": 16},
+    {"key": "deep", "label": "Deep and demanding", "tier": "mid",
+     "top_k": 20, "max_chunks": 32},
+    {"key": "deeper", "label": "Deeper and very demanding", "tier": "mid",
+     "top_k": 50, "max_chunks": 80},
+    {"key": "ludicrous", "label": "Ludicrous", "tier": "top",
+     "top_k": 100, "max_chunks": 200},
 ]
+DEFAULT_CHAT_DEPTH = "optimal"
+
+# Whether the chat model reasons ("thinks") before it answers. Off: answers are
+# grounded in the retrieved text, so the reasoning pass mostly adds waiting. On
+# a 50-source question Qwen 3.8 27B reasoned for ~7,700 tokens (over 9 minutes)
+# and Qwen 3.5 9B for ~3,700 before writing anything. When True the reasoning
+# is unlimited and shown in the chat as a collapsible block.
+CHAT_THINKING = False
+
+
+def chat_depth_levels(model_key: str) -> list[dict]:
+    """The Retrieval Depth levels as they apply to one chat model: each level
+    with the context window and assumed memory of its tier on that model."""
+    model = CHAT_MODELS[model_key]
+    levels = []
+    for level in CHAT_DEPTH_LEVELS:
+        tier = model["tiers"][level["tier"]]
+        levels.append({
+            **level,
+            "ctx": tier["ctx"],
+            "vram_gb": tier["memory_gb"],
+            "memory_label": model["memory_label"],
+            "memory_text": model["memory_phrase"].format(tier["memory_gb"]),
+        })
+    return levels
+
+
+def chat_depth_level(model_key: str, depth_key: str | None) -> dict:
+    levels = {level["key"]: level for level in chat_depth_levels(model_key)}
+    return levels.get(depth_key) or levels[DEFAULT_CHAT_DEPTH]
+
+
+# Chat server launch argv (used by backend.services.llama_supervisor)
+def chat_launch(model_key: str, ctx: int) -> list[str]:
+    """Command line that serves a chat model on port 8001. `ctx` is the context
+    window; only llama-server takes it (mlx_lm.server grows its cache on demand)."""
+    model = CHAT_MODELS[model_key]
+    if model["backend"] == "mlx":
+        return [
+            MLX_LM_SERVER,
+            "--model", model["path"],
+            "--host", "127.0.0.1",
+            "--port", "8001",
+            "--temp", "0.6",
+            "--top-p", "0.95",
+            "--top-k", "20",
+            # Used only for a request that names no max_tokens; chat requests
+            # always do (see chat.py).
+            "--max-tokens", str(model["reply_guard_tokens"] or model["tiers"]["top"]["ctx"]),
+            # Every request carries different retrieved chunks, so old prompts
+            # are rarely reusable; keeping the default 10 KV caches around
+            # would only hold gigabytes of memory.
+            "--prompt-cache-size", "1",
+            # Smaller prompt-processing steps: same speed on a long prompt,
+            # but ~3 GB less transient memory than the default 2048.
+            "--prefill-step-size", "512",
+        ]
+    return [
+        "llama-server",
+        "--model", model["path"],
+        "--mmproj", model["mmproj"],
+        "--port", "8001",
+        "--alias", model["request_model"],
+        "-c", str(ctx),
+        # No cap on reply length: generation ends when the model stops or
+        # the context window is full.
+        "-n", "-1",
+        "--no-context-shift",
+        "--temp", "0.6",
+        "--top-p", "0.95",
+        "--top-k", "20",
+        "--repeat-penalty", "1.00",
+        "--presence-penalty", "0.00",
+        "--fit", "on",
+        "-fa", "on",
+        "-ctk", "q8_0",
+        "-ctv", "q8_0",
+        "--chat-template-kwargs", '{"preserve_thinking": true}',
+    ]
+
 
 LLAMA_EMBED_LAUNCH = [
     "llama-server",
@@ -94,9 +253,6 @@ EMBEDDING_MODEL = "nomic-embed-text-v1.5"
 EMBEDDING_DIM = 768
 EMBEDDING_BATCH_SIZE = 128
 
-# Chat model (must match the --alias passed to llama-server)
-CHAT_MODEL = "qwen3.5-9B"
-
 # Parallel inference slots (must match llama-server -np; default 1)
 LLM_PARALLEL_SLOTS = 1
 
@@ -104,9 +260,9 @@ LLM_PARALLEL_SLOTS = 1
 CHUNK_SIZE = 1000
 CHUNK_OVERLAP = 200
 
-# RAG settings
+# RAG settings. TOP_K_PER_TAG is the vector-search default; chat takes its
+# retrieval sizes from CHAT_DEPTH_LEVELS.
 TOP_K_PER_TAG = 5
-MAX_CONTEXT_CHUNKS = 8
 CONVERSATION_HISTORY_TURNS = 4
 
 # Scanning
@@ -120,21 +276,6 @@ SUPPORTED_EXTENSIONS = {
     "dwg", "dxf",
     "mp4", "avi", "mov", "mkv",
 }
-
-# Wiki settings
-WIKI_COLLECTION_NAME = "wiki"
-WIKI_INGEST_MAX_TOKENS = 8192   # Headroom for Qwen <think>...</think> + JSON output
-WIKI_INGEST_MAX_SOURCE_CHARS = 24_000   # ~6K tokens of source material per LLM call
-WIKI_INGEST_MAX_INDEX_CHARS = 6_000     # Cap on wiki index injected into system prompt
-# Rebuild the wiki index page (LLM context) once per this many newly
-# created/updated pages during a build, instead of after every page. The
-# index/backlink scans are O(all pages); per-file rebuilds dominated build time.
-# Only ~6K chars of the index reach the prompt anyway, so periodic freshness is
-# plenty. Backlinks are rebuilt only once at the end.
-WIKI_INDEX_REBUILD_EVERY = 25
-WIKI_QUERY_MAX_CONTEXT_PAGES = 5
-WIKI_CHAT_THRESHOLD = 0.7  # Min similarity score to use wiki instead of RAG
-WIKI_CHAT_TOP_K = 5  # Max wiki pages to retrieve for chat
 
 # OCR settings (requires system prerequisite: brew install tesseract)
 OCR_LANGUAGES = ["eng"]

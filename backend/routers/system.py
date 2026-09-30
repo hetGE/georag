@@ -6,7 +6,10 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from backend.services import llama_supervisor, scheduler, wiki_service
+from backend.config import (
+    CHAT_MODELS, DEFAULT_CHAT_DEPTH, chat_depth_level, chat_depth_levels,
+)
+from backend.services import llama_supervisor, scheduler
 from backend.routers import processing as _processing  # _processor
 from backend.routers import ocr as _ocr  # _ocr_processor
 from backend.routers import explore as _explore  # _explorer
@@ -19,10 +22,6 @@ router = APIRouter(tags=["system"])
 def _busy_reason() -> Optional[str]:
     """Returns a human-readable reason if any LLM-using work is active,
     or None if it's safe to pause llama-servers."""
-    if wiki_service.get_ingest_status().get("is_running"):
-        return "wiki build is running"
-    if wiki_service.get_lint_fix_status().get("is_running"):
-        return "wiki health check is running"
     if getattr(_processing._processor, "is_running", False):
         return "library processing is running"
     if getattr(_ocr._ocr_processor, "is_running", False):
@@ -44,17 +43,7 @@ def _compute_state(in_downtime: bool, llama_state: str) -> tuple[str, str]:
     if llama_state == "starting":
         return ("Starting LLMs", "busy")
 
-    # Wiki has explicit stopping phases — surface those before the running ones.
-    if wiki_service.get_ingest_status().get("phase") == "stopping":
-        return ("Wiki stopping", "busy")
-    if wiki_service.get_lint_fix_status().get("phase") == "stopping":
-        return ("Wiki health check stopping", "busy")
-
     # Active operations
-    if wiki_service.get_ingest_status().get("is_running"):
-        return ("Wiki building", "busy")
-    if wiki_service.get_lint_fix_status().get("is_running"):
-        return ("Wiki health check", "busy")
     if getattr(_processing._processor, "is_running", False):
         return ("Library processing", "busy")
     if getattr(_ocr._ocr_processor, "is_running", False):
@@ -117,9 +106,6 @@ async def get_status():
         "llama_chat_up": srv["chat_up"],
         "llama_embed_up": srv["embed_up"],
         "llama_state": llama_state,
-        "scheduled_run_active": s["scheduled_run_active"],
-        "wiki_phase": wiki_service.get_ingest_status()["phase"],
-        "wiki_is_running": wiki_service.get_ingest_status()["is_running"],
         "state_label": label,
         "state_severity": severity,
     }
@@ -130,10 +116,141 @@ async def end_downtime():
     """User-triggered: end the current downtime period immediately.
     Saved schedule stays — tomorrow's window still applies."""
     scheduler.end_downtime_now()
-    # Trigger an immediate tick so llama comes up + wiki resumes without waiting
-    # for the next 30s tick.
+    # Trigger an immediate tick so llama comes up without waiting for the next
+    # 30s tick.
     asyncio.create_task(scheduler._tick())
     return {"ok": True}
+
+
+class ChatDepthPayload(BaseModel):
+    depth: str
+
+
+class ChatModelPayload(BaseModel):
+    model: str
+    depth: Optional[str] = None
+
+
+def _chat_models() -> list[dict]:
+    models = []
+    for key, model in CHAT_MODELS.items():
+        reason = llama_supervisor.chat_model_unavailable(key)
+        models.append({
+            "key": key, "label": model["label"], "detail": model["detail"],
+            "backend": model["backend"], "vision": model["vision"],
+            "available": reason is None, "unavailable_reason": reason,
+        })
+    return models
+
+
+def _chat_levels(key: str) -> list[dict]:
+    """The model's Retrieval Depth levels, each marked with whether it fits on
+    this machine where that is known in advance (`fits`: true, false or null)."""
+    levels = []
+    for level in chat_depth_levels(key):
+        fits, reason = llama_supervisor.chat_ctx_fit(level["ctx"])
+        levels.append({**level, "fits": fits,
+                       "fit_error": _chat.depth_refusal(level, reason) if fits is False else None})
+    return levels
+
+
+@router.get("/system/chat-depths")
+async def get_chat_depths():
+    """The chat models, the one in use, its Retrieval Depth levels, and the
+    context window the chat server has now."""
+    key = llama_supervisor.active_chat_model_key()
+    return {
+        "default": DEFAULT_CHAT_DEPTH,
+        "model": key,
+        "models": _chat_models(),
+        "levels": _chat_levels(key),
+        "server_ctx": await llama_supervisor.chat_ctx(),
+    }
+
+
+async def _llms_running() -> bool:
+    s = scheduler.get_settings()
+    return not scheduler.is_in_downtime(s) and (await llama_supervisor.status())["chat_up"]
+
+
+@router.post("/system/chat-depth")
+async def apply_chat_depth(payload: ChatDepthPayload):
+    """Prepare the chat server for a Retrieval Depth level: if the level needs a
+    larger context window than the one loaded, reload the model with it and
+    confirm it fits in memory. Returns {ok: false, error} and keeps the previous
+    context when it does not fit."""
+    key = llama_supervisor.active_chat_model_key()
+    if payload.depth not in {level["key"] for level in chat_depth_levels(key)}:
+        raise HTTPException(status_code=404, detail=f"Unknown depth '{payload.depth}'.")
+    level = chat_depth_level(key, payload.depth)
+    if not await _llms_running():
+        # LLMs are paused or down: don't start them just to check. The level's
+        # context is used on the next launch and verified when a chat starts.
+        llama_supervisor.set_chat_ctx_target(level["ctx"])
+        return {"ok": True, "checked": False}
+    ok, error = await llama_supervisor.ensure_chat_ctx(level["ctx"], _busy_reason)
+    if not ok:
+        return {"ok": False, "error": _chat.depth_refusal(level, error)}
+    return {"ok": True, "checked": True}
+
+
+@router.post("/system/chat-model")
+async def apply_chat_model(payload: ChatModelPayload):
+    """Switch the chat model. The chat server is restarted with the new model's
+    backend; if it cannot be loaded the previous model is restored and
+    {ok: false, error} returned. `depth` is the Retrieval Depth level to carry
+    over: when the new model cannot run it on this machine, the response names
+    the level to fall back to and why."""
+    if payload.model not in CHAT_MODELS:
+        raise HTTPException(status_code=404, detail=f"Unknown chat model '{payload.model}'.")
+    label = CHAT_MODELS[payload.model]["label"]
+    ok, error = await llama_supervisor.switch_chat_model(payload.model, _busy_reason)
+    if not ok:
+        return {"ok": False, "error": f"Cannot switch to {label}. {error}"}
+
+    key = llama_supervisor.active_chat_model_key()
+    level = chat_depth_level(key, payload.depth)
+    notice = None
+    if await _llms_running():
+        ok, error = await llama_supervisor.ensure_chat_ctx(level["ctx"], _busy_reason)
+        if not ok:
+            notice = _chat.depth_refusal(level, error)
+            level = chat_depth_level(key, DEFAULT_CHAT_DEPTH)
+            await llama_supervisor.ensure_chat_ctx(level["ctx"], _busy_reason)
+    else:
+        llama_supervisor.set_chat_ctx_target(level["ctx"])
+    return {
+        "ok": True,
+        "model": key,
+        "depth": level["key"],
+        "notice": notice,
+        "levels": _chat_levels(key),
+    }
+
+
+@router.get("/system/llama/memory")
+async def llama_memory():
+    """What is loaded right now and how much memory it holds (so how much a
+    pause frees). llama-server sizes come from its own load logs, the MLX
+    server's from its process footprint; a server that is not running counts
+    as nothing."""
+    srv = await llama_supervisor.status()
+    model = llama_supervisor.active_chat_model()
+    chat_mib = embed_mib = None
+    if srv["chat_up"]:
+        chat_mib = await asyncio.to_thread(llama_supervisor.loaded_memory_mib, "chat")
+    if srv["embed_up"]:
+        embed_mib = await asyncio.to_thread(llama_supervisor.loaded_memory_mib, "embed")
+    return {
+        "chat_up": srv["chat_up"],
+        "embed_up": srv["embed_up"],
+        "chat_model": model["label"],
+        "chat_backend": model["backend"],
+        "chat_ctx": await llama_supervisor.chat_ctx() if srv["chat_up"] else None,
+        "chat_mib": chat_mib,
+        "embed_mib": embed_mib,
+        "total_mib": (chat_mib or 0) + (embed_mib or 0) if (chat_mib or embed_mib) else None,
+    }
 
 
 @router.post("/system/llama/pause")

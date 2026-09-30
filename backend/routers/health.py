@@ -3,11 +3,11 @@ import asyncio
 import httpx
 from fastapi import APIRouter
 
+from backend.services import llama_supervisor
 from backend.config import (
     CHAT_BASE_URL,
     EMBEDDING_BASE_URL,
     EMBEDDING_URL,
-    CHAT_MODEL,
     EMBEDDING_MODEL,
 )
 
@@ -33,12 +33,16 @@ async def _probe_chat() -> str | None:
     except Exception as e:
         return f"Chat llama-server at {CHAT_BASE_URL} failed: {e}"
 
+    model = llama_supervisor.active_chat_model()
     model_ids = [m.get("id", "") for m in data.get("data", [])]
     if not model_ids:
-        return f"Chat llama-server is running but no model is loaded. Expected alias '{CHAT_MODEL}'."
-    if not any(CHAT_MODEL in mid for mid in model_ids):
+        return f"The chat server is running but no model is loaded. Expected {model['label']}."
+    # llama-server lists the --alias it was launched with; mlx_lm.server lists
+    # the model's path.
+    expected = model["request_model"] if model["backend"] == "llama" else model["path"]
+    if not any(expected in mid for mid in model_ids):
         return (
-            f"Chat model alias '{CHAT_MODEL}' not found on chat llama-server. "
+            f"{model['label']} not found on the chat server. "
             f"Loaded: {', '.join(model_ids)}."
         )
     return None

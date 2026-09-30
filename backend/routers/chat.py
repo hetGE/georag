@@ -2,6 +2,7 @@
 import asyncio
 import json
 import logging
+import re
 import time
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
@@ -15,8 +16,8 @@ from backend.models.pydantic_models import ChatRequest
 from backend.services.llm_client import stream_chat_response
 from backend.services.vector_store import query_tags
 from backend.services.embedding_client import embed_text
-from backend.services import wiki_service, llama_supervisor
-from backend.config import MAX_CONTEXT_CHUNKS, CONVERSATION_HISTORY_TURNS
+from backend.services import llama_supervisor
+from backend.config import CONVERSATION_HISTORY_TURNS, chat_depth_level
 
 router = APIRouter(tags=["chat"])
 
@@ -24,6 +25,29 @@ _chat_streaming = False
 _chat_conversation_id = None
 _chat_listeners: list[asyncio.Queue] = []
 _chat_cancel = False
+
+
+_THINK_BLOCK_RE = re.compile(r"<think>.*?(?:</think>|\Z)", re.DOTALL)
+
+
+def _strip_thinking(text: str) -> str:
+    """Drop <think>...</think> reasoning from a stored assistant reply. It is
+    kept in the DB for display, but must not be re-sent to the LLM as history
+    (it would eat context and the model would mistake it for answer text)."""
+    return _THINK_BLOCK_RE.sub("", text).strip()
+
+
+def _estimate_tokens(text: str) -> int:
+    """Deliberately high estimate of a text's token count. English prose runs
+    ~4 characters per token, but tables, numbers and LaTeX tokenise far worse."""
+    return len(text) // 3 + 8
+
+
+def depth_refusal(level: dict, reason: str) -> str:
+    """User-facing message for a Retrieval Depth level the machine cannot run."""
+    return (f"The \"{level['label']}\" retrieval depth is not available on this machine "
+            f"(it assumes {level['memory_text']}). {reason} "
+            "Choose a lower Retrieval Depth.")
 
 
 def build_context_prompt(chunks: list[dict]) -> str:
@@ -67,6 +91,18 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         return EventSourceResponse(
             iter([{"event": "error", "data": json.dumps({"error": "Local LLM servers did not start in time. Try again in a moment."})}])
         )
+
+    # The depth level decides how much is retrieved and how long the reply may
+    # be. Its context window must be loaded (and fit in memory) before the chat
+    # starts; a level this machine cannot run is refused here.
+    level = chat_depth_level(llama_supervisor.active_chat_model_key(), request.depth)
+    from backend.routers.system import _busy_reason  # lazy: system imports this module
+    ctx_ok, ctx_error = await llama_supervisor.ensure_chat_ctx(level["ctx"], _busy_reason)
+    if not ctx_ok:
+        logger.warning("Chat: depth '%s' refused: %s", level["key"], ctx_error)
+        return EventSourceResponse(
+            iter([{"event": "error", "data": json.dumps({"error": depth_refusal(level, ctx_error)})}])
+        )
     _chat_streaming = True
     _chat_cancel = False
 
@@ -89,96 +125,41 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     db.add(user_msg)
     db.commit()
 
-    # Two-tier retrieval: Wiki-first, then RAG fallback
+    # RAG retrieval over the selected tags
     chunks = []
     sources = []
-    wiki_pages_used = []
-    context_source = "none"  # "wiki", "rag", or "hybrid"
-    query_embedding = None
 
-    # Step 1: Embed query (needed for both wiki and RAG search)
-    try:
-        logger.info("Chat: embedding query (%d chars)", len(request.message))
-        t0 = time.time()
-        query_embedding = await embed_text(request.message)
-        logger.info("Chat: query embedded in %.1fs", time.time() - t0)
-    except Exception as e:
-        logger.warning("Chat: embedding failed: %s", e)
-
-    # Step 2: Wiki-first search
-    wiki_context_text = ""
-    if query_embedding:
+    if request.tag_names:
         try:
-            wiki_result = await wiki_service.search_wiki_for_chat(query_embedding)
-            if wiki_result["pages"]:
-                wiki_pages_used = [
-                    {"slug": p["slug"], "title": p["title"], "score": p["score"]}
-                    for p in wiki_result["pages"]
-                ]
-                wiki_parts = []
-                for p in wiki_result["pages"]:
-                    wiki_parts.append(f"[Wiki: {p['title']}]\n{p['content']}")
-                wiki_context_text = "\n\n---\n\n".join(wiki_parts)
-                if wiki_result["sufficient"]:
-                    context_source = "wiki"
-                    logger.info("Chat: wiki sufficient — %d pages, best score %.3f",
-                                len(wiki_pages_used), wiki_pages_used[0]["score"])
-        except Exception as e:
-            logger.warning("Chat: wiki search failed (will fall back to RAG): %s", e)
-
-    # Step 3: RAG fallback (if wiki insufficient and tags are selected)
-    if context_source != "wiki" and request.tag_names and query_embedding:
-        try:
+            logger.info("Chat: embedding query (%d chars)", len(request.message))
             t0 = time.time()
-            chunks = query_tags(query_embedding, request.tag_names, top_k=request.top_k_per_tag)
-            max_ctx = request.max_context_chunks or MAX_CONTEXT_CHUNKS
-            chunks = chunks[:max_ctx]
+            query_embedding = await embed_text(request.message)
+            logger.info("Chat: query embedded in %.1fs", time.time() - t0)
+
+            t0 = time.time()
+            chunks = query_tags(query_embedding, request.tag_names,
+                                top_k=request.top_k_per_tag or level["top_k"])
+            chunks = chunks[:request.max_context_chunks or level["max_chunks"]]
             sources = [
                 {"file_path": c.get("file_path", ""), "filename": c.get("filename", ""),
                  "page": c.get("page", ""), "score": c.get("score", 0)}
                 for c in chunks
             ]
-            context_source = "hybrid" if wiki_context_text else "rag"
-            logger.info("Chat RAG: retrieved %d chunks in %.1fs (mode: %s)",
-                        len(chunks), time.time() - t0, context_source)
+            logger.info("Chat RAG: retrieved %d chunks in %.1fs", len(chunks), time.time() - t0)
         except Exception as e:
             logger.warning("Chat RAG: retrieval failed: %s", e)
-            if wiki_context_text:
-                context_source = "wiki"
 
     # Build messages for LLM
-    if context_source == "wiki":
-        system_prompt = (
-            "You are GeoRAG, a geotechnical engineering assistant. "
-            "The following wiki pages contain compiled knowledge relevant to the question. "
-            "Use them to answer. Cite wiki pages using [Wiki: Page Title] notation. "
-            "If the wiki pages don't fully cover the question, say so and answer from general knowledge. "
-            "Be precise and technical."
-            f"\n\n## Wiki Context\n\n{wiki_context_text}"
-        )
-    elif context_source == "hybrid":
-        rag_context = build_context_prompt(chunks)
-        system_prompt = (
-            "You are GeoRAG, a geotechnical engineering assistant. "
-            "You have two knowledge sources: compiled Wiki pages and raw Document chunks. "
-            "Prefer wiki knowledge when available — it's curated and reliable. "
-            "Supplement with document context where the wiki has gaps. "
-            "Cite wiki pages as [Wiki: Page Title] and documents as [Source N]. "
-            "Be precise and technical."
-            f"\n\n## Wiki Context\n\n{wiki_context_text}"
-            f"\n\n## Document Context\n\n{rag_context}"
-        )
-    else:
-        system_prompt = (
-            "You are GeoRAG, a geotechnical engineering assistant. "
-            "Answer questions using the provided document context when available. "
-            "Cite sources using [Source N] notation. "
-            "If the context doesn't contain relevant information, say so and answer from general knowledge. "
-            "Be precise and technical."
-        )
-        context_text = build_context_prompt(chunks)
-        if context_text:
-            system_prompt += f"\n\n## Document Context\n\n{context_text}"
+    system_prompt = (
+        "You are GeoRAG, a geotechnical engineering assistant. "
+        "Answer questions using the provided document context when available. "
+        "Cite sources using [Source N] notation. "
+        "If the context doesn't contain relevant information, say so and answer from general knowledge. "
+        "Be precise and technical."
+    )
+    context_text = build_context_prompt(chunks)
+    if context_text:
+        system_prompt += f"\n\n## Document Context\n\n{context_text}"
 
     # Get conversation history
     history = (
@@ -190,11 +171,42 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
     )
     history.reverse()
 
-    llm_messages = [{"role": "system", "content": system_prompt}]
-    for msg in history:
+    # The reply has no length limit, but it shares the context window with the
+    # prompt, so half of the window is kept free for it. The system prompt and
+    # the new question always go in; earlier messages are added, most recent
+    # first, for as long as the prompt stays within the other half.
+    prompt_budget = level["ctx"] // 2
+    prompt_budget -= _estimate_tokens(system_prompt) + _estimate_tokens(request.message)
+    current, earlier = history[-1:], history[:-1]
+    kept = []
+    for msg in reversed(earlier):
+        content = _strip_thinking(msg.content) if msg.role == "assistant" else msg.content
+        prompt_budget -= _estimate_tokens(content)
+        if prompt_budget < 0:
+            logger.info("Chat: dropped %d older message(s) to fit the %d-token context",
+                        len(earlier) - len(kept), level["ctx"])
+            break
+        kept.append({"role": msg.role, "content": content})
+    kept.reverse()
+
+    llm_messages = [{"role": "system", "content": system_prompt}] + kept
+    for msg in current:
         llm_messages.append({"role": msg.role, "content": msg.content})
-    logger.info("Chat: sending %d messages to LLM (context chunks: %d, history: %d)",
-                len(llm_messages), len(chunks), len(history))
+    logger.info("Chat: sending %d messages to LLM (depth: %s, context chunks: %d, history: %d)",
+                len(llm_messages), level["key"], len(chunks), len(kept))
+
+    # llama-server stops by itself when its context window is full. The MLX
+    # server has no fixed window (its memory grows with every token), so there
+    # the reply is given what is left of the level's context budget, which is
+    # what the memory check covered, and never more than the runtime's crash
+    # guard.
+    chat_model = llama_supervisor.active_chat_model()
+    reply_limit = None
+    if chat_model["backend"] == "mlx":
+        prompt_tokens = sum(_estimate_tokens(m["content"]) for m in llm_messages)
+        reply_limit = max(level["ctx"] - prompt_tokens, 1024)
+        if chat_model.get("reply_guard_tokens"):
+            reply_limit = min(reply_limit, chat_model["reply_guard_tokens"])
 
     # Update conversation title from first message
     if len(history) == 1:
@@ -209,8 +221,10 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
         global _chat_streaming, _chat_conversation_id, _chat_cancel
         try:
             full_response = []
+            llm_result = {}
             try:
-                async for token in stream_chat_response(llm_messages):
+                async for token in stream_chat_response(
+                        llm_messages, llm_result, max_tokens=reply_limit):
                     if _chat_cancel:
                         break
                     full_response.append(token)
@@ -219,6 +233,28 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                     token_evt = {"event": "token", "data": json.dumps({"token": token})}
                     for q in _chat_listeners:
                         q.put_nowait(token_evt)
+
+                # Closing tokens the stream itself did not produce: end a
+                # reasoning block left open by Stop, and say so when the reply
+                # was cut off rather than finished.
+                tail = ""
+                so_far = "".join(full_response)
+                if so_far.rfind("<think>") > so_far.rfind("</think>"):
+                    tail += "</think>\n\n"
+                if llm_result.get("finish_reason") == "length":
+                    if reply_limit:
+                        why = (f"after {reply_limit:,} tokens, the most "
+                               f"{chat_model['label']} can safely generate here")
+                    else:
+                        why = f"because the {level['ctx']:,}-token context window is full"
+                    logger.warning("Chat: reply cut off %s", why)
+                    tail += f"\n\n*[Response cut off {why}. Send \"continue\" to get the rest.]*"
+                if tail:
+                    full_response.append(tail)
+                    tail_evt = {"event": "token", "data": json.dumps({"token": tail})}
+                    yield tail_evt
+                    for q in _chat_listeners:
+                        q.put_nowait(tail_evt)
             except Exception as e:
                 yield {"event": "error", "data": json.dumps({"error": str(e)})}
                 error_evt = {"event": "error", "data": json.dumps({"error": str(e)})}
@@ -243,26 +279,12 @@ async def chat(request: ChatRequest, db: Session = Depends(get_db)):
                 "data": json.dumps({
                     "conversation_id": conv_id,
                     "sources": sources,
-                    "context_source": context_source,
-                    "wiki_pages_used": wiki_pages_used,
                 }),
             }
             yield done_data
             # Push done to mirror listeners
             for q in _chat_listeners:
                 q.put_nowait(done_data)
-
-            # Wiki growth: after RAG/hybrid answers, grow the wiki in the background
-            if context_source in ("rag", "hybrid") and assistant_content.strip() and chunks:
-                try:
-                    asyncio.create_task(
-                        wiki_service.grow_wiki_from_chat(
-                            request.message, assistant_content, chunks, request.tag_names or []
-                        )
-                    )
-                    logger.info("Chat: wiki growth task started in background")
-                except Exception as e:
-                    logger.warning("Chat: wiki growth task failed to start: %s", e)
         finally:
             _chat_streaming = False
             _chat_conversation_id = None

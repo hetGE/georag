@@ -4,7 +4,6 @@
     const routes = {
         '/': { page: 'chat', title: 'geoRAG - Chat' },
         '/documents': { page: 'documents', title: 'geoRAG - Documents' },
-        '/wiki': { page: 'wiki', title: 'geoRAG - Wiki' },
     };
 
     function navigate(path) {

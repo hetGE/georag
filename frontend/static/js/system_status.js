@@ -1,6 +1,6 @@
 // Global system status: polls /api/system/status, drives the nav pill,
 // the Schedule dialog, the End Downtime button, and a body-level
-// data-downtime attribute that page-level CSS uses to grey out chat/wiki UIs.
+// data-downtime attribute that page-level CSS uses to grey out chat UIs.
 
 (function () {
     const POLL_MS = 3000;
@@ -55,7 +55,7 @@
             pill.classList.add('sys-pill-clickable');
             pill.title = isPaused
                 ? 'Click to start local models'
-                : 'Click to pause local models (free ~7-10 GB of RAM)';
+                : 'Click to pause local models and free their memory';
         } else {
             pill.title = '';
         }
@@ -227,12 +227,61 @@
         });
     }
 
+    // What the pause frees depends on what is loaded, and the chat model's size
+    // depends on the context window of the Retrieval Depth tier it was loaded
+    // for. Both are read live from the backend rather than estimated.
+    async function pauseDialogBody() {
+        const resume = 'The models start again the next time you use Chat or Documents, or when you click the pill.';
+        let mem = null, depths = null;
+        try {
+            [mem, depths] = await Promise.all([
+                apiGet('/api/system/llama/memory'),
+                apiGet('/api/system/chat-depths'),
+            ]);
+        } catch (e) { /* fall through to the generic text */ }
+        if (!mem || !mem.total_mib) {
+            return 'The local models will be unloaded to free their memory. ' + resume;
+        }
+
+        const gb = (mib) => (mib / 1024).toFixed(1) + ' GB';
+        const tokens = (v) => Number(v).toLocaleString('en-US');
+        const levels = (depths && depths.levels) || [];
+        const shortName = (level) => level.label.split(' ')[0];
+
+        const loaded = [];
+        const fixedContext = mem.chat_backend !== 'mlx';  // MLX grows its cache on demand
+        if (mem.chat_mib) {
+            let line = (mem.chat_model ? mem.chat_model + ' ' : '') + 'chat model';
+            if (fixedContext && mem.chat_ctx) {
+                const tier = levels.filter(l => l.ctx === mem.chat_ctx).map(shortName);
+                line += ` with a ${tokens(mem.chat_ctx)}-token context`;
+                if (tier.length) line += `, the size for ${tier.join(' and ')},`;
+            }
+            loaded.push(`${line} using ${gb(mem.chat_mib)}`);
+        }
+        if (mem.embed_mib) loaded.push(`embedding model using ${gb(mem.embed_mib)}`);
+        const lines = ['Loaded now: ' + loaded.join('; ') + '.'];
+
+        let storedDepth = null;
+        try { storedDepth = localStorage.getItem('georag-depth'); } catch (e) { /* storage blocked */ }
+        const setLevel = levels.find(l => l.key === (storedDepth || (depths && depths.default)));
+        if (setLevel) {
+            let line = `Retrieval Depth is set to ${setLevel.label}.`;
+            if (fixedContext && mem.chat_ctx && setLevel.ctx < mem.chat_ctx) {
+                line += ` It only needs a ${tokens(setLevel.ctx)}-token context, so the chat model will take less memory when it starts again.`;
+            }
+            lines.push(line);
+        }
+        lines.push(`Pausing frees about ${gb(mem.total_mib)}. ${resume}`);
+        return lines.join('\n\n');
+    }
+
     async function onPillClick() {
         if (!lastStatus) return;
         if (lastStatus.state_label === 'LLMs idle') {
             const ok = await confirmDialog({
                 title: 'Pause local models?',
-                body: 'About 7-10 GB of memory will be freed. They will auto-resume the next time you use Chat, Documents, or Wiki — or click the pill to start them manually.',
+                body: await pauseDialogBody(),
                 confirmLabel: 'Pause',
             });
             if (!ok) return;

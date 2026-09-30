@@ -41,7 +41,6 @@
         </ul>
         <ul>
             <li><a href="/" class="{% if active_page == 'chat' %}active{% endif %}">Chat</a></li>
-            <li><a href="/wiki" class="{% if active_page == 'wiki' %}active{% endif %}">Wiki</a></li>
             <li><a href="/documents" class="{% if active_page == 'documents' %}active{% endif %}">Documents</a></li>
         </ul>
     </nav>
@@ -53,7 +52,7 @@
                 <button aria-label="Close" rel="prev" class="close-schedule-dialog"></button>
                 <h3>Scheduled Downtime</h3>
             </header>
-            <p class="secondary" style="font-size:0.85rem;">During the daily downtime window, any running wiki build is gracefully paused and the local llama-servers are shut down to free memory. At the end of the window the servers come back up and the wiki build resumes automatically.</p>
+            <p class="secondary" style="font-size:0.85rem;">During the daily downtime window, the local llama-servers are shut down to free memory. At the end of the window the servers come back up.</p>
             <label style="display:flex;gap:0.5rem;align-items:center;">
                 <input type="checkbox" id="sched-enabled-input">
                 <span>Enable daily downtime window</span>
@@ -146,7 +145,6 @@
             <p class="llm-warning-info">The following features require both llama-server instances to be running:</p>
             <ul class="llm-warning-list">
                 <li>Chat (RAG responses)</li>
-                <li>Wiki (Ingest, Query, Lint)</li>
                 <li>Semantic Search</li>
                 <li>Document Processing</li>
                 <li>Tag Exploration</li>

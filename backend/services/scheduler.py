@@ -3,13 +3,8 @@
 Owns:
   - reading/writing AppSettings (single row, id=1)
   - computing whether we are currently in the daily downtime window
-  - the periodic loop that drives the wiki-stop / llama-stop / llama-start /
-    wiki-resume cycle
+  - the periodic loop that drives the llama-stop / llama-start cycle
   - the "End downtime now" forced-uptime override
-
-The wiki and llama lifecycle modules are kept dependency-free of this module
-where possible; wiki_service writes directly to AppSettings (via SessionLocal)
-to clear scheduled_run_active on natural completion.
 """
 import asyncio
 import datetime
@@ -18,7 +13,7 @@ from typing import Optional
 
 from backend.models.database import SessionLocal
 from backend.models.schemas import AppSettings
-from backend.services import llama_supervisor, wiki_service
+from backend.services import llama_supervisor
 
 logger = logging.getLogger(__name__)
 
@@ -30,14 +25,6 @@ _force_uptime_until: Optional[datetime.datetime] = None  # "End downtime" overri
 # llama after a user-initiated auto-shutdown.
 _pending_resume_after_downtime: bool = False
 
-# Authorisation to auto-resume a wiki build lives in the PERSISTED
-# AppSettings.scheduled_paused_for_downtime marker (set by enter_downtime() when
-# it pauses a running build, gated on in _resume_scheduled_wiki_if_needed). It is
-# persisted — not a transient in-process flag — so a restart *during* the window
-# still resumes when the window ends. A persisted scheduled_run_active alone must
-# never start a build (a build killed mid-flight leaves the marker False), so a
-# cold launch never kicks off the (huge) ingest.
-
 
 # ── Settings I/O ─────────────────────────────────────────────────────────
 
@@ -46,11 +33,6 @@ def _row_to_dict(s: AppSettings) -> dict:
         "schedule_enabled": bool(s.schedule_enabled),
         "downtime_start": s.downtime_start or "06:30",
         "downtime_end": s.downtime_end or "09:30",
-        "scheduled_run_active": bool(s.scheduled_run_active),
-        "scheduled_paused_for_downtime": bool(s.scheduled_paused_for_downtime),
-        "scheduled_tag_names": list(s.scheduled_tag_names or []),
-        "scheduled_file_ids": list(s.scheduled_file_ids or []),
-        "scheduled_processed_file_ids": list(s.scheduled_processed_file_ids or []),
     }
 
 
@@ -74,12 +56,7 @@ def get_settings() -> dict:
 
 def update_settings(**kwargs) -> dict:
     """Update one or more setting fields. Unknown keys are ignored."""
-    allowed = {
-        "schedule_enabled", "downtime_start", "downtime_end",
-        "scheduled_run_active", "scheduled_paused_for_downtime",
-        "scheduled_tag_names", "scheduled_file_ids",
-        "scheduled_processed_file_ids",
-    }
+    allowed = {"schedule_enabled", "downtime_start", "downtime_end"}
     db = SessionLocal()
     try:
         s = _ensure_row(db)
@@ -91,17 +68,6 @@ def update_settings(**kwargs) -> dict:
         return _row_to_dict(s)
     finally:
         db.close()
-
-
-def clear_scheduled_run():
-    """Called when the wiki build finishes naturally or is manually cancelled."""
-    update_settings(
-        scheduled_run_active=False,
-        scheduled_paused_for_downtime=False,
-        scheduled_tag_names=[],
-        scheduled_file_ids=[],
-        scheduled_processed_file_ids=[],
-    )
 
 
 # ── Time window math ─────────────────────────────────────────────────────
@@ -178,54 +144,27 @@ def force_uptime_until() -> Optional[str]:
 
 # ── Transitions ─────────────────────────────────────────────────────────
 
-async def _wait_for_phase(target: str, timeout: float = 300.0) -> bool:
-    loop = asyncio.get_event_loop()
-    deadline = loop.time() + timeout
-    while loop.time() < deadline:
-        phase = wiki_service.get_ingest_status()["phase"]
-        if phase == target:
-            return True
-        if phase in ("idle", "done"):
-            return True
-        await asyncio.sleep(2.0)
-    return False
-
-
 async def enter_downtime():
     global _pending_resume_after_downtime
     logger.info("Scheduler: entering downtime window")
     _pending_resume_after_downtime = True
-    if wiki_service.get_ingest_status()["is_running"]:
-        # A build was actively running when downtime hit — persist a marker so it
-        # auto-resumes when the window ends, even across a process restart during
-        # the window. This is the only path that authorises an auto-resume; a cold
-        # launch after a mid-build *kill* (marker stays False) never starts a build.
-        update_settings(scheduled_paused_for_downtime=True)
-        logger.info("Scheduler: stopping wiki ingest gracefully")
-        await wiki_service.stop_ingest()
-        reached = await _wait_for_phase("stopped", timeout=600.0)
-        logger.info("Scheduler: wiki drain complete (reached_stopped=%s, phase=%s)",
-                    reached, wiki_service.get_ingest_status()["phase"])
     logger.info("Scheduler: stopping llama-servers")
     await llama_supervisor.stop_all()
 
 
 async def _ensure_llama_up_if_needed(s: dict, chat_up: bool) -> bool:
-    """Start llama if the scheduler should bring it back up after a downtime
-    or to service a queued scheduled run. Returns True iff llama is up after."""
+    """Start llama if the scheduler should bring it back up after a downtime.
+    Returns True iff llama is up after."""
     global _pending_resume_after_downtime
     if chat_up:
         return True
     if llama_supervisor.is_user_paused():
         logger.info("Scheduler: llama stays down (user-paused)")
         return False
-    if not (_pending_resume_after_downtime or s["scheduled_run_active"]):
-        logger.info("Scheduler: llama stays down (no pending resume, no scheduled run)")
+    if not _pending_resume_after_downtime:
+        logger.info("Scheduler: llama stays down (no pending resume)")
         return False
-    logger.info(
-        "Scheduler: starting llama-servers (pending_resume=%s scheduled_run=%s)",
-        _pending_resume_after_downtime, s["scheduled_run_active"],
-    )
+    logger.info("Scheduler: starting llama-servers after downtime")
     ok = await llama_supervisor.start_all(wait=True)
     if not ok:
         logger.error("Scheduler: llama-servers did not start; will retry next tick")
@@ -234,46 +173,12 @@ async def _ensure_llama_up_if_needed(s: dict, chat_up: bool) -> bool:
     return True
 
 
-async def _resume_scheduled_wiki_if_needed(s: dict, chat_up: bool, wiki_running: bool):
-    """Resume a build the downtime scheduler paused — driven by the PERSISTED
-    scheduled_paused_for_downtime marker, so a restart during the window still
-    resumes. Never auto-starts off a merely-persisted scheduled_run_active: a
-    build killed mid-flight leaves the marker False, so a cold launch stays put
-    and the user starts/resumes builds explicitly. Idempotent — if the wiki is
-    still draining or llama isn't up yet, retry next tick."""
-    if not s["scheduled_paused_for_downtime"]:
-        return
-    if not s["scheduled_run_active"]:
-        # The run was cancelled/finished/stopped while paused — nothing to
-        # auto-resume (scope is preserved for a manual Resume). Clear the marker.
-        update_settings(scheduled_paused_for_downtime=False)
-        return
-    if not chat_up or wiki_running:
-        logger.info(
-            "Scheduler: downtime build pending resume but not yet "
-            "(chat_up=%s wiki_running=%s)", chat_up, wiki_running,
-        )
-        return
-    tag_names = s["scheduled_tag_names"]
-    file_ids = s["scheduled_file_ids"]
-    logger.info(
-        "Scheduler: auto-resuming wiki ingest paused for downtime (tags=%s file_ids=%d)",
-        tag_names, len(file_ids),
-    )
-    update_settings(scheduled_paused_for_downtime=False)
-    asyncio.create_task(
-        wiki_service.ingest_sources(tag_names=tag_names, file_ids=file_ids)
-    )
-
-
 async def exit_downtime():
     """Legacy entry-point kept for the /system/end-downtime path: drives
-    one full reconcile cycle (start llama + maybe resume wiki)."""
+    one full reconcile cycle (start llama if needed)."""
     s = get_settings()
     chat_up = await llama_supervisor.is_running("chat")
-    chat_up = await _ensure_llama_up_if_needed(s, chat_up)
-    wiki_running = wiki_service.get_ingest_status()["is_running"]
-    await _resume_scheduled_wiki_if_needed(s, chat_up, wiki_running)
+    await _ensure_llama_up_if_needed(s, chat_up)
 
 
 # ── Periodic loop ───────────────────────────────────────────────────────
@@ -290,28 +195,23 @@ async def _tick():
         llama_supervisor.is_running("chat"),
         llama_supervisor.is_running("embed"),
     )
-    wiki_running = wiki_service.get_ingest_status()["is_running"]
 
     logger.info(
-        "Scheduler tick: in_dt=%s chat_up=%s embed_up=%s wiki_running=%s "
-        "scheduled_run_active=%s paused_for_dt=%s pending_resume=%s",
-        in_dt, chat_up, embed_up, wiki_running,
-        s["scheduled_run_active"], s["scheduled_paused_for_downtime"],
-        _pending_resume_after_downtime,
+        "Scheduler tick: in_dt=%s chat_up=%s embed_up=%s pending_resume=%s",
+        in_dt, chat_up, embed_up, _pending_resume_after_downtime,
     )
 
     if in_dt:
-        # Should be paused. Stop wiki + llama if anything is still up. Check BOTH
+        # Should be paused. Stop llama if anything is still up. Check BOTH
         # servers — not just chat — so an embed-only survivor (e.g. an orphan from
         # a uvicorn --reload) can't sit idle through downtime eating memory.
-        if chat_up or embed_up or wiki_running:
+        if chat_up or embed_up:
             await enter_downtime()
         return
 
-    # Outside the downtime window. Two independent concerns, both reconciled
-    # every tick so we self-heal if a previous attempt didn't fully take.
-    chat_up = await _ensure_llama_up_if_needed(s, chat_up)
-    await _resume_scheduled_wiki_if_needed(s, chat_up, wiki_running)
+    # Outside the downtime window: reconcile every tick so we self-heal if a
+    # previous attempt didn't fully take.
+    await _ensure_llama_up_if_needed(s, chat_up)
 
 
 async def _scheduler_loop():
