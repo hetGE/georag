@@ -109,9 +109,10 @@ impl Home {
         ]
     }
 
-    /// True when the layout exists (the config and data directories are present).
+    /// True once `init` has run: `settings.toml` and the data directory exist.
+    /// A fresh bundle has `config/settings.toml.default` but no settings file.
     pub fn is_initialised(&self) -> bool {
-        self.config_dir().is_dir() && self.data_dir().is_dir()
+        self.settings_path().is_file() && self.data_dir().is_dir()
     }
 
     /// Create the folder layout and the default `settings.toml` if absent.

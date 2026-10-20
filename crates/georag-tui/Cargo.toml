@@ -8,6 +8,11 @@ publish.workspace = true
 [dependencies]
 georag-core.workspace = true
 thiserror.workspace = true
+tokio.workspace = true
+ratatui.workspace = true
+crossterm.workspace = true
+unicode-width.workspace = true
+tracing.workspace = true
 
 [lints]
 workspace = true

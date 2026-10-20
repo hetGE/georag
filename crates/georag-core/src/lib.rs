@@ -10,6 +10,7 @@ pub mod doctor;
 pub mod error;
 pub mod home;
 pub mod logging;
+pub mod status;
 
 pub use error::CoreError;
 pub use home::Home;

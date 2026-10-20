@@ -10,43 +10,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{CoreError, Result};
 
-/// The default settings file, written verbatim by `georag init`.
-pub const DEFAULT_SETTINGS_TOML: &str = r#"[app]
-version_checked_at = ""            # last update check, RFC3339
-
-[engine]
-backend = "auto"                   # auto | metal | cuda | vulkan | cpu
-gpu_layers = -1                    # -1 = all
-kv_cache_type = "q8_0"
-
-[chat]
-mode = "auto"                      # auto | manual
-manual_tier = "optimal"
-history_turns = 4
-thinking = false
-
-[auto]
-min_relevance = 0.65
-max_passes = 6
-min_candidates = 16
-synthesis = true
-candidate_k = 400
-
-[index]
-chunk_tokens = 1000
-chunk_overlap = 200
-extract_parallelism = 0            # 0 = number of physical cores
-embed_batch = 64
-watch_debounce_ms = 2000
-
-[update]
-auto_check = true
-channel = "stable"                 # stable | nightly
-
-[tui]
-color = "auto"                     # auto | truecolor | 256 | 16
-mouse = true
-"#;
+/// The default settings file, written verbatim by `georag init`. Lives in
+/// `defaults/settings.toml` so release bundling can ship it as
+/// `config/settings.toml.default` without compiling this crate.
+pub const DEFAULT_SETTINGS_TOML: &str = include_str!("../defaults/settings.toml");
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]

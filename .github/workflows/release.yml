@@ -1,0 +1,138 @@
+name: release
+
+# Builds the five bundles from handoff section 11.1, smoke-tests each with
+# `georag doctor --ci` from inside the bundle, and on a v* tag publishes a
+# GitHub Release with SHA256SUMS and manifest.json. Signing with minisign
+# is added once the key exists (section 11.3).
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  bundle:
+    name: ${{ matrix.flavour }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            flavour: aarch64-apple-darwin
+            features: metal
+          - os: windows-latest
+            flavour: x86_64-pc-windows-msvc-cuda
+            features: cuda
+            cuda: true
+          - os: windows-latest
+            flavour: x86_64-pc-windows-msvc-vulkan
+            features: vulkan
+            vulkan: true
+          - os: ubuntu-22.04
+            flavour: x86_64-unknown-linux-gnu-cuda
+            features: cuda
+            cuda: true
+          - os: ubuntu-22.04
+            flavour: x86_64-unknown-linux-gnu-vulkan
+            features: vulkan
+            vulkan: true
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.flavour }}
+
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y cmake libclang-dev
+      - if: runner.os == 'Windows'
+        run: echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+
+      - name: CUDA toolkit
+        if: matrix.cuda
+        uses: Jimver/cuda-toolkit@v0.2.30
+        with:
+          cuda: "12.8.1"
+          use-github-cache: true
+
+      - name: Vulkan SDK (Linux)
+        if: matrix.vulkan && runner.os == 'Linux'
+        run: sudo apt-get install -y libvulkan-dev glslc
+      - name: Vulkan SDK (Windows)
+        if: matrix.vulkan && runner.os == 'Windows'
+        uses: humbletim/install-vulkan-sdk@v1.1.1
+        with:
+          version: latest
+          cache: true
+
+      - name: Build
+        run: cargo build --release --locked --features ${{ matrix.features }}
+
+      - name: Stage engine libraries
+        shell: bash
+        run: |
+          mkdir -p engine-staging
+          # The Windows CUDA flavour links cudart, cublas and cublasLt dynamically
+          # (llama-cpp-sys-2 build.rs); the DLLs ship in engine/. Linux links
+          # them statically and needs only the driver. Metal and Vulkan are
+          # static. pdfium and the OCR models join here in P2 and P4.
+          if [ "${{ matrix.cuda }}" = "true" ] && [ "${{ runner.os }}" = "Windows" ]; then
+            cp "$CUDA_PATH"/bin/cudart64_*.dll "$CUDA_PATH"/bin/cublas64_*.dll "$CUDA_PATH"/bin/cublasLt64_*.dll engine-staging/
+          fi
+          ls -la engine-staging
+
+      - name: Bundle
+        run: cargo xtask bundle --flavour ${{ matrix.flavour }} --engine engine-staging --out dist
+
+      - name: Smoke test from inside the bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          stage=$(ls -d dist/stage/georag-*)
+          "$stage"/georag doctor --ci
+          "$stage"/georag status --json
+          rm -rf "$stage"/data
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.flavour }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: bundle
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: SHA256SUMS and manifest.json
+        run: |
+          channel=stable
+          if [[ "${GITHUB_REF_NAME}" == *nightly* ]]; then channel=nightly; fi
+          cargo xtask manifest --dir dist --channel "$channel" --notes-file CHANGELOG.md
+          ls -la dist
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/SHA256SUMS
+            dist/manifest.json
+            dist/notes.md
+          body_path: dist/notes.md
+          prerelease: ${{ contains(github.ref_name, 'nightly') }}

@@ -28,6 +28,12 @@ struct Cli {
 enum Command {
     /// Create the home folder layout and default settings
     Init,
+    /// Show the home folder, engine, models, library and jobs at a glance
+    Status {
+        /// Emit the snapshot as JSON
+        #[arg(long)]
+        json: bool,
+    },
     /// Report the build flavour, backend, device memory and model fit
     Doctor {
         /// Print the cosine score distribution for this sample question
@@ -102,9 +108,29 @@ fn run() -> anyhow::Result<()> {
             }
             Ok(())
         }
+        Some(Command::Status { json }) => {
+            let _logs = logging::init(&home, !json).ok();
+            let settings = georag_core::config::Settings::load(&home.settings_path())?;
+            let snapshot = georag_core::status::Snapshot::take(&home, &settings);
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&snapshot).context("serialising the snapshot")?
+                );
+            } else {
+                print!("{snapshot}");
+            }
+            Ok(())
+        }
         None => {
+            // First launch from a fresh folder: create the layout so the UI
+            // has settings and a log. Everything stays inside the home folder.
+            if !home.is_initialised() {
+                home.init()?;
+            }
             let _logs = logging::init(&home, false).ok();
-            georag_tui::run(&home)?;
+            let settings = georag_core::config::Settings::load(&home.settings_path())?;
+            georag_tui::run(&home, &settings)?;
             Ok(())
         }
     }

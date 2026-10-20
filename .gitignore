@@ -2,3 +2,5 @@
 /.dev-home
 .DS_Store
 *.old
+/dist
+/ci-home
