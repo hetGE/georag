@@ -1,0 +1,49 @@
+[workspace]
+resolver = "3"
+members = ["crates/*", "xtask"]
+
+[workspace.package]
+version = "2.0.0-dev"
+edition = "2024"
+rust-version = "1.85"
+publish = false
+repository = "https://github.com/hetGE/georag-rs"
+
+[workspace.dependencies]
+georag-core = { path = "crates/georag-core" }
+georag-engine = { path = "crates/georag-engine" }
+georag-extract = { path = "crates/georag-extract" }
+georag-store = { path = "crates/georag-store" }
+georag-daemon = { path = "crates/georag-daemon" }
+georag-tui = { path = "crates/georag-tui" }
+
+# Versions verified on crates.io on 2026-10-20. Add a crate here when a phase
+# starts using it; do not pin crates nothing depends on yet.
+llama-cpp-2 = { version = "0.1.160", default-features = false }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+toml = "1.1.8"
+clap = { version = "4.6.7", features = ["derive", "env"] }
+thiserror = "2.0.21"
+anyhow = "1.0.104"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+tracing-appender = "0.2.5"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+all = "warn"
+
+# llama.cpp is compiled by cmake inside llama-cpp-sys-2; cmake-rs maps the
+# package opt-level to the CMake build type, so without this a dev build gets a
+# Debug llama.cpp and generation is unusably slow.
+[profile.dev.package.llama-cpp-sys-2]
+opt-level = 3
+debug = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "debuginfo"

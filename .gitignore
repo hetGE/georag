@@ -1,0 +1,4 @@
+/target
+/.dev-home
+.DS_Store
+*.old

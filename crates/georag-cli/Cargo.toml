@@ -1,0 +1,28 @@
+[package]
+name = "georag-cli"
+description = "The georag binary: subcommands, and the TUI when run without arguments"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "georag"
+path = "src/main.rs"
+
+[features]
+default = []
+metal = ["georag-core/metal"]
+cuda = ["georag-core/cuda"]
+vulkan = ["georag-core/vulkan"]
+
+[dependencies]
+georag-core.workspace = true
+georag-tui.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true
