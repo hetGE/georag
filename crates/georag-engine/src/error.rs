@@ -27,4 +27,32 @@ pub enum EngineError {
         path: std::path::PathBuf,
         reason: String,
     },
+
+    #[error("could not load {path} ({reason}): check the file with `georag models verify`")]
+    Load {
+        path: std::path::PathBuf,
+        reason: String,
+    },
+
+    #[error(
+        "could not create a context of {n_ctx} tokens ({reason}): lower engine.max_ctx or pick a smaller model"
+    )]
+    Context { n_ctx: u32, reason: String },
+
+    #[error("no {0} model is loaded: pull one with `georag models pull` and mark it in use")]
+    NotLoaded(&'static str),
+
+    #[error(
+        "the prompt is {tokens} tokens but the context holds {n_ctx}: shorten the history or raise the context"
+    )]
+    PromptTooLong { tokens: usize, n_ctx: u32 },
+
+    #[error("generation failed ({0})")]
+    Decode(String),
+
+    #[error("{0} is not available yet")]
+    NotSupported(&'static str),
+
+    #[error("the engine thread has stopped")]
+    Stopped,
 }

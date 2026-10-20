@@ -39,6 +39,8 @@ pub struct EngineSettings {
     pub backend: String,
     pub gpu_layers: i32,
     pub kv_cache_type: String,
+    /// Cap on the context ladder; 0 means the ladder alone decides.
+    pub max_ctx: u32,
 }
 
 impl Default for EngineSettings {
@@ -47,6 +49,7 @@ impl Default for EngineSettings {
             backend: "auto".into(),
             gpu_layers: -1,
             kv_cache_type: "q8_0".into(),
+            max_ctx: 0,
         }
     }
 }

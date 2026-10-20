@@ -15,6 +15,7 @@ vulkan = ["llama-cpp-2/vulkan"]
 
 [dependencies]
 llama-cpp-2.workspace = true
+llama-cpp-sys-2.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

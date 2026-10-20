@@ -20,6 +20,7 @@ georag-tui = { path = "crates/georag-tui" }
 # Versions verified on crates.io on 2026-10-20. Add a crate here when a phase
 # starts using it; do not pin crates nothing depends on yet.
 llama-cpp-2 = { version = "0.1.160", default-features = false }
+llama-cpp-sys-2 = { version = "0.1.160", default-features = false }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 toml = "1.1.8"

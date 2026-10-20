@@ -147,6 +147,16 @@ pub fn ensure_initialised() -> Result<(), EngineError> {
     }
 }
 
+/// The process-wide llama.cpp handle, for model and context creation.
+pub fn backend_handle() -> Result<&'static LlamaBackend, EngineError> {
+    ensure_initialised()?;
+    match BACKEND.get() {
+        Some(Ok(b)) => Ok(b),
+        Some(Err(m)) => Err(EngineError::Init(m.clone())),
+        None => Err(EngineError::Init("backend not initialised".into())),
+    }
+}
+
 /// List every ggml device with its memory figures.
 pub fn probe_devices() -> Result<Vec<DeviceInfo>, EngineError> {
     ensure_initialised()?;

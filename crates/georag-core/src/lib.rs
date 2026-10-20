@@ -6,12 +6,18 @@
 //! store are reached through this crate and never directly.
 #![forbid(unsafe_code)]
 
+pub mod app;
+pub mod chat;
 pub mod config;
+pub mod conversations;
+pub mod devseed;
 pub mod doctor;
+pub mod engine;
 pub mod error;
 pub mod home;
 pub mod logging;
 pub mod models;
+pub mod retrieval;
 pub mod status;
 
 pub use error::CoreError;

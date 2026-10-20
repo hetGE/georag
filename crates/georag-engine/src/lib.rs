@@ -10,13 +10,19 @@ compile_error!("enable only one of the `cuda` and `vulkan` features: a bundle ha
 
 pub mod backend;
 pub mod error;
+pub mod fit;
 pub mod gguf;
+pub mod llama;
 pub mod types;
 
 pub use backend::{Backend, BackendInfo, BackendPreference, DeviceInfo, DeviceKind};
 pub use error::EngineError;
 pub use gguf::GgufInfo;
-pub use types::InferenceEngine;
+pub use llama::LlamaCppEngine;
+pub use types::{
+    CancelToken, ChatMessage, EngineStats, FinishReason, FitVerdict, GenRequest, GenResult,
+    InferenceEngine, Lane, LoadSpec, Role, TokenSink,
+};
 
 /// Build flavour: target triple plus `-cuda` or `-vulkan` where relevant.
 pub const FLAVOUR: &str = env!("GEORAG_FLAVOUR");

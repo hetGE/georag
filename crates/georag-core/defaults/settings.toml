@@ -5,6 +5,7 @@ version_checked_at = ""            # last update check, RFC3339
 backend = "auto"                   # auto | metal | cuda | vulkan | cpu
 gpu_layers = -1                    # -1 = all
 kv_cache_type = "q8_0"
+max_ctx = 0                        # cap the context ladder, 0 = no cap
 
 [chat]
 mode = "auto"                      # auto | manual

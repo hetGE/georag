@@ -209,6 +209,24 @@ impl Store {
         })
     }
 
+    pub fn messages_conversation(&self, message_id: i64) -> Result<i64> {
+        self.read(|c| {
+            Ok(c.query_row(
+                "SELECT conversation_id FROM messages WHERE id = ?1",
+                [message_id],
+                |r| r.get(0),
+            )?)
+        })
+    }
+
+    pub fn message_set_content(&self, message_id: i64, content: &str, cut_off: bool) -> Result<()> {
+        self.writer().execute(
+            "UPDATE messages SET content = ?2, cut_off = ?3 WHERE id = ?1",
+            params![message_id, content, cut_off as i64],
+        )?;
+        Ok(())
+    }
+
     pub fn passes_add(&self, message_id: i64, passes: &[NewPass<'_>]) -> Result<()> {
         let mut conn = self.writer();
         let tx = conn.transaction()?;
