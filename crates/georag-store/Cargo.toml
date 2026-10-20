@@ -10,3 +10,18 @@ thiserror.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies.rusqlite]
+workspace = true
+
+[dependencies.sqlite-vec]
+workspace = true
+
+[dependencies.serde]
+workspace = true
+
+[dependencies.serde_json]
+workspace = true
+
+[dependencies.tracing]
+workspace = true

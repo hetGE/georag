@@ -5,6 +5,7 @@
 //!            Windows), handoff section 11.1.
 //! `manifest` writes `SHA256SUMS`, `manifest.json` and `notes.md` for a
 //!            directory of bundles.
+#![forbid(unsafe_code)]
 
 use std::fs::{self, File};
 use std::io::{self, Read, Write};

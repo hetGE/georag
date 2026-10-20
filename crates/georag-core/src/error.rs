@@ -38,8 +38,17 @@ pub enum CoreError {
     #[error("could not initialise logging ({0})")]
     Logging(String),
 
+    #[error("{0}")]
+    Invalid(String),
+
+    #[error("network error: {0}")]
+    Network(String),
+
     #[error(transparent)]
     Engine(#[from] georag_engine::EngineError),
+
+    #[error(transparent)]
+    Store(#[from] georag_store::StoreError),
 }
 
 pub type Result<T> = std::result::Result<T, CoreError>;

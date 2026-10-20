@@ -21,4 +21,10 @@ pub enum EngineError {
 
     #[error("llama.cpp failed to initialise ({0})")]
     Init(String),
+
+    #[error("could not read the GGUF header of {path} ({reason})")]
+    Gguf {
+        path: std::path::PathBuf,
+        reason: String,
+    },
 }

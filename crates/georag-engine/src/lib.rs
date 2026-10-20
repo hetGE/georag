@@ -10,10 +10,12 @@ compile_error!("enable only one of the `cuda` and `vulkan` features: a bundle ha
 
 pub mod backend;
 pub mod error;
+pub mod gguf;
 pub mod types;
 
 pub use backend::{Backend, BackendInfo, BackendPreference, DeviceInfo, DeviceKind};
 pub use error::EngineError;
+pub use gguf::GgufInfo;
 pub use types::InferenceEngine;
 
 /// Build flavour: target triple plus `-cuda` or `-vulkan` where relevant.

@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::backend::BackendInfo;
 use crate::error::EngineError;
+use crate::gguf::GgufInfo;
 
 /// Which resident model a request addresses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -36,18 +37,6 @@ pub struct LoadSpec {
     pub n_ctx: u32,
     pub gpu_layers: i32,
     pub kv_cache_type: String,
-}
-
-/// What the GGUF header says about a model, enough for the memory fit.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GgufInfo {
-    pub architecture: String,
-    pub n_ctx_train: u32,
-    pub n_layer: u32,
-    pub n_head_kv: u32,
-    pub head_dim: u32,
-    pub weight_bytes: u64,
-    pub embed_dim: Option<u32>,
 }
 
 /// Result of `fits`.

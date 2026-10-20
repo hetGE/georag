@@ -4,6 +4,7 @@
 //! the loop over terminal events and a 250 ms tick. P0 ships the chrome
 //! (status bar, tab row, key bar, help overlay) and Home with the first-run
 //! checklist; the other screens are placeholders until their phase.
+#![forbid(unsafe_code)]
 
 pub mod app;
 pub mod state;

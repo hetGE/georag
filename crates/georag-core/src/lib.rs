@@ -4,12 +4,14 @@
 //! only. It owns the home folder layout, settings, logging and, from P1 on,
 //! models, retrieval, chat, import and update. The engine, extractors and the
 //! store are reached through this crate and never directly.
+#![forbid(unsafe_code)]
 
 pub mod config;
 pub mod doctor;
 pub mod error;
 pub mod home;
 pub mod logging;
+pub mod models;
 pub mod status;
 
 pub use error::CoreError;

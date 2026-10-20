@@ -1,11 +1,26 @@
 //! SQLite store: metadata, vectors (sqlite-vec), full text (FTS5), chats, jobs.
 //!
-//! P1 adds conversations and models; P2 adds files, chunks and search. The
-//! schema lives in numbered migrations applied in order.
+//! One writer connection behind a mutex, a small pool of read connections,
+//! WAL mode, 5 s busy timeout. Core uses only the typed API here; no SQL
+//! leaves this crate.
+//!
+//! `unsafe` appears once, to register the sqlite-vec extension (ADR 0002).
+#![deny(unsafe_code)]
 
-/// Errors from the store.
-#[derive(Debug, thiserror::Error)]
-pub enum StoreError {
-    #[error("the store is not available yet ({0})")]
-    NotReady(&'static str),
-}
+pub mod chunks;
+pub mod conversations;
+pub mod error;
+pub mod files;
+pub mod meta;
+pub mod search;
+pub mod store;
+pub mod time;
+
+pub use chunks::{Chunk, NewChunk};
+pub use conversations::{Conversation, Message, NewMessage, NewPass, Pass, Source};
+pub use error::StoreError;
+pub use files::{File, FileState, Root};
+pub use search::{Hit, SearchFilter};
+pub use store::Store;
+
+pub type Result<T> = std::result::Result<T, StoreError>;
