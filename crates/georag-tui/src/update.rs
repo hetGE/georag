@@ -4,7 +4,11 @@ use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 
-use crate::state::{Cmd, HOME_MENU, HomeFocus, MenuItem, Msg, Overlay, Screen, State};
+use crate::screens::{chat, models};
+use crate::state::{
+    Cmd, ConfirmAction, EngineState, HOME_MENU, HomeFocus, InputPurpose, MenuItem, Msg, Overlay,
+    Screen, State,
+};
 use crate::view::tab_at_column;
 
 pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
@@ -17,6 +21,7 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
                     state.toast = None;
                 }
             }
+            state.models.pulls = state.pulls.statuses();
             Vec::new()
         }
         Msg::Resize(w, h) => {
@@ -31,89 +36,349 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
             on_key(state, key)
         }
         Msg::Mouse(mouse) => on_mouse(state, mouse),
+        Msg::Chat(ev) => {
+            state.chat.apply_event(ev);
+            Vec::new()
+        }
+        Msg::ChatFinished(result) => {
+            state.chat.running = false;
+            state.chat.controls = None;
+            state.engine_state = if state.app.is_some() {
+                EngineState::Ready
+            } else {
+                EngineState::NotLoaded
+            };
+            match result {
+                Ok(outcome) => {
+                    if let Some(run) = state.chat.run.as_mut() {
+                        run.done = true;
+                        if run.final_text.is_empty() && run.passes.len() <= 1 {
+                            run.final_text = outcome.final_answer.clone();
+                        }
+                    }
+                    let mut cmds = vec![Cmd::RefreshConversations];
+                    if outcome.stopped
+                        && outcome
+                            .passes
+                            .iter()
+                            .any(|p| p.status == georag_core::chat::PassStatus::Done)
+                    {
+                        state.overlay = Some(Overlay::Confirm {
+                            text: "Stopped. Combine what is done into one answer?".into(),
+                            on_yes: ConfirmAction::CombineDone {
+                                message_id: outcome.message_id,
+                            },
+                        });
+                    }
+                    cmds.push(Cmd::OpenConversation {
+                        id: outcome.conversation_id,
+                    });
+                    cmds
+                }
+                Err(e) => {
+                    if let Some(run) = state.chat.run.as_mut() {
+                        run.done = true;
+                        run.error = Some(e.clone());
+                    }
+                    state.show_toast(format!("run failed: {e}"));
+                    Vec::new()
+                }
+            }
+        }
+        Msg::AppReady(app) => {
+            state.engine_state = EngineState::Ready;
+            state.models.loaded_chat = app.plan.chat_id.clone();
+            state.models.loaded_embed = app.plan.embed_id.clone();
+            state.app = Some(app);
+            vec![Cmd::RefreshModels, Cmd::RefreshConversations]
+        }
+        Msg::AppFailed(e) => {
+            state.engine_state = EngineState::Failed(e.clone());
+            state.app = None;
+            state.show_toast(format!("models not loaded: {e}"));
+            vec![Cmd::RefreshModels, Cmd::RefreshConversations]
+        }
+        Msg::ConversationLoaded(view) => {
+            state.chat.current = Some(view);
+            state.chat.follow = true;
+            Vec::new()
+        }
+        Msg::ConversationsListed(list) => {
+            state.chat.conversations = list;
+            let n = state.chat.filtered_conversations().len();
+            if state.chat.conv_cursor >= n {
+                state.chat.conv_cursor = n.saturating_sub(1);
+            }
+            Vec::new()
+        }
+        Msg::ModelsChanged => vec![Cmd::RefreshModels],
+        Msg::Toast(text) => {
+            state.show_toast(text);
+            Vec::new()
+        }
     }
 }
 
 fn on_key(state: &mut State, key: KeyEvent) -> Vec<Cmd> {
     // ctrl-c quits now, from anywhere; the daemon (P3) keeps running.
     if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-        return quit(state);
+        state.should_quit = true;
+        return vec![Cmd::Quit];
     }
 
     if let Some(overlay) = state.overlay.clone() {
         return on_overlay_key(state, overlay, key);
     }
 
+    // Screens with text input take printable keys first.
+    if state.screen == Screen::Chat {
+        if let Some(cmds) = chat::on_screen_key(state, key) {
+            return cmds;
+        }
+        let typing = state.chat.focus == chat::ChatFocus::Transcript;
+        if typing
+            && !matches!(key.code, KeyCode::Esc | KeyCode::Tab | KeyCode::BackTab)
+            && !(key.modifiers.contains(KeyModifiers::CONTROL))
+        {
+            if matches!(key.code, KeyCode::Char(_)) && state.chat.input.is_empty() {
+                // Fall through to global keys for single-letter commands when the box is empty.
+                if let Some(cmds) = global_key(state, key) {
+                    return cmds;
+                }
+            }
+            return chat::on_key(state, key);
+        }
+        if let Some(cmds) = global_key(state, key) {
+            return cmds;
+        }
+        return chat::on_key(state, key);
+    }
+
+    if let Some(cmds) = global_key(state, key) {
+        return cmds;
+    }
+    match state.screen {
+        Screen::Home => on_home_key(state, key),
+        Screen::Models => models::on_key(state, key),
+        _ => Vec::new(),
+    }
+}
+
+/// Keys that mean the same on every screen. `None` when not a global key.
+fn global_key(state: &mut State, key: KeyEvent) -> Option<Vec<Cmd>> {
     match key.code {
         KeyCode::Char('?') => {
             state.overlay = Some(Overlay::Help { scroll: 0 });
-            Vec::new()
+            Some(Vec::new())
         }
-        KeyCode::Char(c @ '1'..='5') => {
+        KeyCode::Char(c @ '1'..='5')
+            if state.screen != Screen::Chat || state.chat.focus != chat::ChatFocus::Sources =>
+        {
             let idx = (c as u8 - b'1') as usize;
-            goto(state, Screen::TABS[idx])
+            Some(goto(state, Screen::TABS[idx]))
         }
-        KeyCode::Tab => {
+        KeyCode::Tab if state.screen != Screen::Chat && state.screen != Screen::Models => {
             let next = match state.screen.tab_index() {
                 Some(i) => Screen::TABS[(i + 1) % Screen::TABS.len()],
                 None => Screen::TABS[0],
             };
-            goto(state, next)
+            Some(goto(state, next))
         }
-        KeyCode::BackTab => {
+        KeyCode::BackTab if state.screen != Screen::Chat && state.screen != Screen::Models => {
             let n = Screen::TABS.len();
             let prev = match state.screen.tab_index() {
                 Some(i) => Screen::TABS[(i + n - 1) % n],
                 None => Screen::TABS[n - 1],
             };
-            goto(state, prev)
+            Some(goto(state, prev))
         }
-        KeyCode::Char('q') => {
-            if state.screen == Screen::Home {
-                quit(state)
-            } else {
-                goto(state, Screen::Home)
-            }
-        }
-        KeyCode::Esc => Vec::new(),
-        _ => match state.screen {
-            Screen::Home => on_home_key(state, key),
-            _ => Vec::new(),
-        },
+        KeyCode::Char('q') => Some(if state.screen == Screen::Home {
+            quit(state)
+        } else {
+            goto(state, Screen::Home)
+        }),
+        KeyCode::Esc if !(state.screen == Screen::Chat && state.chat.running) => Some(Vec::new()),
+        _ => None,
     }
 }
 
 fn on_overlay_key(state: &mut State, overlay: Overlay, key: KeyEvent) -> Vec<Cmd> {
     match overlay {
-        Overlay::Help { scroll } => match key.code {
-            KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Enter => {
+        Overlay::Help { scroll } => {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('?') | KeyCode::Char('q') | KeyCode::Enter => {
+                    state.overlay = None
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    state.overlay = Some(Overlay::Help {
+                        scroll: scroll.saturating_add(1),
+                    })
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    state.overlay = Some(Overlay::Help {
+                        scroll: scroll.saturating_sub(1),
+                    })
+                }
+                KeyCode::Char('g') => state.overlay = Some(Overlay::Help { scroll: 0 }),
+                KeyCode::PageDown => {
+                    state.overlay = Some(Overlay::Help {
+                        scroll: scroll.saturating_add(10),
+                    })
+                }
+                KeyCode::PageUp => {
+                    state.overlay = Some(Overlay::Help {
+                        scroll: scroll.saturating_sub(10),
+                    })
+                }
+                _ => {}
+            }
+            Vec::new()
+        }
+        Overlay::Chunk {
+            title,
+            text,
+            scroll,
+        } => {
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => state.overlay = None,
+                KeyCode::Char('j') | KeyCode::Down => {
+                    state.overlay = Some(Overlay::Chunk {
+                        title,
+                        text,
+                        scroll: scroll.saturating_add(1),
+                    })
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    state.overlay = Some(Overlay::Chunk {
+                        title,
+                        text,
+                        scroll: scroll.saturating_sub(1),
+                    })
+                }
+                KeyCode::PageDown => {
+                    state.overlay = Some(Overlay::Chunk {
+                        title,
+                        text,
+                        scroll: scroll.saturating_add(10),
+                    })
+                }
+                KeyCode::PageUp => {
+                    state.overlay = Some(Overlay::Chunk {
+                        title,
+                        text,
+                        scroll: scroll.saturating_sub(10),
+                    })
+                }
+                _ => {}
+            }
+            Vec::new()
+        }
+        Overlay::Confirm { text, on_yes } => match key.code {
+            KeyCode::Char('y') | KeyCode::Char('Y') | KeyCode::Enter => {
                 state.overlay = None;
+                match on_yes {
+                    ConfirmAction::DeleteConversation { id } => {
+                        vec![Cmd::DeleteConversation { id }]
+                    }
+                    ConfirmAction::RemoveModel { id } => vec![Cmd::RemoveModel { id }],
+                    ConfirmAction::CombineDone { message_id } => {
+                        vec![Cmd::CombineDone { message_id }]
+                    }
+                    ConfirmAction::Quit => {
+                        state.should_quit = true;
+                        vec![Cmd::Quit]
+                    }
+                }
             }
-            KeyCode::Char('j') | KeyCode::Down => {
-                state.overlay = Some(Overlay::Help {
-                    scroll: scroll.saturating_add(1),
+            KeyCode::Char('n') | KeyCode::Char('N') | KeyCode::Esc => {
+                state.overlay = None;
+                Vec::new()
+            }
+            _ => {
+                state.overlay = Some(Overlay::Confirm { text, on_yes });
+                Vec::new()
+            }
+        },
+        Overlay::TextInput {
+            title,
+            mut value,
+            purpose,
+        } => match key.code {
+            KeyCode::Esc => {
+                state.overlay = None;
+                Vec::new()
+            }
+            KeyCode::Enter => {
+                state.overlay = None;
+                commit_input(state, purpose, value)
+            }
+            KeyCode::Backspace => {
+                value.pop();
+                state.overlay = Some(Overlay::TextInput {
+                    title,
+                    value,
+                    purpose,
                 });
+                Vec::new()
             }
-            KeyCode::Char('k') | KeyCode::Up => {
-                state.overlay = Some(Overlay::Help {
-                    scroll: scroll.saturating_sub(1),
+            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
+                value.push(c);
+                state.overlay = Some(Overlay::TextInput {
+                    title,
+                    value,
+                    purpose,
                 });
+                Vec::new()
             }
-            KeyCode::Char('g') => state.overlay = Some(Overlay::Help { scroll: 0 }),
-            KeyCode::PageDown => {
-                state.overlay = Some(Overlay::Help {
-                    scroll: scroll.saturating_add(10),
+            _ => {
+                state.overlay = Some(Overlay::TextInput {
+                    title,
+                    value,
+                    purpose,
                 });
+                Vec::new()
             }
-            KeyCode::PageUp => {
-                state.overlay = Some(Overlay::Help {
-                    scroll: scroll.saturating_sub(10),
-                });
-            }
-            _ => {}
         },
     }
-    Vec::new()
+}
+
+fn commit_input(state: &mut State, purpose: InputPurpose, value: String) -> Vec<Cmd> {
+    let value = value.trim().to_string();
+    match purpose {
+        InputPurpose::ChatTags => {
+            state.chat.tags = value
+                .split(',')
+                .map(|t| t.trim().to_string())
+                .filter(|t| !t.is_empty())
+                .collect();
+            Vec::new()
+        }
+        InputPurpose::ConversationFilter => {
+            state.chat.conv_filter = value;
+            state.chat.conv_cursor = 0;
+            Vec::new()
+        }
+        InputPurpose::CatalogQuery => {
+            state.models.catalog_query = value;
+            state.models.catalog_cursor = 0;
+            state.models.focus = Some(crate::screens::models::ModelsFocus::Catalog);
+            Vec::new()
+        }
+        InputPurpose::LinkModel => {
+            if value.is_empty() {
+                Vec::new()
+            } else {
+                vec![Cmd::LinkModel { spec: value }]
+            }
+        }
+        InputPurpose::SetRole { id } => {
+            if value.is_empty() {
+                Vec::new()
+            } else {
+                vec![Cmd::SetRole { id, role: value }]
+            }
+        }
+    }
 }
 
 fn on_home_key(state: &mut State, key: KeyEvent) -> Vec<Cmd> {
@@ -207,13 +472,19 @@ fn on_mouse(state: &mut State, mouse: MouseEvent) -> Vec<Cmd> {
 fn goto(state: &mut State, screen: Screen) -> Vec<Cmd> {
     state.screen = screen;
     state.overlay = None;
-    Vec::new()
+    match screen {
+        Screen::Chat => vec![Cmd::RefreshConversations],
+        Screen::Models => vec![Cmd::RefreshModels],
+        _ => Vec::new(),
+    }
 }
 
 fn quit(state: &mut State) -> Vec<Cmd> {
     if state.busy() {
-        // A confirm overlay guards running passes and jobs from P1 on.
-        state.show_toast("a run is in progress: press ctrl-c to quit now");
+        state.overlay = Some(Overlay::Confirm {
+            text: "A run is in progress. Quit anyway?".into(),
+            on_yes: ConfirmAction::Quit,
+        });
         return Vec::new();
     }
     state.should_quit = true;
@@ -223,11 +494,17 @@ fn quit(state: &mut State) -> Vec<Cmd> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::{Depth, Theme};
+    use georag_core::chat::{ChatEvent, PassStatus, PlanSummary};
     use georag_core::status::Snapshot;
     use std::path::PathBuf;
 
     fn state() -> State {
-        State::new(Snapshot::empty(PathBuf::from("/tmp/georag-test")), true)
+        State::new(
+            Snapshot::empty(PathBuf::from("/tmp/georag-test")),
+            true,
+            Theme::with_depth(Depth::Basic16),
+        )
     }
 
     fn key(code: KeyCode) -> Msg {
@@ -268,16 +545,15 @@ mod tests {
     #[test]
     fn tab_cycles_through_the_five_tabs() {
         let mut s = state();
+        press(&mut s, KeyCode::Char('2'));
+        press(&mut s, KeyCode::Tab);
+        assert_eq!(s.screen, Screen::Models);
+        press(&mut s, KeyCode::Char('5'));
         press(&mut s, KeyCode::Tab);
         assert_eq!(s.screen, Screen::Chat);
-        for _ in 0..4 {
-            press(&mut s, KeyCode::Tab);
-        }
-        assert_eq!(s.screen, Screen::Settings);
-        press(&mut s, KeyCode::Tab);
-        assert_eq!(s.screen, Screen::Chat);
+        press(&mut s, KeyCode::Char('4'));
         press(&mut s, KeyCode::BackTab);
-        assert_eq!(s.screen, Screen::Settings);
+        assert_eq!(s.screen, Screen::Models);
     }
 
     #[test]
@@ -287,7 +563,6 @@ mod tests {
         assert_eq!(s.overlay, Some(Overlay::Help { scroll: 0 }));
         press(&mut s, KeyCode::Char('j'));
         assert_eq!(s.overlay, Some(Overlay::Help { scroll: 1 }));
-        // Screen keys are swallowed while the overlay is open.
         press(&mut s, KeyCode::Char('2'));
         assert_eq!(s.screen, Screen::Home);
         press(&mut s, KeyCode::Esc);
@@ -346,5 +621,133 @@ mod tests {
         };
         update(&mut s, Msg::Mouse(click));
         assert_eq!(s.screen, Screen::Models);
+    }
+
+    #[test]
+    fn chat_typing_enter_and_run_events() {
+        let mut s = state();
+        press(&mut s, KeyCode::Char('1'));
+        assert_eq!(s.screen, Screen::Chat);
+        for c in "pile capacity".chars() {
+            press(&mut s, KeyCode::Char(c));
+        }
+        assert_eq!(s.chat.input, "pile capacity");
+        // Single-letter screen keys are swallowed by the input once text is present.
+        press(&mut s, KeyCode::Char('q'));
+        assert_eq!(s.screen, Screen::Chat);
+        assert_eq!(s.chat.input, "pile capacityq");
+        press(&mut s, KeyCode::Backspace);
+        let cmds = press(&mut s, KeyCode::Enter);
+        assert_eq!(
+            cmds,
+            vec![Cmd::Ask {
+                message: "pile capacity".into()
+            }]
+        );
+        assert!(s.chat.input.is_empty());
+
+        // Simulate the loop starting a run.
+        s.chat.running = true;
+        s.chat.run = Some(crate::screens::chat::RunView {
+            question: "pile capacity".into(),
+            ..Default::default()
+        });
+        update(
+            &mut s,
+            Msg::Chat(ChatEvent::Plan {
+                summary: PlanSummary {
+                    passes: 2,
+                    kept: 5,
+                    total_tokens: 100,
+                    dropped: 0,
+                    fallback: false,
+                    budget: 60,
+                    min_relevance: 0.65,
+                },
+            }),
+        );
+        update(
+            &mut s,
+            Msg::Chat(ChatEvent::PassStart {
+                k: 1,
+                sources_from: 1,
+                sources_to: 3,
+            }),
+        );
+        update(
+            &mut s,
+            Msg::Chat(ChatEvent::Token {
+                k: Some(1),
+                text: "Twelve".into(),
+            }),
+        );
+        update(
+            &mut s,
+            Msg::Chat(ChatEvent::Token {
+                k: Some(1),
+                text: " metres".into(),
+            }),
+        );
+        update(
+            &mut s,
+            Msg::Chat(ChatEvent::PassEnd {
+                k: 1,
+                status: PassStatus::Done,
+                cut_off: false,
+            }),
+        );
+        let run = s.chat.run.as_ref().unwrap();
+        assert_eq!(run.passes[0].text, "Twelve metres");
+        assert_eq!(run.passes[0].status, Some(PassStatus::Done));
+        assert_eq!(run.plan.as_ref().unwrap().passes, 2);
+        // q while running goes back to Home; a second q asks to confirm the quit.
+        press(&mut s, KeyCode::Char('q'));
+        assert_eq!(s.screen, Screen::Home);
+        press(&mut s, KeyCode::Char('q'));
+        assert!(matches!(s.overlay, Some(Overlay::Confirm { .. })));
+        assert!(!s.should_quit);
+        press(&mut s, KeyCode::Char('n'));
+        assert_eq!(s.overlay, None);
+    }
+
+    #[test]
+    fn text_input_overlay_commits_tags() {
+        let mut s = state();
+        press(&mut s, KeyCode::Char('1'));
+        press(&mut s, KeyCode::Char('t'));
+        assert!(matches!(s.overlay, Some(Overlay::TextInput { .. })));
+        for c in "piling, slopes".chars() {
+            press(&mut s, KeyCode::Char(c));
+        }
+        press(&mut s, KeyCode::Enter);
+        assert_eq!(
+            s.chat.tags,
+            vec!["piling".to_string(), "slopes".to_string()]
+        );
+        assert_eq!(s.overlay, None);
+    }
+
+    #[test]
+    fn models_screen_navigation_and_pull() {
+        let mut s = state();
+        press(&mut s, KeyCode::Char('3'));
+        press(&mut s, KeyCode::Tab);
+        assert_eq!(
+            s.models.focus(),
+            crate::screens::models::ModelsFocus::Catalog
+        );
+        press(&mut s, KeyCode::Char('/'));
+        for c in "nomic".chars() {
+            press(&mut s, KeyCode::Char(c));
+        }
+        press(&mut s, KeyCode::Enter);
+        assert_eq!(s.models.catalog_query, "nomic");
+        let cmds = press(&mut s, KeyCode::Enter);
+        assert_eq!(
+            cmds,
+            vec![Cmd::PullModel {
+                spec: "nomic-embed-text-v1.5".into()
+            }]
+        );
     }
 }

@@ -25,6 +25,12 @@ tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 reqwest.workspace = true
 sha2.workspace = true
+minisign-verify.workspace = true
+semver.workspace = true
+tar.workspace = true
+flate2.workspace = true
+zip.workspace = true
+self-replace.workspace = true
 
 [lints]
 workspace = true

@@ -21,6 +21,10 @@ struct Cli {
     #[arg(long, global = true, env = "GEORAG_HOME", value_name = "DIR")]
     home: Option<PathBuf>,
 
+    /// Verify the engine after an update and exit (used by the updater)
+    #[arg(long, hide = true)]
+    self_check: bool,
+
     #[command(subcommand)]
     command: Option<Command>,
 }
@@ -104,6 +108,26 @@ enum Command {
     Conversations {
         #[command(subcommand)]
         cmd: ConversationsCmd,
+    },
+    /// Check for, download and apply a release
+    Update {
+        /// Only report whether a newer release exists
+        #[arg(long)]
+        check: bool,
+        /// stable | nightly (default from settings)
+        #[arg(long)]
+        channel: Option<String>,
+        /// Apply a bundle from disk instead of downloading
+        #[arg(long, value_name = "BUNDLE")]
+        file: Option<PathBuf>,
+        /// Put the previous version back
+        #[arg(long)]
+        rollback: bool,
+        /// Do not ask before applying
+        #[arg(long, short = 'y')]
+        yes: bool,
+        #[arg(long)]
+        json: bool,
     },
     /// Development helpers
     #[command(hide = true)]
@@ -205,6 +229,24 @@ fn main() -> ExitCode {
 fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let home = Home::resolve(cli.home.as_deref())?;
+    if cli.self_check {
+        let settings =
+            georag_core::config::Settings::load(&home.settings_path()).unwrap_or_default();
+        let report = doctor::run(
+            &home,
+            &settings,
+            &DoctorOptions {
+                backend: None,
+                ci: true,
+                scores: None,
+            },
+        )?;
+        println!(
+            "self-check ok: {} {} on {}",
+            report.version, report.flavour, report.backend.backend
+        );
+        return Ok(());
+    }
 
     match cli.command {
         Some(Command::Init) => {
@@ -355,6 +397,17 @@ fn run() -> anyhow::Result<()> {
         Some(Command::Conversations { cmd }) => {
             let _logs = logging::init(&home, true).ok();
             conversations_cmd(&home, cmd)
+        }
+        Some(Command::Update {
+            check,
+            channel,
+            file,
+            rollback,
+            yes,
+            json,
+        }) => {
+            let _logs = logging::init(&home, !json).ok();
+            update_cmd(&home, check, channel, file, rollback, yes, json)
         }
         Some(Command::Dev { cmd }) => {
             let _logs = logging::init(&home, true).ok();
@@ -748,5 +801,122 @@ fn conversations_cmd(home: &Home, cmd: ConversationsCmd) -> anyhow::Result<()> {
             println!("wrote {}", path.display());
         }
     }
+    Ok(())
+}
+
+fn update_cmd(
+    home: &Home,
+    check_only: bool,
+    channel: Option<String>,
+    file: Option<PathBuf>,
+    rollback: bool,
+    yes: bool,
+    json: bool,
+) -> anyhow::Result<()> {
+    use georag_core::update;
+    let current_exe = std::env::current_exe()?;
+    if rollback {
+        let done = update::rollback(home, &current_exe)?;
+        println!(
+            "{}",
+            if done {
+                "previous version restored"
+            } else {
+                "nothing to roll back: no .old copies found"
+            }
+        );
+        return Ok(());
+    }
+    let mut settings = georag_core::config::Settings::load(&home.settings_path())?;
+    let channel = channel.unwrap_or_else(|| settings.update.channel.clone());
+
+    let offline = file.is_some();
+    let staged = if let Some(bundle) = file {
+        let sha = update::verify_bundle(&bundle, None)?;
+        println!("bundle {} ({sha})", bundle.display());
+        update::stage(home, &bundle)?
+    } else {
+        let report = update::check(&channel)?;
+        if json && check_only {
+            println!("{}", serde_json::to_string_pretty(&report)?);
+            return Ok(());
+        }
+        println!(
+            "current {}  latest {} ({})",
+            report.current, report.latest, report.channel
+        );
+        for n in &report.notes {
+            println!("note: {n}");
+        }
+        if !report.newer {
+            println!("up to date");
+            return Ok(());
+        }
+        if !report.can_update_directly {
+            anyhow::bail!(
+                "this version is too old to update directly: install the latest release by hand"
+            );
+        }
+        let asset = report
+            .asset
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("no asset for this flavour"))?;
+        println!(
+            "newer release {} available: {} ({})",
+            report.latest,
+            asset.file,
+            georag_core::doctor::fmt_gib(asset.size)
+        );
+        if check_only {
+            let _ = update::check_for_notice(home, &mut settings);
+            return Ok(());
+        }
+        if !yes {
+            use std::io::Write;
+            print!("download and apply? [y/N] ");
+            std::io::stdout().flush()?;
+            let mut line = String::new();
+            std::io::stdin().read_line(&mut line)?;
+            if !line.trim().eq_ignore_ascii_case("y") {
+                println!("not updating");
+                return Ok(());
+            }
+        }
+        let bar = indicatif::ProgressBar::new(asset.size);
+        bar.set_style(
+            indicatif::ProgressStyle::with_template(
+                "{bar:30} {bytes}/{total_bytes} {bytes_per_sec} eta {eta}",
+            )
+            .expect("static template"),
+        );
+        let dl = update::download(home, &report, &channel, |bytes, total| {
+            if let Some(t) = total {
+                bar.set_length(t);
+            }
+            bar.set_position(bytes);
+        })?;
+        bar.finish_and_clear();
+        println!("downloaded and verified {}", dl.bundle.display());
+        update::stage(home, &dl.bundle)?
+    };
+    println!("staged at {}", staged.display());
+    if !yes && offline {
+        use std::io::Write;
+        print!("apply? [y/N] ");
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        if !line.trim().eq_ignore_ascii_case("y") {
+            println!("not applied; staged files stay in data/updates/staging");
+            return Ok(());
+        }
+    }
+    let report = update::apply(home, &staged, &current_exe)?;
+    if report.rolled_back {
+        anyhow::bail!(
+            "the new version failed its self-check and the previous version was restored"
+        );
+    }
+    println!("updated: run `georag doctor` to confirm");
     Ok(())
 }

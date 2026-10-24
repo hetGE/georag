@@ -44,6 +44,9 @@ pub enum CoreError {
     #[error("network error: {0}")]
     Network(String),
 
+    #[error("invalid JSON ({0})")]
+    Json(#[from] serde_json::Error),
+
     #[error(transparent)]
     Engine(#[from] georag_engine::EngineError),
 

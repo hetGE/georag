@@ -19,8 +19,11 @@ pub mod logging;
 pub mod models;
 pub mod retrieval;
 pub mod status;
+pub mod update;
 
 pub use error::CoreError;
+/// Store records front ends display; the store crate itself stays behind core.
+pub use georag_store::{Chunk, Conversation, Message, Pass, Source};
 pub use home::Home;
 
 /// Application version, from the workspace manifest.

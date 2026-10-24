@@ -97,6 +97,23 @@ impl App {
         )
     }
 
+    /// One chunk with its file path, for the sources pane.
+    pub fn chunk(&self, chunk_id: i64) -> Result<Option<georag_store::Chunk>> {
+        Ok(self.store.chunks_by_ids(&[chunk_id])?.into_iter().next())
+    }
+
+    /// Absolute path of a file: its root's path joined with the relative path.
+    pub fn file_path(&self, file_id: i64) -> Result<Option<std::path::PathBuf>> {
+        let Some(file) = self.store.file_get(file_id)? else {
+            return Ok(None);
+        };
+        let roots = self.store.roots()?;
+        Ok(roots
+            .into_iter()
+            .find(|r| r.id == file.root_id)
+            .map(|r| std::path::Path::new(&r.path).join(&file.rel_path)))
+    }
+
     pub fn chat_context(&self) -> ChatContext<'_> {
         ChatContext {
             store: &self.store,

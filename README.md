@@ -63,12 +63,23 @@ GeoRAG/
 ## Commands
 
 ```
-georag                 full-screen UI
-georag init            create the home layout
-georag doctor          build flavour, backend, device memory, model fit
-georag update          check, download, verify and apply a release
-georag import v1 PATH  import tags and the file list from a v1 _0RAG folder
+georag                       full-screen UI
+georag init                  create the home layout
+georag doctor                build flavour, backend, device memory, model fit
+georag status [--json]       home, engine, models, library and jobs at a glance
+georag models catalog        curated chat, vision and embedding models
+georag models pull ID        download a catalogue model, or ORG/REPO[:FILE]
+georag models use ROLE ID    choose the model in use for chat, embed or vision
+georag ask "question"        answer with citations; auto depth by default
+georag chat                  interactive questions in the terminal
+georag search "query"        hybrid search without asking the model
+georag conversations list    past conversations (show, rm, restore, export)
+georag update [--check]      check, download, verify and apply a release
+georag import v1 PATH        import tags and the file list from a v1 _0RAG folder
 ```
+
+First run: `georag models pull nomic-embed-text-v1.5` and
+`georag models pull qwen3.5-9b-q4_k_m`, then `georag`.
 
 The full command surface is in section 12 of the handoff document. Commands
 land phase by phase; `georag --help` lists what this build has.

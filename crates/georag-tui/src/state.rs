@@ -1,7 +1,18 @@
 //! UI state, messages and commands. Nothing here touches the terminal.
 
+use std::sync::Arc;
+
 use crossterm::event::{KeyEvent, MouseEvent};
+use georag_core::app::App;
+use georag_core::chat::{ChatEvent, RunOutcome};
+use georag_core::conversations::ConversationView;
+use georag_core::models::PullManager;
+use georag_core::models::ops::PullPlan;
 use georag_core::status::Snapshot;
+
+use crate::screens::chat::ChatState;
+use crate::screens::models::ModelsState;
+use crate::theme::Theme;
 
 /// Top-level screens. Chat to Settings are the five tabs; Import and Update
 /// are reached from Home.
@@ -42,8 +53,8 @@ impl Screen {
     /// Which phase delivers the screen; `None` once it exists.
     pub fn arrives_in(self) -> Option<&'static str> {
         match self {
-            Screen::Home => None,
-            Screen::Chat | Screen::Models | Screen::Update => Some("P1"),
+            Screen::Home | Screen::Chat | Screen::Models => None,
+            Screen::Update => Some("P1 (updater)"),
             Screen::Library | Screen::Settings | Screen::Import => Some("P2"),
             Screen::Status => Some("P3"),
         }
@@ -54,10 +65,43 @@ impl Screen {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputPurpose {
+    ChatTags,
+    ConversationFilter,
+    CatalogQuery,
+    LinkModel,
+    SetRole { id: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConfirmAction {
+    DeleteConversation { id: i64 },
+    RemoveModel { id: String },
+    CombineDone { message_id: i64 },
+    Quit,
+}
+
 /// Modal layers drawn over the current screen.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Overlay {
-    Help { scroll: u16 },
+    Help {
+        scroll: u16,
+    },
+    Confirm {
+        text: String,
+        on_yes: ConfirmAction,
+    },
+    TextInput {
+        title: String,
+        value: String,
+        purpose: InputPurpose,
+    },
+    Chunk {
+        title: String,
+        text: String,
+        scroll: u16,
+    },
 }
 
 /// One row of the Home menu.
@@ -96,11 +140,21 @@ pub enum HomeFocus {
     Checklist,
 }
 
-#[derive(Debug, Clone)]
+/// Engine state for the status bar.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EngineState {
+    NotLoaded,
+    Loading,
+    Ready,
+    Generating,
+    Failed(String),
+}
+
 pub struct State {
     pub screen: Screen,
     pub overlay: Option<Overlay>,
     pub snapshot: Snapshot,
+    pub theme: Theme,
     pub home_focus: HomeFocus,
     pub menu_cursor: usize,
     pub checklist_cursor: usize,
@@ -111,26 +165,56 @@ pub struct State {
     pub tick: u64,
     /// Toast text and ticks left (5 s at 250 ms per tick).
     pub toast: Option<(String, u32)>,
+    pub app: Option<Arc<App>>,
+    pub engine_state: EngineState,
+    pub chat: ChatState,
+    pub models: ModelsState,
+    pub pulls: Arc<PullManager>,
+    pub pending_pulls: Vec<PullPlan>,
 }
 
 pub const TOAST_TICKS: u32 = 20;
 
-#[derive(Debug, Clone)]
 pub enum Msg {
     Key(KeyEvent),
     Mouse(MouseEvent),
     Resize(u16, u16),
     Tick,
+    Chat(ChatEvent),
+    ChatFinished(Result<RunOutcome, String>),
+    AppReady(Arc<App>),
+    AppFailed(String),
+    ConversationLoaded(ConversationView),
+    ConversationsListed(Vec<georag_core::Conversation>),
+    ModelsChanged,
+    Toast(String),
 }
 
 /// Side effects requested by `update`; the loop performs them.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Cmd {
     Quit,
+    Ask { message: String },
+    OpenConversation { id: i64 },
+    DeleteConversation { id: i64 },
+    ExportConversation,
+    ViewChunk { chunk_id: i64 },
+    OpenFile { file_id: i64 },
+    CombineDone { message_id: i64 },
+    PullModel { spec: String },
+    PausePull { id: String },
+    UseModel { id: String },
+    RemoveModel { id: String },
+    VerifyModel { id: String },
+    LinkModel { spec: String },
+    SetRole { id: String, role: String },
+    RefreshModels,
+    RefreshConversations,
+    ReloadApp,
 }
 
 impl State {
-    pub fn new(snapshot: Snapshot, mouse: bool) -> State {
+    pub fn new(snapshot: Snapshot, mouse: bool, theme: Theme) -> State {
         let home_focus = if snapshot.is_first_run() {
             HomeFocus::Checklist
         } else {
@@ -140,6 +224,7 @@ impl State {
             screen: Screen::Home,
             overlay: None,
             snapshot,
+            theme,
             home_focus,
             menu_cursor: 0,
             checklist_cursor: 0,
@@ -149,6 +234,12 @@ impl State {
             height: 0,
             tick: 0,
             toast: None,
+            app: None,
+            engine_state: EngineState::NotLoaded,
+            chat: ChatState::default(),
+            models: ModelsState::default(),
+            pulls: Arc::new(PullManager::new()),
+            pending_pulls: Vec::new(),
         }
     }
 
@@ -188,8 +279,8 @@ impl State {
         self.toast = Some((text, TOAST_TICKS));
     }
 
-    /// True when a pass or job is running; nothing runs in P0.
+    /// True when a pass or job is running.
     pub fn busy(&self) -> bool {
-        false
+        self.chat.running
     }
 }

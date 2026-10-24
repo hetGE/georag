@@ -83,7 +83,22 @@ impl Store {
 
     fn migrate(&self) -> Result<()> {
         let mut conn = self.writer();
-        let tx = conn.transaction()?;
+        // Skip the write transaction when every migration is already applied,
+        // so a second open (another command, the TUI's list of conversations)
+        // never contends with a writer.
+        let applied: i64 = conn
+            .query_row("SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'", [], |r| r.get(0))
+            .unwrap_or(0);
+        if applied == 1 {
+            let done: i64 =
+                conn.query_row("SELECT COUNT(*) FROM schema_migrations", [], |r| r.get(0))?;
+            if done as usize >= MIGRATIONS.len() {
+                return Ok(());
+            }
+        }
+        // Immediate: take the write lock up front so busy_timeout applies
+        // instead of an instant BUSY on a read-to-write upgrade.
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         tx.execute_batch("CREATE TABLE IF NOT EXISTS schema_migrations(name TEXT PRIMARY KEY, applied_at TEXT NOT NULL);")?;
         for (name, sql) in MIGRATIONS {
             let applied: bool = tx.query_row(

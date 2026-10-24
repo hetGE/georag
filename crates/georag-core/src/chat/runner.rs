@@ -45,6 +45,15 @@ pub struct Controls {
     inner: Arc<Mutex<ControlsInner>>,
 }
 
+impl std::fmt::Debug for Controls {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let pending = self.inner.lock().map(|i| i.pending).unwrap_or(None);
+        f.debug_struct("Controls")
+            .field("pending", &pending)
+            .finish()
+    }
+}
+
 #[derive(Default)]
 struct ControlsInner {
     pending: Option<RunControl>,

@@ -10,7 +10,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use crate::state::{HOME_MENU, HomeFocus, Overlay, Screen, State};
+use crate::screens::{chat, models};
+use crate::state::{EngineState, HOME_MENU, HomeFocus, Overlay, Screen, State};
 use crate::theme::Theme;
 
 pub const NARROW: u16 = 80;
@@ -32,6 +33,8 @@ pub fn draw(frame: &mut Frame, state: &State, theme: &Theme) {
     draw_tab_row(frame, rows[1], state, theme);
     match state.screen {
         Screen::Home => draw_home(frame, rows[2], state, theme),
+        Screen::Chat => chat::draw(frame, rows[2], state, theme),
+        Screen::Models => models::draw(frame, rows[2], state, theme),
         other => draw_placeholder(frame, rows[2], other, theme),
     }
     draw_key_bar(frame, rows[3], state, theme);
@@ -46,29 +49,57 @@ pub fn draw(frame: &mut Frame, state: &State, theme: &Theme) {
 
 fn draw_status_bar(frame: &mut Frame, area: Rect, state: &State, theme: &Theme) {
     let s = &state.snapshot;
-    let engine = match (&s.backend, &s.backend_error) {
-        (Some(b), _) => format!(
-            "{} {} / {}",
-            b.backend,
-            fmt_gib(b.device.memory_total - b.device.memory_free),
-            fmt_gib(b.device.memory_total)
+    let (used, total) = match &state.app {
+        Some(app) => {
+            let st = app.engine.stats();
+            (
+                st.memory_used_bytes,
+                st.memory_total_bytes.max(
+                    s.backend
+                        .as_ref()
+                        .map(|b| b.device.memory_total)
+                        .unwrap_or(0),
+                ),
+            )
+        }
+        None => (
+            0,
+            s.backend
+                .as_ref()
+                .map(|b| b.device.memory_total)
+                .unwrap_or(0),
         ),
-        (None, Some(_)) => "engine unavailable".to_string(),
-        (None, None) => "engine not probed".to_string(),
     };
-    let model_state = match &s.models.chat {
-        Some(m) => format!("{m} ready"),
-        None => "no model".to_string(),
+    let backend = s
+        .backend
+        .as_ref()
+        .map(|b| b.backend.to_string())
+        .unwrap_or_else(|| "no backend".into());
+    let engine = match &state.engine_state {
+        EngineState::NotLoaded => "no model".to_string(),
+        EngineState::Loading => "loading".to_string(),
+        EngineState::Ready => match &state.app {
+            Some(app) => {
+                let st = app.engine.stats();
+                format!("ready, ctx {}", st.n_ctx)
+            }
+            None => "ready".to_string(),
+        },
+        EngineState::Generating => match &state.app {
+            Some(app) => format!("generating {:.0} t/s", app.engine.stats().tokens_per_second),
+            None => "generating".to_string(),
+        },
+        EngineState::Failed(_) => "engine failed".to_string(),
     };
     let segments = [
         format!("georag {}", s.version),
         s.home.display().to_string(),
-        model_state,
         engine,
+        format!("{backend} {} / {}", fmt_gib(used), fmt_gib(total)),
     ];
     let left = fit_segments(&segments, area.width as usize);
     frame.render_widget(Paragraph::new(left).style(theme.bar()), area);
-    // Right-aligned update notice goes here once the updater (P1) reports one.
+    // Right-aligned update notice goes here once the updater reports one.
 }
 
 /// Join segments with a separator, dropping from the right until it fits.
@@ -130,9 +161,13 @@ fn draw_tab_row(frame: &mut Frame, area: Rect, state: &State, theme: &Theme) {
 }
 
 fn draw_key_bar(frame: &mut Frame, area: Rect, state: &State, theme: &Theme) {
-    let keys: &[(&str, &str)] = match (&state.overlay, state.screen) {
-        (Some(Overlay::Help { .. }), _) => &[("j k", "scroll"), ("esc", "close")],
-        (None, Screen::Home) => &[
+    let keys: Vec<(&str, &str)> = match (&state.overlay, state.screen) {
+        (Some(Overlay::Help { .. }), _) | (Some(Overlay::Chunk { .. }), _) => {
+            vec![("j k", "scroll"), ("esc", "close")]
+        }
+        (Some(Overlay::Confirm { .. }), _) => vec![("y", "yes"), ("n", "no")],
+        (Some(Overlay::TextInput { .. }), _) => vec![("enter", "apply"), ("esc", "cancel")],
+        (None, Screen::Home) => vec![
             ("1-5", "screens"),
             ("j k", "move"),
             ("enter", "open"),
@@ -141,7 +176,9 @@ fn draw_key_bar(frame: &mut Frame, area: Rect, state: &State, theme: &Theme) {
             ("?", "help"),
             ("q", "quit"),
         ],
-        (None, _) => &[
+        (None, Screen::Chat) => chat::key_bar(state),
+        (None, Screen::Models) => models::key_bar(state),
+        (None, _) => vec![
             ("1-5", "screens"),
             ("tab", "next"),
             ("?", "help"),
@@ -165,7 +202,6 @@ fn draw_key_bar(frame: &mut Frame, area: Rect, state: &State, theme: &Theme) {
 fn draw_home(frame: &mut Frame, area: Rect, state: &State, theme: &Theme) {
     let narrow = area.width < NARROW;
     if narrow {
-        // One pane: the one with the cursor.
         match state.home_focus {
             HomeFocus::Menu => draw_menu(frame, area, state, theme),
             HomeFocus::Checklist => draw_right_pane(frame, area, state, theme),
@@ -271,7 +307,17 @@ fn draw_glance(frame: &mut Frame, area: Rect, state: &State, theme: &Theme) {
     let mut lines = glance_lines(state, theme);
     lines.push(Line::from(""));
     lines.push(Line::styled("Recent conversations", theme.accent()));
-    lines.push(Line::styled("  none yet", theme.dim()));
+    if state.chat.conversations.is_empty() {
+        lines.push(Line::styled("  none yet", theme.dim()));
+    } else {
+        for c in state.chat.conversations.iter().take(8) {
+            lines.push(Line::from(format!(
+                "  {}  {}",
+                &c.updated_at[..10.min(c.updated_at.len())],
+                c.title.as_deref().unwrap_or("(untitled)")
+            )));
+        }
+    }
     let block = Block::default()
         .borders(Borders::ALL)
         .title(" At a glance ")
@@ -303,18 +349,23 @@ fn glance_lines(state: &State, theme: &Theme) -> Vec<Line<'static>> {
             Span::raw(v),
         ])
     };
+    let models = match &state.app {
+        Some(app) => format!(
+            "chat {}, embed {}",
+            app.plan.chat_id.as_deref().unwrap_or("none"),
+            app.plan.embed_id.as_deref().unwrap_or("none")
+        ),
+        None => format!(
+            "chat {}, embed {}",
+            s.models.chat.as_deref().unwrap_or("none"),
+            s.models.embed.as_deref().unwrap_or("none")
+        ),
+    };
     vec![
         Line::styled("At a glance", theme.accent()),
         row("flavour", s.flavour.to_string()),
         row("engine", engine),
-        row(
-            "models",
-            format!(
-                "chat {}, embed {}",
-                s.models.chat.as_deref().unwrap_or("none"),
-                s.models.embed.as_deref().unwrap_or("none")
-            ),
-        ),
+        row("models", models),
         row("roots", s.roots.len().to_string()),
         row(
             "files",
@@ -364,21 +415,24 @@ fn draw_placeholder(frame: &mut Frame, area: Rect, screen: Screen, theme: &Theme
 
 const HELP: &[(&str, &str)] = &[
     ("1 to 5", "jump to Chat, Library, Models, Status, Settings"),
-    ("tab, shift-tab", "next and previous tab"),
+    ("tab, shift-tab", "next pane, or next tab"),
     ("j k, arrows", "move the cursor"),
     ("pgup pgdn", "page"),
     ("g G", "first and last row"),
+    ("/ n N", "filter, next and previous match"),
+    ("enter", "open the highlighted item, or send a question"),
     (
-        "/ n N",
-        "filter, next and previous match (Library and Chat)",
+        "alt-enter",
+        "new line in the question box (ctrl-j on legacy consoles)",
     ),
-    ("enter", "open the highlighted item"),
     ("?", "this help"),
     ("esc", "close an overlay, or stop the current run"),
+    ("s a", "skip or accept the current pass during a run"),
     ("q", "back to Home, then quit"),
     ("ctrl-c", "quit now; the daemon keeps running"),
-    ("y", "copy (OSC 52, else data/clipboard.txt)"),
-    ("e", "export the conversation to markdown in exports/"),
+    ("d t", "chat: cycle depth, set tags"),
+    ("c S", "chat: toggle the conversations and sources panes"),
+    ("e", "chat: export the conversation to markdown in exports/"),
     ("i", "import from v1 (Home)"),
     ("u", "update (Home)"),
 ];
@@ -386,7 +440,7 @@ const HELP: &[(&str, &str)] = &[
 fn draw_overlay(frame: &mut Frame, area: Rect, overlay: &Overlay, theme: &Theme) {
     match overlay {
         Overlay::Help { scroll } => {
-            let width = area.width.clamp(20, 70);
+            let width = area.width.clamp(20, 76);
             let height = area.height.min(HELP.len() as u16 + 4).max(5);
             let rect = centred(area, width, height);
             frame.render_widget(Clear, rect);
@@ -411,6 +465,45 @@ fn draw_overlay(frame: &mut Frame, area: Rect, overlay: &Overlay, theme: &Theme)
                 rect,
             );
         }
+        Overlay::Confirm { text, .. } => {
+            let width = (text.width() as u16 + 6).clamp(24, area.width);
+            let rect = centred(area, width, 5);
+            frame.render_widget(Clear, rect);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(" Confirm ")
+                .border_style(Style::default().fg(theme.warn));
+            let lines = vec![
+                Line::raw(text.clone()),
+                Line::styled("y yes · n no", theme.dim()),
+            ];
+            frame.render_widget(
+                Paragraph::new(lines)
+                    .block(block)
+                    .wrap(Wrap { trim: false }),
+                rect,
+            );
+        }
+        Overlay::TextInput { title, value, .. } => {
+            let width = area.width.clamp(30, 90);
+            let rect = centred(area, width, 5);
+            frame.render_widget(Clear, rect);
+            let block = Block::default()
+                .borders(Borders::ALL)
+                .title(format!(" {title} "))
+                .border_style(theme.accent());
+            frame.render_widget(
+                Paragraph::new(Line::raw(format!("{value}▏")))
+                    .block(block)
+                    .wrap(Wrap { trim: false }),
+                rect,
+            );
+        }
+        Overlay::Chunk {
+            title,
+            text,
+            scroll,
+        } => chat::draw_chunk_overlay(frame, area, title, text, *scroll, theme),
     }
 }
 
@@ -441,6 +534,7 @@ fn centred(area: Rect, width: u16, height: u16) -> Rect {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::Depth;
     use georag_core::status::Snapshot;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
@@ -449,7 +543,7 @@ mod tests {
     fn render(width: u16, height: u16, state: &State) -> String {
         let backend = TestBackend::new(width, height);
         let mut terminal = Terminal::new(backend).unwrap();
-        let theme = Theme::with_depth(crate::theme::Depth::Basic16);
+        let theme = Theme::with_depth(Depth::Basic16);
         terminal.draw(|f| draw(f, state, &theme)).unwrap();
         let buffer = terminal.backend().buffer().clone();
         let mut out = String::new();
@@ -463,7 +557,11 @@ mod tests {
     }
 
     fn state() -> State {
-        State::new(Snapshot::empty(PathBuf::from("/tmp/georag-test")), true)
+        State::new(
+            Snapshot::empty(PathBuf::from("/tmp/georag-test")),
+            true,
+            Theme::with_depth(Depth::Basic16),
+        )
     }
 
     #[test]
@@ -487,14 +585,73 @@ mod tests {
     }
 
     #[test]
-    fn help_overlay_and_placeholder_render() {
+    fn chat_and_models_screens_render() {
+        let mut s = state();
+        s.screen = Screen::Chat;
+        s.chat.run = Some(crate::screens::chat::RunView {
+            question: "How deep?".into(),
+            plan: Some(georag_core::chat::PlanSummary {
+                passes: 3,
+                kept: 9,
+                total_tokens: 3000,
+                dropped: 0,
+                fallback: false,
+                budget: 1200,
+                min_relevance: 0.65,
+            }),
+            passes: vec![crate::screens::chat::PassView {
+                k: 1,
+                sources_from: 1,
+                sources_to: 3,
+                status: Some(georag_core::chat::PassStatus::Done),
+                text: "Twelve metres [S1]".into(),
+                cut_off: false,
+            }],
+            ..Default::default()
+        });
+        let text = render(120, 30, &s);
+        assert!(text.contains("1 ✓ done"));
+        assert!(text.contains("final ○"));
+        assert!(text.contains("Twelve metres"));
+        let narrow = render(60, 24, &s);
+        assert!(narrow.contains("Chat"));
+
+        s.screen = Screen::Models;
+        let text = render(120, 30, &s);
+        assert!(text.contains("Catalogue"));
+        assert!(text.contains("qwen3.5-9b-q4_k_m"));
+        s.models.catalog_cursor = s.models.catalog().len() - 1;
+        let text = render(120, 30, &s);
+        assert!(
+            text.contains("nomic-embed-text-v1.5"),
+            "cursor on the last entry scrolls it into view:\n{text}"
+        );
+        let text = render(40, 12, &s);
+        assert!(text.contains("Installed"), "40x12 render:\n{text}");
+    }
+
+    #[test]
+    fn overlays_render() {
         let mut s = state();
         s.overlay = Some(Overlay::Help { scroll: 0 });
         assert!(render(100, 30, &s).contains("Keys"));
-        let mut s = state();
-        s.screen = Screen::Chat;
-        let text = render(100, 30, &s);
-        assert!(text.contains("arrives in phase P1"));
+        s.overlay = Some(Overlay::Confirm {
+            text: "Sure?".into(),
+            on_yes: crate::state::ConfirmAction::Quit,
+        });
+        assert!(render(100, 30, &s).contains("Sure?"));
+        s.overlay = Some(Overlay::TextInput {
+            title: "Tags".into(),
+            value: "piling".into(),
+            purpose: crate::state::InputPurpose::ChatTags,
+        });
+        assert!(render(100, 30, &s).contains("piling"));
+        s.overlay = Some(Overlay::Chunk {
+            title: "a.pdf p.3".into(),
+            text: "chunk text".into(),
+            scroll: 0,
+        });
+        assert!(render(100, 30, &s).contains("chunk text"));
     }
 
     #[test]

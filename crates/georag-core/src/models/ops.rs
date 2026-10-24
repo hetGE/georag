@@ -307,3 +307,35 @@ pub fn verify(home: &Home, registry: &Registry, id: &str) -> Result<VerifyReport
         ok,
     })
 }
+
+/// Largest context that fits for each installed chat model, from its header
+/// and the free memory given (the embedding model in use is reserved).
+pub fn fit_summary(
+    home: &Home,
+    registry: &Registry,
+    settings: &crate::config::Settings,
+    free_bytes: u64,
+) -> Vec<(String, Option<u32>)> {
+    use georag_engine::fit::{FitInput, max_ctx_that_fits};
+    let reserved = registry
+        .in_use(ModelRole::Embed)
+        .and_then(|m| m.size_bytes)
+        .unwrap_or(0);
+    let input = FitInput {
+        free_bytes,
+        reserved_bytes: reserved,
+        max_ctx: settings.engine.max_ctx,
+    };
+    registry
+        .models
+        .iter()
+        .filter(|m| m.role == ModelRole::Chat)
+        .map(|m| {
+            let path = m.resolve_path(home);
+            let fit = GgufInfo::read(&path)
+                .ok()
+                .and_then(|info| max_ctx_that_fits(&info, &settings.engine.kv_cache_type, input));
+            (m.id.clone(), fit)
+        })
+        .collect()
+}
