@@ -17,6 +17,7 @@ use tokio::sync::mpsc;
 
 use crate::TuiError;
 use crate::screens::chat;
+use crate::screens::update::UpdatePhase;
 use crate::state::{Cmd, EngineState, Msg, Overlay, State};
 use crate::theme::Theme;
 use crate::update::update;
@@ -89,6 +90,22 @@ fn spawn_reader(tx: mpsc::Sender<Msg>) {
         .expect("spawning the input thread");
 }
 
+/// Once-a-day release check for the status-bar notice; never installs.
+fn spawn_update_notice(home: Home, tx: mpsc::Sender<Msg>) {
+    std::thread::spawn(move || {
+        let mut settings =
+            georag_core::config::Settings::load(&home.settings_path()).unwrap_or_default();
+        match georag_core::update::check_for_notice(&home, &mut settings) {
+            Ok(Some(n)) if n.newer => {
+                let _ =
+                    tx.blocking_send(Msg::UpdateNotice(format!("update {} available", n.latest)));
+            }
+            Ok(_) => {}
+            Err(e) => tracing::info!("update check skipped: {e}"),
+        }
+    });
+}
+
 /// Load models on a thread; the UI opens at once and shows "loading".
 fn spawn_app_open(home: Home, tx: mpsc::Sender<Msg>) {
     std::thread::Builder::new()
@@ -156,6 +173,7 @@ async fn event_loop_inner(
     }
     perform(Cmd::RefreshConversations, state, home, &tx);
     perform(Cmd::RefreshModels, state, home, &tx);
+    spawn_update_notice(home.clone(), tx.clone());
 
     loop {
         terminal
@@ -445,6 +463,86 @@ fn perform(cmd: Cmd, state: &mut State, home: &Home, tx: &mpsc::Sender<Msg>) {
                 Err(e) => state.show_toast(e.to_string()),
             }
             perform(Cmd::RefreshModels, state, home, tx);
+        }
+        Cmd::UpdateCheck => {
+            state.update.phase = UpdatePhase::Checking;
+            let channel = georag_core::config::Settings::load(&home.settings_path())
+                .map(|s| s.update.channel)
+                .unwrap_or_else(|_| "stable".into());
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let result = georag_core::update::check(&channel).map(|r| {
+                    let notes = georag_core::update::fetch_notes(&r).unwrap_or_default();
+                    (r, notes)
+                });
+                let _ = tx.blocking_send(Msg::UpdateChecked(result.map_err(|e| e.to_string())));
+            });
+        }
+        Cmd::UpdateDownload => {
+            let Some(report) = state.update.report.clone() else {
+                return;
+            };
+            state.update.phase = UpdatePhase::Downloading {
+                bytes: 0,
+                total: report.asset.as_ref().map(|a| a.size),
+            };
+            let channel = georag_core::config::Settings::load(&home.settings_path())
+                .map(|s| s.update.channel)
+                .unwrap_or_else(|_| "stable".into());
+            let home = home.clone();
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let progress_tx = tx.clone();
+                let result =
+                    georag_core::update::download(&home, &report, &channel, |bytes, total| {
+                        let _ = progress_tx.try_send(Msg::UpdateProgress { bytes, total });
+                    })
+                    .and_then(|dl| georag_core::update::stage(&home, &dl.bundle));
+                let _ = tx.blocking_send(Msg::UpdateStaged(result.map_err(|e| e.to_string())));
+            });
+        }
+        Cmd::UpdateApply => {
+            let UpdatePhase::Staged(staged) = state.update.phase.clone() else {
+                return;
+            };
+            if state.chat.running {
+                state.show_toast("finish or stop the run before updating");
+                return;
+            }
+            // Drain: unload the engine so the new binary can take over cleanly.
+            state.app = None;
+            state.engine_state = EngineState::NotLoaded;
+            state.update.phase = UpdatePhase::Applying;
+            let home = home.clone();
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let result = std::env::current_exe()
+                    .map_err(|e| e.to_string())
+                    .and_then(|exe| georag_core::update::apply(&home, &staged, &exe).map_err(|e| e.to_string()))
+                    .and_then(|r| {
+                        if r.rolled_back {
+                            Err("the new version failed its self-check; the previous version was restored".to_string())
+                        } else {
+                            Ok("updated: quit and start GeoRAG again to run the new version".to_string())
+                        }
+                    });
+                let _ = tx.blocking_send(Msg::UpdateApplied(result));
+            });
+        }
+        Cmd::UpdateRollback => {
+            let result = std::env::current_exe()
+                .map_err(|e| e.to_string())
+                .and_then(|exe| {
+                    georag_core::update::rollback(home, &exe).map_err(|e| e.to_string())
+                });
+            match result {
+                Ok(true) => {
+                    state.update.phase =
+                        UpdatePhase::Done("previous version restored: quit and start again".into())
+                }
+                Ok(false) => state.show_toast("nothing to roll back: no .old copies found"),
+                Err(e) => state.update.phase = UpdatePhase::Failed(e),
+            }
         }
         Cmd::ReloadApp => {
             if state.chat.running {

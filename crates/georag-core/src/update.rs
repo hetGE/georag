@@ -136,6 +136,8 @@ pub fn check(channel: &str) -> Result<CheckReport> {
         .map_err(|e| CoreError::Invalid(format!("manifest version {:?}: {e}", manifest.version)))?;
     let min = semver::Version::parse(&manifest.min_version_for_update)
         .unwrap_or_else(|_| semver::Version::new(0, 0, 0));
+    // A dev or pre-release build counts as its base version for the gate.
+    let current_base = semver::Version::new(current.major, current.minor, current.patch);
     let asset = manifest.assets.get(crate::FLAVOUR).cloned();
     if asset.is_none() {
         notes.push(format!(
@@ -148,12 +150,18 @@ pub fn check(channel: &str) -> Result<CheckReport> {
         latest: latest.to_string(),
         channel: manifest.channel.clone(),
         newer: latest > current,
-        can_update_directly: current >= min,
+        can_update_directly: current_base >= min,
         signature_verified,
         asset,
         notes_url: format!("{base}/{}", manifest.notes),
         notes,
     })
+}
+
+/// Fetch the release notes named by a check report.
+pub fn fetch_notes(report: &CheckReport) -> Result<String> {
+    let client = client()?;
+    Ok(fetch_text(&client, &report.notes_url)?.unwrap_or_default())
 }
 
 /// Cached notice for the status bar, written by `check_for_notice`.

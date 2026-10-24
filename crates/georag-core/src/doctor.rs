@@ -229,9 +229,22 @@ fn score_distribution(
     Ok(Some(deciles))
 }
 
-/// Bytes as GiB with one decimal, for people.
+/// Bytes as GiB with one decimal, for people. Below one GiB the unit drops
+/// to MiB or KiB so small files do not read as zero.
 pub fn fmt_gib(bytes: u64) -> String {
-    format!("{:.1} GiB", bytes as f64 / (1u64 << 30) as f64)
+    const GIB: f64 = (1u64 << 30) as f64;
+    const MIB: f64 = (1u64 << 20) as f64;
+    const KIB: f64 = 1024.0;
+    let b = bytes as f64;
+    if b >= GIB {
+        format!("{:.1} GiB", b / GIB)
+    } else if b >= MIB {
+        format!("{:.0} MiB", b / MIB)
+    } else if b >= KIB {
+        format!("{:.0} KiB", b / KIB)
+    } else {
+        format!("{bytes} B")
+    }
 }
 
 impl fmt::Display for DoctorReport {
@@ -346,7 +359,9 @@ mod tests {
 
     #[test]
     fn gib_formatting() {
-        assert_eq!(fmt_gib(0), "0.0 GiB");
+        assert_eq!(fmt_gib(0), "0 B");
+        assert_eq!(fmt_gib(2_771_341), "3 MiB");
+        assert_eq!(fmt_gib(146_146_432), "139 MiB");
         assert_eq!(fmt_gib(16 << 30), "16.0 GiB");
         assert_eq!(fmt_gib((16u64 << 30) + (1 << 29)), "16.5 GiB");
     }

@@ -4,7 +4,8 @@ use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 
-use crate::screens::{chat, models};
+use crate::screens::update::UpdatePhase;
+use crate::screens::{chat, models, update as update_screen};
 use crate::state::{
     Cmd, ConfirmAction, EngineState, HOME_MENU, HomeFocus, InputPurpose, MenuItem, Msg, Overlay,
     Screen, State,
@@ -116,6 +117,42 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
             state.show_toast(text);
             Vec::new()
         }
+        Msg::UpdateChecked(result) => {
+            match result {
+                Ok((report, notes)) => {
+                    if report.newer {
+                        state.update_notice = Some(format!("update {} available", report.latest));
+                    }
+                    state.update.report = Some(report);
+                    state.update.notes = notes;
+                    state.update.phase = UpdatePhase::Checked;
+                }
+                Err(e) => state.update.phase = UpdatePhase::Failed(e),
+            }
+            Vec::new()
+        }
+        Msg::UpdateProgress { bytes, total } => {
+            state.update.phase = UpdatePhase::Downloading { bytes, total };
+            Vec::new()
+        }
+        Msg::UpdateStaged(result) => {
+            state.update.phase = match result {
+                Ok(p) => UpdatePhase::Staged(p),
+                Err(e) => UpdatePhase::Failed(e),
+            };
+            Vec::new()
+        }
+        Msg::UpdateApplied(result) => {
+            state.update.phase = match result {
+                Ok(s) => UpdatePhase::Done(s),
+                Err(e) => UpdatePhase::Failed(e),
+            };
+            Vec::new()
+        }
+        Msg::UpdateNotice(text) => {
+            state.update_notice = Some(text);
+            Vec::new()
+        }
     }
 }
 
@@ -160,6 +197,7 @@ fn on_key(state: &mut State, key: KeyEvent) -> Vec<Cmd> {
     match state.screen {
         Screen::Home => on_home_key(state, key),
         Screen::Models => models::on_key(state, key),
+        Screen::Update => update_screen::on_key(state, key),
         _ => Vec::new(),
     }
 }
@@ -284,6 +322,8 @@ fn on_overlay_key(state: &mut State, overlay: Overlay, key: KeyEvent) -> Vec<Cmd
                     ConfirmAction::CombineDone { message_id } => {
                         vec![Cmd::CombineDone { message_id }]
                     }
+                    ConfirmAction::ApplyUpdate => vec![Cmd::UpdateApply],
+                    ConfirmAction::RollbackUpdate => vec![Cmd::UpdateRollback],
                     ConfirmAction::Quit => {
                         state.should_quit = true;
                         vec![Cmd::Quit]

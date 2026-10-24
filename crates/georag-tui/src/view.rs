@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use crate::screens::{chat, models};
+use crate::screens::{chat, models, update as update_screen};
 use crate::state::{EngineState, HOME_MENU, HomeFocus, Overlay, Screen, State};
 use crate::theme::Theme;
 
@@ -35,6 +35,7 @@ pub fn draw(frame: &mut Frame, state: &State, theme: &Theme) {
         Screen::Home => draw_home(frame, rows[2], state, theme),
         Screen::Chat => chat::draw(frame, rows[2], state, theme),
         Screen::Models => models::draw(frame, rows[2], state, theme),
+        Screen::Update => update_screen::draw(frame, rows[2], state, theme),
         other => draw_placeholder(frame, rows[2], other, theme),
     }
     draw_key_bar(frame, rows[3], state, theme);
@@ -97,9 +98,27 @@ fn draw_status_bar(frame: &mut Frame, area: Rect, state: &State, theme: &Theme) 
         engine,
         format!("{backend} {} / {}", fmt_gib(used), fmt_gib(total)),
     ];
-    let left = fit_segments(&segments, area.width as usize);
+    let notice = state.update_notice.clone().unwrap_or_default();
+    let room = (area.width as usize).saturating_sub(if notice.is_empty() {
+        0
+    } else {
+        notice.width() + 2
+    });
+    let left = fit_segments(&segments, room);
     frame.render_widget(Paragraph::new(left).style(theme.bar()), area);
-    // Right-aligned update notice goes here once the updater reports one.
+    if !notice.is_empty() && (notice.width() as u16) < area.width {
+        let w = notice.width() as u16;
+        let rect = Rect {
+            x: area.x + area.width - w,
+            y: area.y,
+            width: w,
+            height: 1,
+        };
+        frame.render_widget(
+            Paragraph::new(notice).style(theme.bar().add_modifier(Modifier::BOLD)),
+            rect,
+        );
+    }
 }
 
 /// Join segments with a separator, dropping from the right until it fits.
@@ -178,6 +197,7 @@ fn draw_key_bar(frame: &mut Frame, area: Rect, state: &State, theme: &Theme) {
         ],
         (None, Screen::Chat) => chat::key_bar(state),
         (None, Screen::Models) => models::key_bar(state),
+        (None, Screen::Update) => update_screen::key_bar(state),
         (None, _) => vec![
             ("1-5", "screens"),
             ("tab", "next"),

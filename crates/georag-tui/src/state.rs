@@ -9,9 +9,11 @@ use georag_core::conversations::ConversationView;
 use georag_core::models::PullManager;
 use georag_core::models::ops::PullPlan;
 use georag_core::status::Snapshot;
+use georag_core::update::CheckReport;
 
 use crate::screens::chat::ChatState;
 use crate::screens::models::ModelsState;
+use crate::screens::update::UpdateState;
 use crate::theme::Theme;
 
 /// Top-level screens. Chat to Settings are the five tabs; Import and Update
@@ -53,8 +55,7 @@ impl Screen {
     /// Which phase delivers the screen; `None` once it exists.
     pub fn arrives_in(self) -> Option<&'static str> {
         match self {
-            Screen::Home | Screen::Chat | Screen::Models => None,
-            Screen::Update => Some("P1 (updater)"),
+            Screen::Home | Screen::Chat | Screen::Models | Screen::Update => None,
             Screen::Library | Screen::Settings | Screen::Import => Some("P2"),
             Screen::Status => Some("P3"),
         }
@@ -79,6 +80,8 @@ pub enum ConfirmAction {
     DeleteConversation { id: i64 },
     RemoveModel { id: String },
     CombineDone { message_id: i64 },
+    ApplyUpdate,
+    RollbackUpdate,
     Quit,
 }
 
@@ -171,6 +174,9 @@ pub struct State {
     pub models: ModelsState,
     pub pulls: Arc<PullManager>,
     pub pending_pulls: Vec<PullPlan>,
+    pub update: UpdateState,
+    /// Right-aligned status bar notice when a newer release is known.
+    pub update_notice: Option<String>,
 }
 
 pub const TOAST_TICKS: u32 = 20;
@@ -188,6 +194,11 @@ pub enum Msg {
     ConversationsListed(Vec<georag_core::Conversation>),
     ModelsChanged,
     Toast(String),
+    UpdateChecked(Result<(CheckReport, String), String>),
+    UpdateProgress { bytes: u64, total: Option<u64> },
+    UpdateStaged(Result<std::path::PathBuf, String>),
+    UpdateApplied(Result<String, String>),
+    UpdateNotice(String),
 }
 
 /// Side effects requested by `update`; the loop performs them.
@@ -211,6 +222,10 @@ pub enum Cmd {
     RefreshModels,
     RefreshConversations,
     ReloadApp,
+    UpdateCheck,
+    UpdateDownload,
+    UpdateApply,
+    UpdateRollback,
 }
 
 impl State {
@@ -240,6 +255,8 @@ impl State {
             models: ModelsState::default(),
             pulls: Arc::new(PullManager::new()),
             pending_pulls: Vec::new(),
+            update: UpdateState::default(),
+            update_notice: None,
         }
     }
 
