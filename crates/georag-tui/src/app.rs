@@ -106,6 +106,58 @@ fn spawn_update_notice(home: Home, tx: mpsc::Sender<Msg>) {
     });
 }
 
+/// Watch the roots while the UI is open; changes rescan and queue indexing.
+fn spawn_watcher(home: Home, tx: mpsc::Sender<Msg>) {
+    std::thread::Builder::new()
+        .name("georag-watch".into())
+        .spawn(move || {
+            let Ok(store) = georag_core::app::open_store(&home) else {
+                return;
+            };
+            let roots: Vec<std::path::PathBuf> = store
+                .roots()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|r| std::path::PathBuf::from(r.path))
+                .collect();
+            if roots.is_empty() {
+                return;
+            }
+            let debounce = georag_core::config::Settings::load(&home.settings_path())
+                .map(|s| Duration::from_millis(s.index.watch_debounce_ms))
+                .unwrap_or(Duration::from_secs(2));
+            let watcher = match georag_core::pipeline::watch::Watcher::new(&roots, debounce) {
+                Ok(w) => w,
+                Err(e) => {
+                    tracing::warn!("{e}");
+                    return;
+                }
+            };
+            loop {
+                if tx.is_closed() {
+                    return;
+                }
+                let changed = watcher.changed_roots(Duration::from_secs(5));
+                if changed.is_empty() {
+                    continue;
+                }
+                for root in store.roots().unwrap_or_default() {
+                    if changed
+                        .iter()
+                        .any(|c| c == std::path::Path::new(&root.path))
+                    {
+                        if let Err(e) = georag_core::pipeline::scan_root(&store, &root) {
+                            tracing::warn!("{e}");
+                        }
+                    }
+                }
+                let _ = tx.blocking_send(Msg::Toast("library changed: indexing".into()));
+                let _ = tx.blocking_send(Msg::StartIndexing);
+            }
+        })
+        .expect("spawning the watcher thread");
+}
+
 /// Load models on a thread; the UI opens at once and shows "loading".
 fn spawn_app_open(home: Home, tx: mpsc::Sender<Msg>) {
     std::thread::Builder::new()
@@ -136,6 +188,9 @@ async fn event_loop(
 fn shutdown(state: &mut State) {
     if let Some(c) = &state.chat.controls {
         c.request(georag_core::chat::RunControl::StopAll);
+    }
+    if let Some(flag) = &state.indexing {
+        flag.store(false, std::sync::atomic::Ordering::Relaxed);
     }
     if let Some(handle) = state.chat.thread.take() {
         let deadline = std::time::Instant::now() + Duration::from_secs(8);
@@ -174,6 +229,7 @@ async fn event_loop_inner(
     perform(Cmd::RefreshConversations, state, home, &tx);
     perform(Cmd::RefreshModels, state, home, &tx);
     spawn_update_notice(home.clone(), tx.clone());
+    spawn_watcher(home.clone(), tx.clone());
 
     loop {
         terminal
@@ -543,6 +599,237 @@ fn perform(cmd: Cmd, state: &mut State, home: &Home, tx: &mpsc::Sender<Msg>) {
                 Ok(false) => state.show_toast("nothing to roll back: no .old copies found"),
                 Err(e) => state.update.phase = UpdatePhase::Failed(e),
             }
+        }
+        Cmd::RefreshLibrary => {
+            let home = home.clone();
+            let query = state.library.query.clone();
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let result = (|| -> Result<Msg, String> {
+                    let store = georag_core::app::open_store(&home).map_err(|e| e.to_string())?;
+                    let q = georag_core::FileQuery {
+                        limit: 5000,
+                        ..query
+                    };
+                    let files = store.files_query(&q).map_err(|e| e.to_string())?;
+                    let facets = store.files_facets(&q).map_err(|e| e.to_string())?;
+                    let mut tags = std::collections::HashMap::new();
+                    for f in &files {
+                        let t: Vec<String> = store
+                            .file_tags(f.id)
+                            .map_err(|e| e.to_string())?
+                            .into_iter()
+                            .map(|t| t.tag)
+                            .collect();
+                        if !t.is_empty() {
+                            tags.insert(f.id, t);
+                        }
+                    }
+                    Ok(Msg::LibraryLoaded {
+                        files,
+                        tags,
+                        facets,
+                    })
+                })();
+                let _ = tx.blocking_send(result.unwrap_or_else(Msg::Toast));
+            });
+        }
+        Cmd::OpenRecord { file_id } => {
+            match georag_core::app::open_store(home).and_then(|store| {
+                let file = store
+                    .file_get(file_id)?
+                    .ok_or_else(|| georag_core::CoreError::Invalid("file not found".into()))?;
+                let tags = store.file_tags(file_id)?;
+                let chunks = store.chunks_for_file(file_id)?;
+                Ok(crate::screens::library::RecordView {
+                    file,
+                    tags,
+                    chunks,
+                    scroll: 0,
+                })
+            }) {
+                Ok(rec) => state.library.record = Some(rec),
+                Err(e) => state.show_toast(e.to_string()),
+            }
+        }
+        Cmd::TagFiles { ids, tag, remove } => {
+            match georag_core::app::open_store(home) {
+                Ok(store) => {
+                    let mut errors = 0;
+                    for id in &ids {
+                        let r = if remove {
+                            store.file_tag_remove(*id, &tag).map(|_| ())
+                        } else {
+                            store.file_tag_add(*id, &tag, "manual", None, false)
+                        };
+                        if r.is_err() {
+                            errors += 1;
+                        }
+                    }
+                    if errors > 0 {
+                        state.show_toast(format!(
+                            "tag {tag:?} unknown: add it on the command line with `georag tags add`"
+                        ));
+                    }
+                }
+                Err(e) => state.show_toast(e.to_string()),
+            }
+            state.library.selected.clear();
+            perform(Cmd::RefreshLibrary, state, home, tx);
+        }
+        Cmd::Reprocess { ids } => {
+            match georag_core::app::open_store(home) {
+                Ok(store) => {
+                    for id in &ids {
+                        let _ = store.job_enqueue("extract", Some(*id), None);
+                    }
+                    state.show_toast(format!("queued {} file(s)", ids.len()));
+                }
+                Err(e) => state.show_toast(e.to_string()),
+            }
+            perform(Cmd::StartIndexing, state, home, tx);
+        }
+        Cmd::Rescan => {
+            match georag_core::app::open_store(home)
+                .and_then(|store| georag_core::pipeline::scan_all(&store))
+            {
+                Ok(reports) => {
+                    let queued: usize = reports.iter().map(|r| r.queued).sum();
+                    state.show_toast(format!(
+                        "rescanned {} root(s): {queued} file(s) queued",
+                        reports.len()
+                    ));
+                }
+                Err(e) => state.show_toast(e.to_string()),
+            }
+            perform(Cmd::StartIndexing, state, home, tx);
+        }
+        Cmd::AddRoot { path } => {
+            let expanded = if let Some(rest) = path.strip_prefix("~/") {
+                std::env::var("HOME")
+                    .map(|h| format!("{h}/{rest}"))
+                    .unwrap_or(path.clone())
+            } else {
+                path.clone()
+            };
+            match georag_core::app::open_store(home).and_then(|store| {
+                let root =
+                    georag_core::library::add(&store, std::path::Path::new(&expanded), None)?;
+                let report = georag_core::pipeline::scan_root(&store, &root)?;
+                Ok((root, report))
+            }) {
+                Ok((root, report)) => {
+                    state.show_toast(format!(
+                        "added {:?}: {} files seen, {} queued",
+                        root.name, report.seen, report.queued
+                    ));
+                    perform(Cmd::StartIndexing, state, home, tx);
+                }
+                Err(e) => state.show_toast(e.to_string()),
+            }
+            perform(Cmd::RefreshSettings, state, home, tx);
+            perform(Cmd::RefreshLibrary, state, home, tx);
+        }
+        Cmd::RemoveRoot { name } => {
+            match georag_core::app::open_store(home)
+                .and_then(|store| georag_core::library::remove(&store, &name))
+            {
+                Ok(()) => state.show_toast(format!("removed root {name:?}")),
+                Err(e) => state.show_toast(e.to_string()),
+            }
+            perform(Cmd::RefreshSettings, state, home, tx);
+            perform(Cmd::RefreshLibrary, state, home, tx);
+        }
+        Cmd::StartIndexing => {
+            if state.indexing.is_some() {
+                return;
+            }
+            let Some(app) = state.app.clone() else {
+                state.show_toast(
+                    "models are not loaded: indexing waits for a chat and an embedding model",
+                );
+                return;
+            };
+            if state.chat.running {
+                state.show_toast("indexing starts when the current run finishes");
+                return;
+            }
+            let flag = Arc::new(std::sync::atomic::AtomicBool::new(true));
+            state.indexing = Some(flag.clone());
+            let tx = tx.clone();
+            std::thread::Builder::new()
+                .name("georag-index".into())
+                .spawn(move || {
+                    let keep = flag.clone();
+                    let ev_tx = tx.clone();
+                    let opts = georag_core::pipeline::IndexOptions::default();
+                    let result =
+                        georag_core::pipeline::supervisor::queue(&app, &opts).and_then(|_| {
+                            georag_core::pipeline::run(
+                                &app,
+                                &opts,
+                                &mut |ev| {
+                                    let _ = ev_tx.try_send(Msg::Pipeline(ev));
+                                },
+                                &|| keep.load(std::sync::atomic::Ordering::Relaxed),
+                            )
+                        });
+                    let _ =
+                        tx.blocking_send(Msg::IndexingFinished(result.map_err(|e| e.to_string())));
+                })
+                .expect("spawning the indexing thread");
+        }
+        Cmd::RefreshSettings => {
+            let entries = georag_core::config::Settings::load(&home.settings_path())
+                .map(|s| s.entries())
+                .unwrap_or_default();
+            let roots = georag_core::app::open_store(home)
+                .and_then(|s| Ok(s.roots()?))
+                .unwrap_or_default();
+            let _ = tx.try_send(Msg::SettingsLoaded { entries, roots });
+        }
+        Cmd::SetSetting { key, value } => {
+            let result =
+                georag_core::config::Settings::load(&home.settings_path()).and_then(|mut s| {
+                    s.set(&key, &value)?;
+                    s.save(&home.settings_path())?;
+                    Ok(s)
+                });
+            match result {
+                Ok(_) => {
+                    state.show_toast(format!("{key} = {value}"));
+                    if key == "engine.backend" {
+                        perform(Cmd::ReloadApp, state, home, tx);
+                    }
+                }
+                Err(e) => state.show_toast(e.to_string()),
+            }
+            perform(Cmd::RefreshSettings, state, home, tx);
+        }
+        Cmd::GotoUpdate => {
+            state.screen = crate::state::Screen::Update;
+        }
+        Cmd::RunDoctor => {
+            let home = home.clone();
+            let tx = tx.clone();
+            state.show_toast("running doctor (loads the models; a few seconds)");
+            std::thread::spawn(move || {
+                let settings =
+                    georag_core::config::Settings::load(&home.settings_path()).unwrap_or_default();
+                let text = match georag_core::doctor::run(
+                    &home,
+                    &settings,
+                    &georag_core::doctor::DoctorOptions {
+                        backend: None,
+                        ci: true,
+                        scores: None,
+                    },
+                ) {
+                    Ok(r) => r.to_string(),
+                    Err(e) => format!("doctor failed: {e}"),
+                };
+                let _ = tx.blocking_send(Msg::DoctorText(text));
+            });
         }
         Cmd::ReloadApp => {
             if state.chat.running {

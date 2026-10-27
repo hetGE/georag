@@ -13,6 +13,14 @@ use crate::error::{CoreError, Result};
 use crate::home::Home;
 use crate::models::{ModelRole, Registry, catalog};
 
+/// Open the store alone, for commands that need no models.
+pub fn open_store(home: &Home) -> Result<Store> {
+    if !home.is_initialised() {
+        home.init()?;
+    }
+    Ok(Store::open(&home.db_path())?)
+}
+
 pub struct App {
     pub home: Home,
     pub settings: Settings,

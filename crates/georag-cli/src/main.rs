@@ -129,6 +129,46 @@ enum Command {
         #[arg(long)]
         json: bool,
     },
+    /// Read or change settings.toml keys
+    Config {
+        #[command(subcommand)]
+        cmd: ConfigCmd,
+    },
+    /// Library roots: folders holding the documents
+    Library {
+        #[command(subcommand)]
+        cmd: LibraryCmd,
+    },
+    /// Walk the library roots and queue changed files
+    Scan,
+    /// Run the pipeline: extract, tag, chunk, embed, index
+    Index {
+        /// Keep watching the roots and index changes as they happen
+        #[arg(long)]
+        watch: bool,
+        /// Only files with these tags (comma separated)
+        #[arg(long, value_delimiter = ',')]
+        tags: Vec<String>,
+        /// Re-extract files that are already indexed
+        #[arg(long)]
+        reprocess: bool,
+        /// Only these file ids
+        #[arg(long, value_delimiter = ',')]
+        ids: Vec<i64>,
+        /// Rules only, no LLM tagging
+        #[arg(long)]
+        no_llm: bool,
+    },
+    /// Indexed documents
+    Docs {
+        #[command(subcommand)]
+        cmd: DocsCmd,
+    },
+    /// Topic tags
+    Tags {
+        #[command(subcommand)]
+        cmd: TagsCmd,
+    },
     /// Development helpers
     #[command(hide = true)]
     Dev {
@@ -157,6 +197,110 @@ enum ConversationsCmd {
     /// Write the conversation as markdown into exports/
     Export {
         id: i64,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ConfigCmd {
+    /// Print one key, or every key when none is given
+    Get {
+        key: Option<String>,
+    },
+    Set {
+        key: String,
+        value: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum LibraryCmd {
+    Add {
+        path: PathBuf,
+        #[arg(long)]
+        name: Option<String>,
+    },
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Re-point a root after a drive letter or mount changed
+    Move {
+        name: String,
+        path: PathBuf,
+    },
+    Remove {
+        name: String,
+    },
+    /// Forget files that are missing on disk
+    Prune,
+}
+
+#[derive(Subcommand, Debug)]
+enum DocsCmd {
+    List {
+        #[arg(long)]
+        q: Option<String>,
+        #[arg(long)]
+        state: Option<String>,
+        #[arg(long)]
+        ext: Option<String>,
+        #[arg(long)]
+        tag: Option<String>,
+        #[arg(long, default_value = "200")]
+        limit: usize,
+        #[arg(long)]
+        json: bool,
+    },
+    Show {
+        id: i64,
+        #[arg(long)]
+        json: bool,
+    },
+    Tag {
+        id: i64,
+        tag: String,
+    },
+    Untag {
+        id: i64,
+        tag: String,
+    },
+    /// Open the file with the operating system
+    Open {
+        id: i64,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum TagsCmd {
+    List {
+        #[arg(long)]
+        json: bool,
+    },
+    Add {
+        name: String,
+        #[arg(long)]
+        display: Option<String>,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long)]
+        color: Option<String>,
+        /// Folder and file name patterns (comma separated)
+        #[arg(long, value_delimiter = ',')]
+        patterns: Vec<String>,
+    },
+    Edit {
+        name: String,
+        #[arg(long)]
+        display: Option<String>,
+        #[arg(long)]
+        description: Option<String>,
+        #[arg(long)]
+        color: Option<String>,
+        #[arg(long, value_delimiter = ',')]
+        patterns: Option<Vec<String>>,
+    },
+    Remove {
+        name: String,
     },
 }
 
@@ -408,6 +552,59 @@ fn run() -> anyhow::Result<()> {
         }) => {
             let _logs = logging::init(&home, !json).ok();
             update_cmd(&home, check, channel, file, rollback, yes, json)
+        }
+        Some(Command::Config { cmd }) => {
+            let mut settings = georag_core::config::Settings::load(&home.settings_path())?;
+            match cmd {
+                ConfigCmd::Get { key: Some(k) } => match settings.get(&k) {
+                    Some(v) => println!("{v}"),
+                    None => anyhow::bail!("unknown setting {k:?}"),
+                },
+                ConfigCmd::Get { key: None } => {
+                    for (k, v) in settings.entries() {
+                        println!("{k} = {v}");
+                    }
+                }
+                ConfigCmd::Set { key, value } => {
+                    settings.set(&key, &value)?;
+                    settings.save(&home.settings_path())?;
+                    println!("{key} = {value}");
+                }
+            }
+            Ok(())
+        }
+        Some(Command::Library { cmd }) => {
+            let _logs = logging::init(&home, true).ok();
+            library_cmd(&home, cmd)
+        }
+        Some(Command::Scan) => {
+            let _logs = logging::init(&home, true).ok();
+            let store = georag_core::app::open_store(&home)?;
+            for r in georag_core::pipeline::scan_all(&store)? {
+                println!(
+                    "{:<16} {} seen, {} queued, {} unchanged, {} missing",
+                    r.root, r.seen, r.queued, r.unchanged, r.missing
+                );
+            }
+            Ok(())
+        }
+        Some(Command::Index {
+            watch,
+            tags,
+            reprocess,
+            ids,
+            no_llm,
+        }) => {
+            let _logs = logging::init(&home, true).ok();
+            index_cmd(&home, watch, tags, reprocess, ids, no_llm)
+        }
+        Some(Command::Docs { cmd }) => {
+            let _logs = logging::init(&home, true).ok();
+            docs_cmd(&home, cmd)
+        }
+        Some(Command::Tags { cmd }) => {
+            let _logs = logging::init(&home, true).ok();
+            tags_cmd(&home, cmd)
         }
         Some(Command::Dev { cmd }) => {
             let _logs = logging::init(&home, true).ok();
@@ -918,5 +1115,321 @@ fn update_cmd(
         );
     }
     println!("updated: run `georag doctor` to confirm");
+    Ok(())
+}
+
+fn library_cmd(home: &Home, cmd: LibraryCmd) -> anyhow::Result<()> {
+    use georag_core::library;
+    let store = georag_core::app::open_store(home)?;
+    match cmd {
+        LibraryCmd::Add { path, name } => {
+            let root = library::add(&store, &path, name.as_deref())?;
+            let report = georag_core::pipeline::scan_root(&store, &root)?;
+            println!(
+                "added root {:?} at {}: {} files seen, {} queued. Run `georag index` to index them.",
+                root.name, root.path, report.seen, report.queued
+            );
+        }
+        LibraryCmd::List { json } => {
+            let roots = library::list(&store)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&roots)?);
+            } else if roots.is_empty() {
+                println!("no roots yet: `georag library add PATH`");
+            } else {
+                for r in roots {
+                    println!("{:<16} {}", r.name, r.path);
+                }
+            }
+        }
+        LibraryCmd::Move { name, path } => {
+            library::move_root(&store, &name, &path)?;
+            println!("root {name:?} now points at {}", path.display());
+        }
+        LibraryCmd::Remove { name } => {
+            library::remove(&store, &name)?;
+            println!("removed root {name:?} and its index entries");
+        }
+        LibraryCmd::Prune => {
+            let n = library::prune(&store)?;
+            println!("pruned {n} missing files");
+        }
+    }
+    Ok(())
+}
+
+fn index_cmd(
+    home: &Home,
+    watch: bool,
+    tags: Vec<String>,
+    reprocess: bool,
+    ids: Vec<i64>,
+    no_llm: bool,
+) -> anyhow::Result<()> {
+    use georag_core::pipeline::{self, IndexOptions};
+    let app = georag_core::app::App::open(home, None)?;
+    let opts = IndexOptions {
+        tags,
+        reprocess,
+        ids,
+        no_llm,
+    };
+    let mut on_event = |ev: pipeline::PipelineEvent| {
+        println!(
+            "[{}/{}] {:<8} {}  {}",
+            ev.done, ev.total, ev.stage, ev.rel_path, ev.outcome
+        );
+    };
+    let scans = pipeline::scan_all(&app.store)?;
+    for r in &scans {
+        println!(
+            "scan {:<12} {} seen, {} queued, {} missing",
+            r.root, r.seen, r.queued, r.missing
+        );
+    }
+    pipeline::supervisor::queue(&app, &opts)?;
+    let report = pipeline::run(&app, &opts, &mut on_event, &|| true)?;
+    println!(
+        "extracted {} · tagged {} · indexed {} · failed {} · skipped {}",
+        report.extracted, report.tagged, report.embedded, report.failed, report.skipped
+    );
+    if !watch {
+        return Ok(());
+    }
+    let roots: Vec<PathBuf> = app
+        .store
+        .roots()?
+        .into_iter()
+        .map(|r| PathBuf::from(r.path))
+        .collect();
+    let debounce = std::time::Duration::from_millis(app.settings.index.watch_debounce_ms);
+    let watcher = pipeline::watch::Watcher::new(&roots, debounce)?;
+    println!("watching {} root(s); ctrl-c stops", roots.len());
+    loop {
+        let changed = watcher.changed_roots(std::time::Duration::from_secs(3600));
+        if changed.is_empty() {
+            continue;
+        }
+        for root in app.store.roots()? {
+            if changed
+                .iter()
+                .any(|c| c == std::path::Path::new(&root.path))
+            {
+                match pipeline::scan_root(&app.store, &root) {
+                    Ok(r) => println!(
+                        "scan {:<12} {} seen, {} queued, {} missing",
+                        r.root, r.seen, r.queued, r.missing
+                    ),
+                    Err(e) => eprintln!("scan failed: {e}"),
+                }
+            }
+        }
+        let report = pipeline::run(&app, &IndexOptions::default(), &mut on_event, &|| true)?;
+        if report.extracted + report.embedded + report.failed > 0 {
+            println!("indexed {} · failed {}", report.embedded, report.failed);
+        }
+    }
+}
+
+fn docs_cmd(home: &Home, cmd: DocsCmd) -> anyhow::Result<()> {
+    let store = georag_core::app::open_store(home)?;
+    match cmd {
+        DocsCmd::List {
+            q,
+            state,
+            ext,
+            tag,
+            limit,
+            json,
+        } => {
+            let state = state
+                .map(|s| {
+                    georag_core::FileState::parse(&s)
+                        .ok_or_else(|| anyhow::anyhow!("unknown state {s:?}"))
+                })
+                .transpose()?;
+            let query = georag_core::FileQuery {
+                text: q,
+                state,
+                ext,
+                tag,
+                root_id: None,
+                offset: 0,
+                limit,
+            };
+            let files = store.files_query(&query)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&files)?);
+            } else {
+                let facets = store.files_facets(&query)?;
+                for f in &files {
+                    let tags: Vec<String> =
+                        store.file_tags(f.id)?.into_iter().map(|t| t.tag).collect();
+                    println!(
+                        "{:>6}  {:<9} {:>5}  {}  [{}]",
+                        f.id,
+                        f.state.as_str(),
+                        f.chunk_count,
+                        f.rel_path,
+                        tags.join(",")
+                    );
+                }
+                println!("{} of {} files", files.len(), facets.total);
+            }
+        }
+        DocsCmd::Show { id, json } => {
+            let file = store
+                .file_get(id)?
+                .ok_or_else(|| anyhow::anyhow!("no file {id}"))?;
+            let tags = store.file_tags(id)?;
+            let chunks = store.chunks_for_file(id)?;
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(
+                        &serde_json::json!({ "file": file, "tags": tags, "chunks": chunks.len() })
+                    )?
+                );
+            } else {
+                println!("{}  ({})", file.rel_path, file.state.as_str());
+                println!(
+                    "  chunks {}  tokens {}  {}",
+                    file.chunk_count,
+                    file.token_count,
+                    file.error
+                        .as_deref()
+                        .map(|e| format!("error: {e}"))
+                        .unwrap_or_default()
+                );
+                for t in tags {
+                    println!(
+                        "  tag {} ({}{})",
+                        t.tag,
+                        t.source,
+                        t.confidence.map(|c| format!(" {c:.1}")).unwrap_or_default()
+                    );
+                }
+                if let Some(p) = &file.preview {
+                    println!("  {}", p.replace('\n', " "));
+                }
+                for c in chunks.iter().take(5) {
+                    println!(
+                        "  #{} {} {} tokens",
+                        c.id,
+                        c.locator.as_deref().unwrap_or(""),
+                        c.tokens
+                    );
+                }
+            }
+        }
+        DocsCmd::Tag { id, tag } => {
+            store.file_tag_add(id, &tag, "manual", None, false)?;
+            println!("tagged {id} with {tag}");
+        }
+        DocsCmd::Untag { id, tag } => {
+            store.file_tag_remove(id, &tag)?;
+            println!("removed {tag} from {id}");
+        }
+        DocsCmd::Open { id } => {
+            let file = store
+                .file_get(id)?
+                .ok_or_else(|| anyhow::anyhow!("no file {id}"))?;
+            let roots = store.roots()?;
+            let root = roots
+                .iter()
+                .find(|r| r.id == file.root_id)
+                .ok_or_else(|| anyhow::anyhow!("root missing"))?;
+            let path = georag_core::library::absolute_path(root, &file.rel_path);
+            let program = if cfg!(target_os = "macos") {
+                "open"
+            } else if cfg!(target_os = "windows") {
+                "cmd"
+            } else {
+                "xdg-open"
+            };
+            let mut c = std::process::Command::new(program);
+            if cfg!(target_os = "windows") {
+                c.args(["/C", "start", ""]);
+            }
+            c.arg(&path).spawn()?;
+            println!("opened {}", path.display());
+        }
+    }
+    Ok(())
+}
+
+fn tags_cmd(home: &Home, cmd: TagsCmd) -> anyhow::Result<()> {
+    use georag_core::tags::{TagDef, TagFile};
+    let mut defs = TagFile::load_or_create(home)?;
+    let store = georag_core::app::open_store(home)?;
+    match cmd {
+        TagsCmd::List { json } => {
+            if json {
+                println!("{}", serde_json::to_string_pretty(&defs.tags)?);
+            } else {
+                let counts = store.tag_counts()?;
+                for t in &defs.tags {
+                    let n = counts
+                        .iter()
+                        .find(|(name, _)| name == &t.name)
+                        .map(|(_, n)| *n)
+                        .unwrap_or(0);
+                    println!("{:<28} {:>5}  {}", t.name, n, t.display_name);
+                }
+            }
+            return Ok(());
+        }
+        TagsCmd::Add {
+            name,
+            display,
+            description,
+            color,
+            patterns,
+        } => {
+            defs.upsert(TagDef {
+                name: name.clone(),
+                display_name: display.unwrap_or_else(|| name.clone()),
+                color,
+                description,
+                patterns,
+            });
+            println!("added tag {name}");
+        }
+        TagsCmd::Edit {
+            name,
+            display,
+            description,
+            color,
+            patterns,
+        } => {
+            let mut t = defs
+                .get(&name)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("no tag {name:?}"))?;
+            if let Some(d) = display {
+                t.display_name = d;
+            }
+            if description.is_some() {
+                t.description = description;
+            }
+            if color.is_some() {
+                t.color = color;
+            }
+            if let Some(p) = patterns {
+                t.patterns = p;
+            }
+            defs.upsert(t);
+            println!("updated tag {name}");
+        }
+        TagsCmd::Remove { name } => {
+            if !defs.remove(&name) {
+                anyhow::bail!("no tag {name:?}");
+            }
+            store.tag_remove(&name)?;
+            println!("removed tag {name}");
+        }
+    }
+    defs.save(home)?;
+    defs.seed(&store)?;
     Ok(())
 }

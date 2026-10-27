@@ -17,6 +17,7 @@ pub mod search;
 pub mod store;
 pub mod tags;
 pub mod time;
+pub mod v1;
 
 pub use chunks::{Chunk, NewChunk};
 pub use conversations::{Conversation, Message, NewMessage, NewPass, Pass, Source};

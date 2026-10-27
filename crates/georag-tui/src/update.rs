@@ -5,7 +5,7 @@ use crossterm::event::{
 };
 
 use crate::screens::update::UpdatePhase;
-use crate::screens::{chat, models, update as update_screen};
+use crate::screens::{chat, library, models, settings as settings_screen, update as update_screen};
 use crate::state::{
     Cmd, ConfirmAction, EngineState, HOME_MENU, HomeFocus, InputPurpose, MenuItem, Msg, Overlay,
     Screen, State,
@@ -91,7 +91,11 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
             state.models.loaded_chat = app.plan.chat_id.clone();
             state.models.loaded_embed = app.plan.embed_id.clone();
             state.app = Some(app);
-            vec![Cmd::RefreshModels, Cmd::RefreshConversations]
+            vec![
+                Cmd::RefreshModels,
+                Cmd::RefreshConversations,
+                Cmd::StartIndexing,
+            ]
         }
         Msg::AppFailed(e) => {
             state.engine_state = EngineState::Failed(e.clone());
@@ -153,7 +157,73 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
             state.update_notice = Some(text);
             Vec::new()
         }
+        Msg::LibraryLoaded {
+            files,
+            tags,
+            facets,
+        } => {
+            state.library.files = files;
+            state.library.tags_by_file = tags;
+            state.library.facets = facets;
+            state.library.sorted();
+            state.snapshot.files.indexed = facets_count(&state.library.facets, "indexed");
+            state.snapshot.files.new = facets_count(&state.library.facets, "new");
+            state.snapshot.files.failed = facets_count(&state.library.facets, "failed");
+            Vec::new()
+        }
+        Msg::RecordLoaded(rec) => {
+            state.library.record = Some(rec);
+            Vec::new()
+        }
+        Msg::SettingsLoaded { entries, roots } => {
+            state.settings.entries = entries;
+            state.snapshot.roots = roots
+                .iter()
+                .map(|r| georag_core::status::RootSummary {
+                    name: r.name.clone(),
+                    path: std::path::PathBuf::from(&r.path),
+                })
+                .collect();
+            state.settings.roots = roots;
+            Vec::new()
+        }
+        Msg::Pipeline(ev) => {
+            state.library.indexing = Some(format!(
+                "{} {}/{} {}",
+                ev.stage, ev.done, ev.total, ev.outcome
+            ));
+            if ev.stage == "embed" || ev.outcome.starts_with("failed") {
+                return vec![Cmd::RefreshLibrary];
+            }
+            Vec::new()
+        }
+        Msg::IndexingFinished(result) => {
+            state.indexing = None;
+            state.library.indexing = None;
+            match result {
+                Ok(r) if r.embedded + r.extracted + r.failed > 0 => {
+                    state.show_toast(format!("indexed {} · failed {}", r.embedded, r.failed))
+                }
+                Ok(_) => {}
+                Err(e) => state.show_toast(format!("indexing failed: {e}")),
+            }
+            vec![Cmd::RefreshLibrary]
+        }
+        Msg::DoctorText(text) => {
+            state.settings.doctor_text = Some(text);
+            state.settings.doctor_scroll = 0;
+            Vec::new()
+        }
+        Msg::StartIndexing => vec![Cmd::StartIndexing],
     }
+}
+
+fn facets_count(f: &georag_core::FacetCounts, state: &str) -> u64 {
+    f.by_state
+        .iter()
+        .find(|(s, _)| s == state)
+        .map(|(_, n)| *n as u64)
+        .unwrap_or(0)
 }
 
 fn on_key(state: &mut State, key: KeyEvent) -> Vec<Cmd> {
@@ -191,13 +261,17 @@ fn on_key(state: &mut State, key: KeyEvent) -> Vec<Cmd> {
         return chat::on_key(state, key);
     }
 
-    if let Some(cmds) = global_key(state, key) {
+    let screen_modal = (state.screen == Screen::Library && state.library.record.is_some())
+        || (state.screen == Screen::Settings && state.settings.doctor_text.is_some());
+    if !screen_modal && let Some(cmds) = global_key(state, key) {
         return cmds;
     }
     match state.screen {
         Screen::Home => on_home_key(state, key),
         Screen::Models => models::on_key(state, key),
         Screen::Update => update_screen::on_key(state, key),
+        Screen::Library => library::on_key(state, key),
+        Screen::Settings => settings_screen::on_key(state, key),
         _ => Vec::new(),
     }
 }
@@ -324,6 +398,8 @@ fn on_overlay_key(state: &mut State, overlay: Overlay, key: KeyEvent) -> Vec<Cmd
                     }
                     ConfirmAction::ApplyUpdate => vec![Cmd::UpdateApply],
                     ConfirmAction::RollbackUpdate => vec![Cmd::UpdateRollback],
+                    ConfirmAction::Reprocess { ids } => vec![Cmd::Reprocess { ids }],
+                    ConfirmAction::RemoveRoot { name } => vec![Cmd::RemoveRoot { name }],
                     ConfirmAction::Quit => {
                         state.should_quit = true;
                         vec![Cmd::Quit]
@@ -418,6 +494,41 @@ fn commit_input(state: &mut State, purpose: InputPurpose, value: String) -> Vec<
                 vec![Cmd::SetRole { id, role: value }]
             }
         }
+        InputPurpose::LibraryFilter => {
+            state.library.query.text = if value.is_empty() { None } else { Some(value) };
+            state.library.cursor = 0;
+            vec![Cmd::RefreshLibrary]
+        }
+        InputPurpose::LibraryTag { ids } => {
+            if value.is_empty() {
+                Vec::new()
+            } else {
+                vec![Cmd::TagFiles {
+                    ids,
+                    tag: value,
+                    remove: false,
+                }]
+            }
+        }
+        InputPurpose::LibraryUntag { ids } => {
+            if value.is_empty() {
+                Vec::new()
+            } else {
+                vec![Cmd::TagFiles {
+                    ids,
+                    tag: value,
+                    remove: true,
+                }]
+            }
+        }
+        InputPurpose::AddRoot => {
+            if value.is_empty() {
+                Vec::new()
+            } else {
+                vec![Cmd::AddRoot { path: value }]
+            }
+        }
+        InputPurpose::SettingValue { key } => vec![Cmd::SetSetting { key, value }],
     }
 }
 
@@ -515,6 +626,8 @@ fn goto(state: &mut State, screen: Screen) -> Vec<Cmd> {
     match screen {
         Screen::Chat => vec![Cmd::RefreshConversations],
         Screen::Models => vec![Cmd::RefreshModels],
+        Screen::Library => vec![Cmd::RefreshLibrary],
+        Screen::Settings => vec![Cmd::RefreshSettings],
         _ => Vec::new(),
     }
 }
@@ -558,7 +671,7 @@ mod tests {
     #[test]
     fn number_keys_jump_to_tabs_and_q_returns_home() {
         let mut s = state();
-        assert!(press(&mut s, KeyCode::Char('2')).is_empty());
+        assert_eq!(press(&mut s, KeyCode::Char('2')), vec![Cmd::RefreshLibrary]);
         assert_eq!(s.screen, Screen::Library);
         press(&mut s, KeyCode::Char('5'));
         assert_eq!(s.screen, Screen::Settings);

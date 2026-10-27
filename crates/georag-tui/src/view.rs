@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap};
 use unicode_width::UnicodeWidthStr;
 
-use crate::screens::{chat, models, update as update_screen};
+use crate::screens::{chat, library, models, settings as settings_screen, update as update_screen};
 use crate::state::{EngineState, HOME_MENU, HomeFocus, Overlay, Screen, State};
 use crate::theme::Theme;
 
@@ -36,6 +36,8 @@ pub fn draw(frame: &mut Frame, state: &State, theme: &Theme) {
         Screen::Chat => chat::draw(frame, rows[2], state, theme),
         Screen::Models => models::draw(frame, rows[2], state, theme),
         Screen::Update => update_screen::draw(frame, rows[2], state, theme),
+        Screen::Library => library::draw(frame, rows[2], state, theme),
+        Screen::Settings => settings_screen::draw(frame, rows[2], state, theme),
         other => draw_placeholder(frame, rows[2], other, theme),
     }
     draw_key_bar(frame, rows[3], state, theme);
@@ -198,6 +200,8 @@ fn draw_key_bar(frame: &mut Frame, area: Rect, state: &State, theme: &Theme) {
         (None, Screen::Chat) => chat::key_bar(state),
         (None, Screen::Models) => models::key_bar(state),
         (None, Screen::Update) => update_screen::key_bar(state),
+        (None, Screen::Library) => library::key_bar(state),
+        (None, Screen::Settings) => settings_screen::key_bar(state),
         (None, _) => vec![
             ("1-5", "screens"),
             ("tab", "next"),

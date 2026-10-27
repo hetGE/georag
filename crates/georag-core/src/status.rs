@@ -173,3 +173,11 @@ impl std::fmt::Display for Snapshot {
 fn opt(s: &Option<String>) -> &str {
     s.as_deref().unwrap_or("none")
 }
+
+/// `YYYY-MM-DD` from a unix time, for tables.
+pub fn short_date(secs: u64) -> String {
+    georag_store::time::rfc3339_from_unix(secs)
+        .chars()
+        .take(10)
+        .collect()
+}

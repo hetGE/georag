@@ -150,3 +150,68 @@ impl Store {
         self.read(|c| Ok(c.query_row("SELECT COUNT(*) FROM chunks", [], |r| r.get(0))?))
     }
 }
+
+impl Store {
+    /// Chunks of one file in order, without vectors.
+    pub fn chunks_for_file(&self, file_id: i64) -> Result<Vec<Chunk>> {
+        self.read(|c| {
+            let mut st = c.prepare(
+                "SELECT ch.id, ch.file_id, f.rel_path, ch.idx, ch.text, ch.tokens, ch.page, ch.locator
+                 FROM chunks ch JOIN files f ON f.id = ch.file_id WHERE ch.file_id = ?1 ORDER BY ch.idx",
+            )?;
+            let rows = st.query_map([file_id], |r| {
+                Ok(Chunk {
+                    id: r.get(0)?,
+                    file_id: r.get(1)?,
+                    rel_path: r.get(2)?,
+                    idx: r.get(3)?,
+                    text: r.get(4)?,
+                    tokens: r.get(5)?,
+                    page: r.get(6)?,
+                    locator: r.get(7)?,
+                })
+            })?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })
+    }
+
+    /// Attach vectors to existing chunks of a file and mark it indexed.
+    pub fn chunks_set_vectors(&self, file_id: i64, vectors: &[(i64, Vec<f32>)]) -> Result<()> {
+        if self.embed_info()?.is_none() {
+            return Err(StoreError::NoVectorTable);
+        }
+        let mut conn = self.writer();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        tx.execute(
+            "DELETE FROM chunk_vec WHERE chunk_id IN (SELECT id FROM chunks WHERE file_id = ?1)",
+            [file_id],
+        )?;
+        {
+            let mut ins =
+                tx.prepare("INSERT INTO chunk_vec(chunk_id, embedding) VALUES (?1, ?2)")?;
+            for (id, v) in vectors {
+                ins.execute(params![id, vec_to_blob(v)])?;
+            }
+        }
+        tx.execute(
+            "UPDATE files SET state = 'indexed', indexed_at = ?2, error = NULL WHERE id = ?1",
+            params![file_id, crate::time::now_rfc3339()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Files whose chunks have no vectors yet (after an embedding model change).
+    pub fn files_without_vectors(&self) -> Result<Vec<i64>> {
+        self.read(|c| {
+            if c.query_row("SELECT COUNT(*) FROM sqlite_master WHERE name = 'chunk_vec'", [], |r| r.get::<_, i64>(0))? == 0 {
+                let mut st = c.prepare("SELECT DISTINCT file_id FROM chunks")?;
+                let rows = st.query_map([], |r| r.get(0))?;
+                return Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?);
+            }
+            let mut st = c.prepare("SELECT DISTINCT ch.file_id FROM chunks ch LEFT JOIN chunk_vec v ON v.chunk_id = ch.id WHERE v.chunk_id IS NULL")?;
+            let rows = st.query_map([], |r| r.get(0))?;
+            Ok(rows.collect::<std::result::Result<Vec<_>, _>>()?)
+        })
+    }
+}

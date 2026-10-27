@@ -151,6 +151,79 @@ impl Default for TuiSettings {
 }
 
 impl Settings {
+    /// Every key as `section.key` with its current value, in file order.
+    pub fn entries(&self) -> Vec<(String, String)> {
+        let doc: toml::Value = toml::Value::try_from(self).expect("settings serialise");
+        let mut out = Vec::new();
+        if let toml::Value::Table(sections) = doc {
+            for (section, value) in sections {
+                if let toml::Value::Table(keys) = value {
+                    for (key, v) in keys {
+                        let text = match v {
+                            toml::Value::String(s) => s,
+                            other => other.to_string(),
+                        };
+                        out.push((format!("{section}.{key}"), text));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    pub fn get(&self, key: &str) -> Option<String> {
+        self.entries()
+            .into_iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, v)| v)
+    }
+
+    /// Set `section.key` from text, keeping the field's type. Unknown keys
+    /// and unparsable values are errors with the expected type named.
+    pub fn set(&mut self, key: &str, value: &str) -> Result<()> {
+        let mut doc: toml::Value = toml::Value::try_from(&*self).expect("settings serialise");
+        let (section, name) = key.split_once('.').ok_or_else(|| {
+            CoreError::Invalid(format!(
+                "key {key:?} must be section.key, for example chat.history_turns"
+            ))
+        })?;
+        let current = doc
+            .get(section)
+            .and_then(|s| s.get(name))
+            .cloned()
+            .ok_or_else(|| {
+                CoreError::Invalid(format!("unknown setting {key:?}: see `georag config get`"))
+            })?;
+        let new_value = match current {
+            toml::Value::String(_) => toml::Value::String(value.to_string()),
+            toml::Value::Integer(_) => toml::Value::Integer(
+                value
+                    .trim()
+                    .parse()
+                    .map_err(|_| CoreError::Invalid(format!("{key} expects a whole number")))?,
+            ),
+            toml::Value::Float(_) => toml::Value::Float(
+                value
+                    .trim()
+                    .parse()
+                    .map_err(|_| CoreError::Invalid(format!("{key} expects a number")))?,
+            ),
+            toml::Value::Boolean(_) => match value.trim().to_ascii_lowercase().as_str() {
+                "true" | "yes" | "on" | "1" => toml::Value::Boolean(true),
+                "false" | "no" | "off" | "0" => toml::Value::Boolean(false),
+                _ => return Err(CoreError::Invalid(format!("{key} expects true or false"))),
+            },
+            _ => return Err(CoreError::Invalid(format!("{key} cannot be set from text"))),
+        };
+        doc[section][name] = new_value;
+        let updated: Settings = doc
+            .try_into()
+            .map_err(|e: toml::de::Error| CoreError::Invalid(format!("{key}: {e}")))?;
+        validate(&updated)?;
+        *self = updated;
+        Ok(())
+    }
+
     /// Load settings from `path`. A missing file yields the defaults; a
     /// present but invalid file is an error that names the file.
     pub fn load(path: &Path) -> Result<Settings> {
@@ -178,9 +251,71 @@ impl Settings {
     }
 }
 
+/// Cross-field checks with user-facing messages.
+pub fn validate(s: &Settings) -> Result<()> {
+    if !matches!(
+        s.engine.backend.as_str(),
+        "auto" | "metal" | "cuda" | "vulkan" | "cpu"
+    ) {
+        return Err(CoreError::Invalid(
+            "engine.backend must be auto, metal, cuda, vulkan or cpu".into(),
+        ));
+    }
+    if !matches!(s.chat.mode.as_str(), "auto" | "manual") {
+        return Err(CoreError::Invalid(
+            "chat.mode must be auto or manual".into(),
+        ));
+    }
+    if !matches!(
+        s.chat.manual_tier.as_str(),
+        "quick" | "optimal" | "deep" | "deeper" | "ludicrous"
+    ) {
+        return Err(CoreError::Invalid(
+            "chat.manual_tier must be quick, optimal, deep, deeper or ludicrous".into(),
+        ));
+    }
+    if !(0.0..=1.0).contains(&s.auto.min_relevance) {
+        return Err(CoreError::Invalid(
+            "auto.min_relevance must be between 0 and 1".into(),
+        ));
+    }
+    if s.index.chunk_overlap >= s.index.chunk_tokens {
+        return Err(CoreError::Invalid(
+            "index.chunk_overlap must be smaller than index.chunk_tokens".into(),
+        ));
+    }
+    if !matches!(s.update.channel.as_str(), "stable" | "nightly") {
+        return Err(CoreError::Invalid(
+            "update.channel must be stable or nightly".into(),
+        ));
+    }
+    if !matches!(s.tui.color.as_str(), "auto" | "truecolor" | "256" | "16") {
+        return Err(CoreError::Invalid(
+            "tui.color must be auto, truecolor, 256 or 16".into(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn keys_round_trip_through_get_and_set() {
+        let mut s = Settings::default();
+        assert_eq!(s.get("chat.history_turns").as_deref(), Some("4"));
+        s.set("chat.history_turns", "6").unwrap();
+        assert_eq!(s.chat.history_turns, 6);
+        s.set("auto.min_relevance", "0.7").unwrap();
+        assert!((s.auto.min_relevance - 0.7).abs() < 1e-6);
+        s.set("update.auto_check", "off").unwrap();
+        assert!(!s.update.auto_check);
+        assert!(s.set("chat.history_turns", "many").is_err());
+        assert!(s.set("engine.backend", "opencl").is_err());
+        assert!(s.set("nope.key", "1").is_err());
+        assert!(s.entries().iter().any(|(k, _)| k == "index.embed_batch"));
+    }
 
     #[test]
     fn default_template_matches_default_struct() {

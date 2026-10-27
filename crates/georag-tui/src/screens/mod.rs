@@ -2,5 +2,7 @@
 //! struct on `State`, handles keys in its `on_key`, and draws its body.
 
 pub mod chat;
+pub mod library;
 pub mod models;
+pub mod settings;
 pub mod update;

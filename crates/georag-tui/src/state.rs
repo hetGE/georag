@@ -12,7 +12,9 @@ use georag_core::status::Snapshot;
 use georag_core::update::CheckReport;
 
 use crate::screens::chat::ChatState;
+use crate::screens::library::LibraryState;
 use crate::screens::models::ModelsState;
+use crate::screens::settings::SettingsState;
 use crate::screens::update::UpdateState;
 use crate::theme::Theme;
 
@@ -55,8 +57,13 @@ impl Screen {
     /// Which phase delivers the screen; `None` once it exists.
     pub fn arrives_in(self) -> Option<&'static str> {
         match self {
-            Screen::Home | Screen::Chat | Screen::Models | Screen::Update => None,
-            Screen::Library | Screen::Settings | Screen::Import => Some("P2"),
+            Screen::Home
+            | Screen::Chat
+            | Screen::Models
+            | Screen::Update
+            | Screen::Library
+            | Screen::Settings => None,
+            Screen::Import => Some("P2 (import wizard)"),
             Screen::Status => Some("P3"),
         }
     }
@@ -73,6 +80,11 @@ pub enum InputPurpose {
     CatalogQuery,
     LinkModel,
     SetRole { id: String },
+    LibraryFilter,
+    LibraryTag { ids: Vec<i64> },
+    LibraryUntag { ids: Vec<i64> },
+    AddRoot,
+    SettingValue { key: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -82,6 +94,8 @@ pub enum ConfirmAction {
     CombineDone { message_id: i64 },
     ApplyUpdate,
     RollbackUpdate,
+    Reprocess { ids: Vec<i64> },
+    RemoveRoot { name: String },
     Quit,
 }
 
@@ -177,6 +191,10 @@ pub struct State {
     pub update: UpdateState,
     /// Right-aligned status bar notice when a newer release is known.
     pub update_notice: Option<String>,
+    pub library: LibraryState,
+    pub settings: SettingsState,
+    /// Set while the indexing worker runs; cleared to stop it.
+    pub indexing: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
 pub const TOAST_TICKS: u32 = 20;
@@ -195,30 +213,74 @@ pub enum Msg {
     ModelsChanged,
     Toast(String),
     UpdateChecked(Result<(CheckReport, String), String>),
-    UpdateProgress { bytes: u64, total: Option<u64> },
+    UpdateProgress {
+        bytes: u64,
+        total: Option<u64>,
+    },
     UpdateStaged(Result<std::path::PathBuf, String>),
     UpdateApplied(Result<String, String>),
     UpdateNotice(String),
+    LibraryLoaded {
+        files: Vec<georag_core::File>,
+        tags: std::collections::HashMap<i64, Vec<String>>,
+        facets: georag_core::FacetCounts,
+    },
+    RecordLoaded(crate::screens::library::RecordView),
+    SettingsLoaded {
+        entries: Vec<(String, String)>,
+        roots: Vec<georag_core::Root>,
+    },
+    Pipeline(georag_core::pipeline::PipelineEvent),
+    IndexingFinished(Result<georag_core::pipeline::Report, String>),
+    DoctorText(String),
+    StartIndexing,
 }
 
 /// Side effects requested by `update`; the loop performs them.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Cmd {
     Quit,
-    Ask { message: String },
-    OpenConversation { id: i64 },
-    DeleteConversation { id: i64 },
+    Ask {
+        message: String,
+    },
+    OpenConversation {
+        id: i64,
+    },
+    DeleteConversation {
+        id: i64,
+    },
     ExportConversation,
-    ViewChunk { chunk_id: i64 },
-    OpenFile { file_id: i64 },
-    CombineDone { message_id: i64 },
-    PullModel { spec: String },
-    PausePull { id: String },
-    UseModel { id: String },
-    RemoveModel { id: String },
-    VerifyModel { id: String },
-    LinkModel { spec: String },
-    SetRole { id: String, role: String },
+    ViewChunk {
+        chunk_id: i64,
+    },
+    OpenFile {
+        file_id: i64,
+    },
+    CombineDone {
+        message_id: i64,
+    },
+    PullModel {
+        spec: String,
+    },
+    PausePull {
+        id: String,
+    },
+    UseModel {
+        id: String,
+    },
+    RemoveModel {
+        id: String,
+    },
+    VerifyModel {
+        id: String,
+    },
+    LinkModel {
+        spec: String,
+    },
+    SetRole {
+        id: String,
+        role: String,
+    },
     RefreshModels,
     RefreshConversations,
     ReloadApp,
@@ -226,6 +288,33 @@ pub enum Cmd {
     UpdateDownload,
     UpdateApply,
     UpdateRollback,
+    RefreshLibrary,
+    OpenRecord {
+        file_id: i64,
+    },
+    Reprocess {
+        ids: Vec<i64>,
+    },
+    Rescan,
+    AddRoot {
+        path: String,
+    },
+    RemoveRoot {
+        name: String,
+    },
+    TagFiles {
+        ids: Vec<i64>,
+        tag: String,
+        remove: bool,
+    },
+    StartIndexing,
+    RefreshSettings,
+    SetSetting {
+        key: String,
+        value: String,
+    },
+    GotoUpdate,
+    RunDoctor,
 }
 
 impl State {
@@ -257,6 +346,9 @@ impl State {
             pending_pulls: Vec::new(),
             update: UpdateState::default(),
             update_notice: None,
+            library: LibraryState::default(),
+            settings: SettingsState::default(),
+            indexing: None,
         }
     }
 
@@ -298,6 +390,6 @@ impl State {
 
     /// True when a pass or job is running.
     pub fn busy(&self) -> bool {
-        self.chat.running
+        self.chat.running || self.indexing.is_some()
     }
 }

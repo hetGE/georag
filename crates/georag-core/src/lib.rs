@@ -15,15 +15,21 @@ pub mod doctor;
 pub mod engine;
 pub mod error;
 pub mod home;
+pub mod library;
 pub mod logging;
 pub mod models;
+pub mod pipeline;
 pub mod retrieval;
 pub mod status;
+pub mod tags;
 pub mod update;
 
 pub use error::CoreError;
 /// Store records front ends display; the store crate itself stays behind core.
-pub use georag_store::{Chunk, Conversation, Message, Pass, Source};
+pub use georag_store::{
+    Chunk, Conversation, FacetCounts, File, FileQuery, FileState, FileTag, Job, Message, Pass,
+    Root, Source, Tag,
+};
 pub use home::Home;
 
 /// Application version, from the workspace manifest.
