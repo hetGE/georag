@@ -24,17 +24,22 @@ pub struct GgufInfo {
 }
 
 // GGUF value type codes from ggml/include/gguf.h (enum gguf_type).
-const GGUF_TYPE_UINT32: u32 = 4;
-const GGUF_TYPE_INT32: u32 = 5;
-const GGUF_TYPE_STRING: u32 = 8;
-const GGUF_TYPE_UINT64: u32 = 10;
+const GGUF_TYPE_UINT32: i64 = 4;
+const GGUF_TYPE_INT32: i64 = 5;
+const GGUF_TYPE_STRING: i64 = 8;
+const GGUF_TYPE_UINT64: i64 = 10;
+
+// The C enum is signed on MSVC and unsigned elsewhere, so compare via i64.
+fn kv_type(ctx: &GgufContext, idx: i64) -> i64 {
+    i64::from(ctx.kv_type(idx))
+}
 
 fn read_uint(ctx: &GgufContext, key: &str) -> Option<u64> {
     let idx = ctx.find_key(key);
     if idx < 0 {
         return None;
     }
-    match ctx.kv_type(idx) {
+    match kv_type(ctx, idx) {
         GGUF_TYPE_UINT32 => Some(u64::from(ctx.val_u32(idx))),
         GGUF_TYPE_INT32 => u64::try_from(ctx.val_i32(idx)).ok(),
         GGUF_TYPE_UINT64 => Some(ctx.val_u64(idx)),
@@ -47,7 +52,7 @@ fn read_str(ctx: &GgufContext, key: &str) -> Option<String> {
     if idx < 0 {
         return None;
     }
-    if ctx.kv_type(idx) != GGUF_TYPE_STRING {
+    if kv_type(ctx, idx) != GGUF_TYPE_STRING {
         return None;
     }
     ctx.val_str(idx).map(str::to_string)
