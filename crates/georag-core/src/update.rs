@@ -15,7 +15,7 @@ use crate::models::pull::{PullManager, PullRequest, PullState, sha256_file};
 
 /// Distribution repository; override with `GEORAG_UPDATE_BASE` for tests
 /// and mirrors (a URL that serves `manifest.json` and the assets).
-pub const RELEASES_BASE: &str = "https://github.com/hetGE/georag-rs/releases";
+pub const RELEASES_BASE: &str = "https://github.com/hetGE/georag/releases";
 
 /// Minisign public key compiled into the binary. `None` until the release
 /// key exists (section 11.3); manifests are then accepted unsigned with a

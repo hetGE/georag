@@ -7,7 +7,7 @@ version = "2.0.0-dev"
 edition = "2024"
 rust-version = "1.85"
 publish = false
-repository = "https://github.com/hetGE/georag-rs"
+repository = "https://github.com/hetGE/georag"
 
 [workspace.dependencies]
 georag-core = { path = "crates/georag-core" }
