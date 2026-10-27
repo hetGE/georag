@@ -77,6 +77,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p engine-staging
+          case "${{ matrix.flavour }}" in
+            aarch64-apple-darwin) pf=mac-arm64 ;;
+            x86_64-pc-windows-msvc*) pf=win-x64 ;;
+            *) pf=linux-x64 ;;
+          esac
+          cargo xtask fetch-pdfium --platform "$pf" --out engine-staging
           # The Windows CUDA flavour links cudart, cublas and cublasLt dynamically
           # (llama-cpp-sys-2 build.rs); the DLLs ship in engine/. Linux links
           # them statically and needs only the driver. Metal and Vulkan are
