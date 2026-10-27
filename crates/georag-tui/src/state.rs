@@ -1,5 +1,6 @@
 //! UI state, messages and commands. Nothing here touches the terminal.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crossterm::event::{KeyEvent, MouseEvent};
@@ -12,6 +13,7 @@ use georag_core::status::Snapshot;
 use georag_core::update::CheckReport;
 
 use crate::screens::chat::ChatState;
+use crate::screens::import::ImportState;
 use crate::screens::library::LibraryState;
 use crate::screens::models::ModelsState;
 use crate::screens::settings::SettingsState;
@@ -85,6 +87,8 @@ pub enum InputPurpose {
     LibraryUntag { ids: Vec<i64> },
     AddRoot,
     SettingValue { key: String },
+    ImportSource,
+    ImportRoot,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -193,6 +197,7 @@ pub struct State {
     pub update_notice: Option<String>,
     pub library: LibraryState,
     pub settings: SettingsState,
+    pub import: ImportState,
     /// Set while the indexing worker runs; cleared to stop it.
     pub indexing: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
@@ -234,6 +239,9 @@ pub enum Msg {
     IndexingFinished(Result<georag_core::pipeline::Report, String>),
     DoctorText(String),
     StartIndexing,
+    ImportLocated(Result<(Option<PathBuf>, PathBuf), String>),
+    ImportPreviewed(Result<georag_core::import_v1::Preview, String>),
+    ImportFinished(Result<georag_core::import_v1::ImportReport, String>),
 }
 
 /// Side effects requested by `update`; the loop performs them.
@@ -315,6 +323,12 @@ pub enum Cmd {
     },
     GotoUpdate,
     RunDoctor,
+    GotoLibrary,
+    ImportLocate {
+        path: String,
+    },
+    ImportPreview,
+    ImportRun,
 }
 
 impl State {
@@ -348,6 +362,7 @@ impl State {
             update_notice: None,
             library: LibraryState::default(),
             settings: SettingsState::default(),
+            import: ImportState::default(),
             indexing: None,
         }
     }

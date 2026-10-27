@@ -315,6 +315,14 @@ impl Store {
         Ok((changed, missing))
     }
 
+    pub fn file_set_v1_note(&self, id: i64, note: &str) -> Result<()> {
+        self.writer().execute(
+            "UPDATE files SET v1_note = ?2 WHERE id = ?1",
+            params![id, note],
+        )?;
+        Ok(())
+    }
+
     pub fn file_set_hash(&self, id: i64, hash: &str) -> Result<()> {
         self.writer().execute(
             "UPDATE files SET hash = ?2 WHERE id = ?1",

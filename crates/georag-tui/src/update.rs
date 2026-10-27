@@ -4,6 +4,7 @@ use crossterm::event::{
     KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
 };
 
+use crate::screens::import::{self as import_screen, Step as ImportStep};
 use crate::screens::update::UpdatePhase;
 use crate::screens::{chat, library, models, settings as settings_screen, update as update_screen};
 use crate::state::{
@@ -215,6 +216,43 @@ pub fn update(state: &mut State, msg: Msg) -> Vec<Cmd> {
             Vec::new()
         }
         Msg::StartIndexing => vec![Cmd::StartIndexing],
+        Msg::ImportLocated(result) => {
+            state.import.busy = false;
+            match result {
+                Ok((default_root, source)) => {
+                    state.import.source = Some(source);
+                    state.import.root = default_root;
+                    state.import.step = ImportStep::MapRoot;
+                    if state.import.root.is_some() {
+                        return vec![Cmd::ImportPreview];
+                    }
+                }
+                Err(e) => state.show_toast(e),
+            }
+            Vec::new()
+        }
+        Msg::ImportPreviewed(result) => {
+            state.import.busy = false;
+            match result {
+                Ok(p) => {
+                    state.import.preview = Some(p);
+                    state.import.step = ImportStep::Preview;
+                }
+                Err(e) => {
+                    state.import.step = ImportStep::MapRoot;
+                    state.show_toast(e);
+                }
+            }
+            Vec::new()
+        }
+        Msg::ImportFinished(result) => {
+            state.import.busy = false;
+            state.import.step = match result {
+                Ok(r) => ImportStep::Summary(r),
+                Err(e) => ImportStep::Failed(e),
+            };
+            vec![Cmd::RefreshLibrary, Cmd::RefreshSettings]
+        }
     }
 }
 
@@ -272,6 +310,7 @@ fn on_key(state: &mut State, key: KeyEvent) -> Vec<Cmd> {
         Screen::Update => update_screen::on_key(state, key),
         Screen::Library => library::on_key(state, key),
         Screen::Settings => settings_screen::on_key(state, key),
+        Screen::Import => import_screen::on_key(state, key),
         _ => Vec::new(),
     }
 }
@@ -529,6 +568,30 @@ fn commit_input(state: &mut State, purpose: InputPurpose, value: String) -> Vec<
             }
         }
         InputPurpose::SettingValue { key } => vec![Cmd::SetSetting { key, value }],
+        InputPurpose::ImportSource => {
+            if value.is_empty() {
+                Vec::new()
+            } else {
+                vec![Cmd::ImportLocate { path: value }]
+            }
+        }
+        InputPurpose::ImportRoot => {
+            if value.is_empty() {
+                Vec::new()
+            } else {
+                state.import.root = Some(std::path::PathBuf::from(expand_home(&value)));
+                vec![Cmd::ImportPreview]
+            }
+        }
+    }
+}
+
+pub fn expand_home(path: &str) -> String {
+    match path.strip_prefix("~/") {
+        Some(rest) => std::env::var("HOME")
+            .map(|h| format!("{h}/{rest}"))
+            .unwrap_or_else(|_| path.to_string()),
+        None => path.to_string(),
     }
 }
 

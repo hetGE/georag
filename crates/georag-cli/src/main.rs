@@ -169,6 +169,11 @@ enum Command {
         #[command(subcommand)]
         cmd: TagsCmd,
     },
+    /// Import tags, the file list and optionally chats from the v1 app
+    Import {
+        #[command(subcommand)]
+        cmd: ImportCmd,
+    },
     /// Development helpers
     #[command(hide = true)]
     Dev {
@@ -301,6 +306,27 @@ enum TagsCmd {
     },
     Remove {
         name: String,
+    },
+}
+
+#[derive(Subcommand, Debug)]
+enum ImportCmd {
+    /// From a v1 _0RAG folder, its data/metadata.db, or a .georag archive
+    V1 {
+        path: PathBuf,
+        /// Folder the v1 relative paths are based on (default: the parent of _0RAG)
+        #[arg(long)]
+        root: Option<PathBuf>,
+        #[arg(long)]
+        with_chats: bool,
+        /// Run the tag stage again instead of keeping imported tags
+        #[arg(long)]
+        retag: bool,
+        /// Preview only
+        #[arg(long)]
+        dry_run: bool,
+        #[arg(long)]
+        json: bool,
     },
 }
 
@@ -605,6 +631,20 @@ fn run() -> anyhow::Result<()> {
         Some(Command::Tags { cmd }) => {
             let _logs = logging::init(&home, true).ok();
             tags_cmd(&home, cmd)
+        }
+        Some(Command::Import {
+            cmd:
+                ImportCmd::V1 {
+                    path,
+                    root,
+                    with_chats,
+                    retag,
+                    dry_run,
+                    json,
+                },
+        }) => {
+            let _logs = logging::init(&home, !json).ok();
+            import_v1_cmd(&home, path, root, with_chats, retag, dry_run, json)
         }
         Some(Command::Dev { cmd }) => {
             let _logs = logging::init(&home, true).ok();
@@ -1431,5 +1471,104 @@ fn tags_cmd(home: &Home, cmd: TagsCmd) -> anyhow::Result<()> {
     }
     defs.save(home)?;
     defs.seed(&store)?;
+    Ok(())
+}
+
+fn import_v1_cmd(
+    home: &Home,
+    path: PathBuf,
+    root: Option<PathBuf>,
+    with_chats: bool,
+    retag: bool,
+    dry_run: bool,
+    json: bool,
+) -> anyhow::Result<()> {
+    use georag_core::import_v1 as imp;
+    let (located, dump) = imp::locate(&path)?;
+    let root = match root.or(located.default_root.clone()) {
+        Some(r) => r,
+        None => anyhow::bail!("the archive does not say where the documents live: pass --root DIR"),
+    };
+    let store = georag_core::app::open_store(home)?;
+    let defs = georag_core::tags::TagFile::load_or_create(home)?;
+    let preview = imp::preview(&store, &dump, &root, &defs)?;
+    if json && dry_run {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(
+                &serde_json::json!({ "located": located, "preview": preview })
+            )?
+        );
+        return Ok(());
+    }
+    println!("source   {} ({:?})", located.source.display(), located.kind);
+    println!("root     {}", root.display());
+    println!(
+        "files    {} ({} on disk, {} missing, {} failed in v1, {} already present)",
+        preview.files,
+        preview.files_on_disk,
+        preview.files_missing,
+        preview.files_failed_in_v1,
+        preview.already_present
+    );
+    println!(
+        "tags     {} ({} built in, {} custom{})",
+        preview.tags,
+        preview.tags_builtin,
+        preview.tags_custom.len(),
+        if preview.tags_custom.is_empty() {
+            String::new()
+        } else {
+            format!(": {}", preview.tags_custom.join(", "))
+        }
+    );
+    println!("file tags {}", preview.file_tags);
+    println!(
+        "chats    {} conversations, {} messages{}",
+        preview.conversations,
+        preview.messages,
+        if with_chats {
+            ""
+        } else {
+            " (not imported without --with-chats)"
+        }
+    );
+    if dry_run {
+        println!("dry run: nothing written");
+        return Ok(());
+    }
+    let report = imp::run(
+        home,
+        &store,
+        &dump,
+        &root,
+        &imp::ImportOptions {
+            with_chats,
+            retag,
+            root_name: None,
+        },
+    )?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+        return Ok(());
+    }
+    println!(
+        "imported {} files ({} merged with existing rows), {} file tags, {} new tags in tags.toml, {} conversations",
+        report.files_imported,
+        report.files_merged,
+        report.file_tags,
+        report.tags_added_to_file.len(),
+        report.conversations
+    );
+    for m in report.files_missing.iter().take(20) {
+        println!("  missing at import: {m}");
+    }
+    if report.files_missing.len() > 20 {
+        println!("  and {} more", report.files_missing.len() - 20);
+    }
+    println!(
+        "{} files queued for extraction: run `georag index` to index them (the tag stage is skipped for imported files)",
+        report.jobs_queued
+    );
     Ok(())
 }

@@ -70,6 +70,10 @@ georag status [--json]       home, engine, models, library and jobs at a glance
 georag models catalog        curated chat, vision and embedding models
 georag models pull ID        download a catalogue model, or ORG/REPO[:FILE]
 georag models use ROLE ID    choose the model in use for chat, embed or vision
+georag library add PATH      add a folder of documents and scan it
+georag index [--watch]       extract, tag, chunk, embed and index; --watch keeps going
+georag docs list             indexed files with states and tags
+georag tags list             topic tags from config/tags.toml
 georag ask "question"        answer with citations; auto depth by default
 georag chat                  interactive questions in the terminal
 georag search "query"        hybrid search without asking the model
@@ -79,7 +83,13 @@ georag import v1 PATH        import tags and the file list from a v1 _0RAG folde
 ```
 
 First run: `georag models pull nomic-embed-text-v1.5` and
-`georag models pull qwen3.5-9b-q4_k_m`, then `georag`.
+`georag models pull qwen3.5-9b-q4_k_m`, then `georag library add PATH`
+and `georag index`, or `georag import v1 PATH` to bring a v1 library across,
+then `georag`.
+
+PDF reading needs the pdfium library in `engine/`; release bundles ship it,
+and `cargo xtask fetch-pdfium --out .dev-home/engine` fetches it for
+development.
 
 The full command surface is in section 12 of the handoff document. Commands
 land phase by phase; `georag --help` lists what this build has.

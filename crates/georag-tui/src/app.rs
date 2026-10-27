@@ -831,6 +831,67 @@ fn perform(cmd: Cmd, state: &mut State, home: &Home, tx: &mpsc::Sender<Msg>) {
                 let _ = tx.blocking_send(Msg::DoctorText(text));
             });
         }
+        Cmd::GotoLibrary => {
+            state.screen = crate::state::Screen::Library;
+            perform(Cmd::RefreshLibrary, state, home, tx);
+        }
+        Cmd::ImportLocate { path } => {
+            let path = crate::update::expand_home(&path);
+            let tx = tx.clone();
+            state.import.busy = true;
+            std::thread::spawn(move || {
+                let result = georag_core::import_v1::locate(std::path::Path::new(&path))
+                    .map(|(l, _)| (l.default_root, l.source))
+                    .map_err(|e| e.to_string());
+                let _ = tx.blocking_send(Msg::ImportLocated(result));
+            });
+        }
+        Cmd::ImportPreview => {
+            let (Some(source), Some(root)) =
+                (state.import.source.clone(), state.import.root.clone())
+            else {
+                return;
+            };
+            let home = home.clone();
+            let tx = tx.clone();
+            state.import.busy = true;
+            std::thread::spawn(move || {
+                let result = (|| -> Result<georag_core::import_v1::Preview, String> {
+                    let (_, dump) =
+                        georag_core::import_v1::locate(&source).map_err(|e| e.to_string())?;
+                    let store = georag_core::app::open_store(&home).map_err(|e| e.to_string())?;
+                    let defs = georag_core::tags::TagFile::load_or_create(&home)
+                        .map_err(|e| e.to_string())?;
+                    georag_core::import_v1::preview(&store, &dump, &root, &defs)
+                        .map_err(|e| e.to_string())
+                })();
+                let _ = tx.blocking_send(Msg::ImportPreviewed(result));
+            });
+        }
+        Cmd::ImportRun => {
+            let (Some(source), Some(root)) =
+                (state.import.source.clone(), state.import.root.clone())
+            else {
+                return;
+            };
+            let opts = georag_core::import_v1::ImportOptions {
+                with_chats: state.import.with_chats,
+                retag: state.import.retag,
+                root_name: None,
+            };
+            let home = home.clone();
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let result = (|| -> Result<georag_core::import_v1::ImportReport, String> {
+                    let (_, dump) =
+                        georag_core::import_v1::locate(&source).map_err(|e| e.to_string())?;
+                    let store = georag_core::app::open_store(&home).map_err(|e| e.to_string())?;
+                    georag_core::import_v1::run(&home, &store, &dump, &root, &opts)
+                        .map_err(|e| e.to_string())
+                })();
+                let _ = tx.blocking_send(Msg::ImportFinished(result));
+            });
+        }
         Cmd::ReloadApp => {
             if state.chat.running {
                 state.show_toast("finish or stop the run before reloading models");

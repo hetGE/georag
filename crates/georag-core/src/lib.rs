@@ -15,6 +15,7 @@ pub mod doctor;
 pub mod engine;
 pub mod error;
 pub mod home;
+pub mod import_v1;
 pub mod library;
 pub mod logging;
 pub mod models;
