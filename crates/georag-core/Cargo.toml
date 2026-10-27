@@ -31,6 +31,12 @@ tar.workspace = true
 flate2.workspace = true
 zip.workspace = true
 self-replace.workspace = true
+text-splitter.workspace = true
+walkdir.workspace = true
+blake3.workspace = true
+notify.workspace = true
+notify-debouncer-full.workspace = true
+rayon.workspace = true
 
 [lints]
 workspace = true

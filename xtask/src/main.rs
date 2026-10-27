@@ -45,6 +45,14 @@ enum Task {
         #[arg(long, default_value = VERSION)]
         version: String,
     },
+    /// Download the pdfium library for a platform into a directory
+    FetchPdfium {
+        /// mac-arm64 | mac-x64 | win-x64 | linux-x64 | linux-arm64 (default: this machine)
+        #[arg(long)]
+        platform: Option<String>,
+        #[arg(long, default_value = "engine-staging")]
+        out: PathBuf,
+    },
     /// Write SHA256SUMS, manifest.json and notes.md for the bundles in a directory
     Manifest {
         #[arg(long, default_value = "dist")]
@@ -71,6 +79,7 @@ fn main() -> Result<()> {
             out,
             version,
         } => bundle(&flavour, bin, engine, &out, &version),
+        Task::FetchPdfium { platform, out } => fetch_pdfium(platform.as_deref(), &out),
         Task::Manifest {
             dir,
             version,
@@ -324,6 +333,67 @@ fn unix_time_rfc3339() -> String {
     let mo = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if mo <= 2 { y + 1 } else { y };
     format!("{y:04}-{mo:02}-{d:02}T{h:02}:{m:02}:{s:02}Z")
+}
+
+/// pdfium build that pdfium-render 0.9.4 binds against (feature pdfium_7881).
+const PDFIUM_BUILD: &str = "7881";
+
+fn fetch_pdfium(platform: Option<&str>, out: &Path) -> Result<()> {
+    let platform = match platform {
+        Some(p) => p.to_string(),
+        None => match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("macos", "aarch64") => "mac-arm64".into(),
+            ("macos", _) => "mac-x64".into(),
+            ("windows", _) => "win-x64".into(),
+            ("linux", "aarch64") => "linux-arm64".into(),
+            _ => "linux-x64".into(),
+        },
+    };
+    let url = format!(
+        "https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F{PDFIUM_BUILD}/pdfium-{platform}.tgz"
+    );
+    fs::create_dir_all(out)?;
+    let archive = out.join("pdfium.tgz");
+    // curl is present on every CI runner and on macOS, Windows 10+ and Linux.
+    let status = std::process::Command::new("curl")
+        .args(["-sSL", "--fail", "-o"])
+        .arg(&archive)
+        .arg(&url)
+        .status()
+        .context("running curl")?;
+    if !status.success() {
+        bail!("download of {url} failed");
+    }
+    let file = File::open(&archive)?;
+    let gz = flate2::read::GzDecoder::new(file);
+    let mut tar = tar::Archive::new(gz);
+    let mut found = None;
+    for entry in tar.entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?.to_path_buf();
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        if (path.starts_with("lib") || path.starts_with("bin"))
+            && matches!(
+                name.as_str(),
+                "libpdfium.dylib" | "libpdfium.so" | "pdfium.dll"
+            )
+        {
+            let target = out.join(&name);
+            entry.unpack(&target)?;
+            found = Some(target);
+        }
+    }
+    fs::remove_file(&archive).ok();
+    match found {
+        Some(p) => {
+            println!("pdfium {PDFIUM_BUILD} for {platform}: {}", p.display());
+            Ok(())
+        }
+        None => bail!("the archive held no pdfium library"),
+    }
 }
 
 #[cfg(test)]

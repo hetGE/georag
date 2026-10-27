@@ -11,16 +11,20 @@ pub mod chunks;
 pub mod conversations;
 pub mod error;
 pub mod files;
+pub mod jobs;
 pub mod meta;
 pub mod search;
 pub mod store;
+pub mod tags;
 pub mod time;
 
 pub use chunks::{Chunk, NewChunk};
 pub use conversations::{Conversation, Message, NewMessage, NewPass, Pass, Source};
 pub use error::StoreError;
-pub use files::{File, FileState, Root};
+pub use files::{FacetCounts, File, FileQuery, FileState, Root, ScanRecord};
+pub use jobs::Job;
 pub use search::{Hit, SearchFilter};
 pub use store::Store;
+pub use tags::{FileTag, Tag};
 
 pub type Result<T> = std::result::Result<T, StoreError>;

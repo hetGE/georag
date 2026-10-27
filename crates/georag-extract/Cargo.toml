@@ -1,5 +1,6 @@
 [package]
 name = "georag-extract"
+description = "Document extractors: pdf, docx, pptx, xlsx, csv, text, html, rtf"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -7,6 +8,13 @@ publish.workspace = true
 
 [dependencies]
 thiserror.workspace = true
+tracing.workspace = true
+pdfium-render.workspace = true
+calamine.workspace = true
+csv.workspace = true
+quick-xml.workspace = true
+html2text.workspace = true
+zip.workspace = true
 
 [lints]
 workspace = true
