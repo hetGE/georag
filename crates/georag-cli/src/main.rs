@@ -1501,40 +1501,44 @@ fn import_v1_cmd(
         );
         return Ok(());
     }
-    println!("source   {} ({:?})", located.source.display(), located.kind);
-    println!("root     {}", root.display());
-    println!(
-        "files    {} ({} on disk, {} missing, {} failed in v1, {} already present)",
-        preview.files,
-        preview.files_on_disk,
-        preview.files_missing,
-        preview.files_failed_in_v1,
-        preview.already_present
-    );
-    println!(
-        "tags     {} ({} built in, {} custom{})",
-        preview.tags,
-        preview.tags_builtin,
-        preview.tags_custom.len(),
-        if preview.tags_custom.is_empty() {
-            String::new()
-        } else {
-            format!(": {}", preview.tags_custom.join(", "))
-        }
-    );
-    println!("file tags {}", preview.file_tags);
-    println!(
-        "chats    {} conversations, {} messages{}",
-        preview.conversations,
-        preview.messages,
-        if with_chats {
-            ""
-        } else {
-            " (not imported without --with-chats)"
-        }
-    );
+    if !json {
+        println!("source   {} ({:?})", located.source.display(), located.kind);
+        println!("root     {}", root.display());
+        println!(
+            "files    {} ({} on disk, {} missing, {} failed in v1, {} already present)",
+            preview.files,
+            preview.files_on_disk,
+            preview.files_missing,
+            preview.files_failed_in_v1,
+            preview.already_present
+        );
+        println!(
+            "tags     {} ({} built in, {} custom{})",
+            preview.tags,
+            preview.tags_builtin,
+            preview.tags_custom.len(),
+            if preview.tags_custom.is_empty() {
+                String::new()
+            } else {
+                format!(": {}", preview.tags_custom.join(", "))
+            }
+        );
+        println!("file tags {}", preview.file_tags);
+        println!(
+            "chats    {} conversations, {} messages{}",
+            preview.conversations,
+            preview.messages,
+            if with_chats {
+                ""
+            } else {
+                " (not imported without --with-chats)"
+            }
+        );
+    }
     if dry_run {
-        println!("dry run: nothing written");
+        if !json {
+            println!("dry run: nothing written");
+        }
         return Ok(());
     }
     let report = imp::run(
@@ -1549,7 +1553,14 @@ fn import_v1_cmd(
         },
     )?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&report)?);
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "located": located,
+                "preview": preview,
+                "report": report
+            }))?
+        );
         return Ok(());
     }
     println!(

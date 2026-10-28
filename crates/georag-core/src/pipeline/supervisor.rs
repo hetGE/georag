@@ -101,6 +101,16 @@ pub fn queue(app: &App, opts: &IndexOptions) -> Result<usize> {
     Ok(n)
 }
 
+/// Queued jobs of one kind, without loading the rows.
+fn queued_count(store: &georag_store::Store, kind: &str) -> Result<usize> {
+    Ok(store
+        .job_counts()?
+        .into_iter()
+        .filter(|(k, state, _)| k == kind && state == "queued")
+        .map(|(_, _, n)| usize::try_from(n).unwrap_or(0))
+        .sum())
+}
+
 /// Drain the queues. `on_event` is called after every file; return false
 /// from `keep_going` to stop between files.
 pub fn run(
@@ -142,30 +152,37 @@ pub fn run(
         if batch.is_empty() {
             break;
         }
-        let total_queued = batch.len()
-            + store
-                .jobs(&["queued"], usize::MAX)?
-                .iter()
-                .filter(|j| j.kind == "extract")
-                .count();
-        let results: Vec<(i64, Option<i64>, Result<StageOutcome>)> = pool.install(|| {
-            use rayon::prelude::*;
-            batch
-                .par_iter()
-                .map(|job| {
-                    let file_id = job.file_id.unwrap_or(0);
-                    let r = stages::extract_file(
-                        &app.home,
-                        &app.settings,
-                        &store,
-                        app.engine.as_ref(),
-                        file_id,
-                    );
-                    (job.id, job.file_id, r)
-                })
-                .collect()
-        });
-        for (job_id, file_id, r) in results {
+        let total_queued = batch.len() + queued_count(&store, "extract")?;
+        let done_before_batch = done;
+        let results: Vec<(i64, Option<i64>, Result<StageOutcome>, std::time::Duration)> = pool
+            .install(|| {
+                use rayon::prelude::*;
+                batch
+                    .par_iter()
+                    .map(|job| {
+                        let file_id = job.file_id.unwrap_or(0);
+                        let started = std::time::Instant::now();
+                        // A parser panic on one malformed file must not take the whole
+                        // run down: it becomes a failure for that file.
+                        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            stages::extract_file(
+                                &app.home,
+                                &app.settings,
+                                &store,
+                                app.engine.as_ref(),
+                                file_id,
+                            )
+                        }))
+                        .unwrap_or_else(|_| {
+                            Ok(StageOutcome::Failed(
+                                "extractor crashed on this file".into(),
+                            ))
+                        });
+                        (job.id, job.file_id, r, started.elapsed())
+                    })
+                    .collect()
+            });
+        for (job_id, file_id, r, took) in results {
             let file_id = file_id.unwrap_or(0);
             let outcome = match r {
                 Ok(StageOutcome::Done) => {
@@ -176,6 +193,9 @@ pub fn run(
                 Ok(StageOutcome::Failed(e)) => {
                     report.lock().unwrap().failed += 1;
                     store.job_finish(job_id, "failed", Some(&e))?;
+                    if e.starts_with("extractor crashed") {
+                        store.file_set_state(file_id, FileState::Failed, Some(&e))?;
+                    }
                     format!("failed: {e}")
                 }
                 Ok(StageOutcome::Skipped(e)) => {
@@ -191,13 +211,19 @@ pub fn run(
                 }
             };
             done += 1;
+            tracing::info!(
+                "extract {}: {} in {:.1}s",
+                rel_path(&store, file_id),
+                outcome,
+                took.as_secs_f64()
+            );
             on_event(PipelineEvent {
                 stage: "extract",
                 file_id,
                 rel_path: rel_path(&store, file_id),
                 outcome,
                 done,
-                total: done + total_queued.saturating_sub(batch.len()),
+                total: done_before_batch + total_queued,
             });
         }
     }

@@ -230,7 +230,15 @@ impl Store {
     /// Upsert files seen by a scan. New paths get `new`; changed size or
     /// mtime on an indexed file marks it `stale`; paths not seen become
     /// `skipped` with a note. Returns (new or changed ids, missing count).
-    pub fn files_apply_scan(&self, root_id: i64, seen: &[ScanRecord]) -> Result<(Vec<i64>, usize)> {
+    /// Upsert what the walk saw. `unsupported` lists files that are on disk
+    /// but of a type georag does not read; they are kept as `skipped` with a
+    /// note and never counted as missing. Returns (changed ids, missing).
+    pub fn files_apply_scan(
+        &self,
+        root_id: i64,
+        seen: &[ScanRecord],
+        unsupported: &[String],
+    ) -> Result<(Vec<i64>, usize)> {
         let mut conn = self.writer();
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let mut changed = Vec::new();
@@ -293,20 +301,25 @@ impl Store {
         // Paths not seen in this scan.
         let mut missing = 0usize;
         {
-            let mut st = tx.prepare(
-                "SELECT id, rel_path FROM files WHERE root_id = ?1 AND state != 'skipped'",
-            )?;
-            let rows: Vec<(i64, String)> = st
-                .query_map([root_id], |r| Ok((r.get(0)?, r.get(1)?)))?
+            let mut st = tx.prepare("SELECT id, rel_path, state FROM files WHERE root_id = ?1")?;
+            let rows: Vec<(i64, String, String)> = st
+                .query_map([root_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             let seen_set: std::collections::HashSet<&str> =
                 seen.iter().map(|s| s.rel_path.as_str()).collect();
-            let mut mark = tx.prepare(
-                "UPDATE files SET state = 'skipped', error = 'missing on disk' WHERE id = ?1",
-            )?;
-            for (id, rel) in rows {
-                if !seen_set.contains(rel.as_str()) {
-                    mark.execute([id])?;
+            let unsupported_set: std::collections::HashSet<&str> =
+                unsupported.iter().map(String::as_str).collect();
+            let mut mark =
+                tx.prepare("UPDATE files SET state = 'skipped', error = ?2 WHERE id = ?1")?;
+            for (id, rel, state) in rows {
+                if seen_set.contains(rel.as_str()) {
+                    continue;
+                }
+                if unsupported_set.contains(rel.as_str()) {
+                    // Relabelled on every scan so an older note never sticks.
+                    mark.execute(params![id, "unsupported file type"])?;
+                } else if state != "skipped" {
+                    mark.execute(params![id, "missing on disk"])?;
                     missing += 1;
                 }
             }
@@ -329,6 +342,57 @@ impl Store {
             params![id, hash],
         )?;
         Ok(())
+    }
+
+    /// Apply freshly computed hashes in one transaction: record the hash,
+    /// settle the state and queue `extract` where the content is new or
+    /// changed. Returns (queued, unchanged).
+    pub fn files_finish_scan(&self, hashes: &[(i64, String)]) -> Result<(usize, usize)> {
+        let mut conn = self.writer();
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let mut queued = 0usize;
+        let mut unchanged = 0usize;
+        {
+            let mut current = tx.prepare("SELECT hash, state FROM files WHERE id = ?1")?;
+            let mut set_hash =
+                tx.prepare("UPDATE files SET hash = ?2, state = ?3, error = NULL WHERE id = ?1")?;
+            let mut back_to_indexed =
+                tx.prepare("UPDATE files SET state = 'indexed', error = NULL WHERE id = ?1")?;
+            let mut has_job = tx.prepare(
+                "SELECT 1 FROM jobs WHERE kind = 'extract' AND file_id = ?1 AND state IN ('queued','running') LIMIT 1",
+            )?;
+            let mut enqueue = tx.prepare(
+                "INSERT INTO jobs(kind, file_id, payload, state, attempts, created_at, updated_at) VALUES ('extract', ?1, NULL, 'queued', 0, ?2, ?2)",
+            )?;
+            let now = crate::time::now_rfc3339();
+            for (id, hash) in hashes {
+                let Some((previous, state)) = current
+                    .query_row([id], |r| {
+                        Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?))
+                    })
+                    .optional()?
+                else {
+                    continue;
+                };
+                if previous.as_deref() == Some(hash.as_str()) && state == "stale" {
+                    back_to_indexed.execute([id])?;
+                    unchanged += 1;
+                    continue;
+                }
+                let next = if state == "imported" {
+                    "imported"
+                } else {
+                    "new"
+                };
+                set_hash.execute(params![id, hash, next])?;
+                if !has_job.exists([id])? {
+                    enqueue.execute(params![id, now])?;
+                }
+                queued += 1;
+            }
+        }
+        tx.commit()?;
+        Ok((queued, unchanged))
     }
 
     pub fn file_hash(&self, id: i64) -> Result<Option<String>> {
@@ -465,6 +529,31 @@ mod scan_tests {
     use super::*;
 
     #[test]
+    fn scan_keeps_unsupported_files_as_skipped_not_missing() {
+        let store = Store::open_in_memory().unwrap();
+        let root = store.root_add("lib", Path::new("/lib")).unwrap();
+        let (changed, _) = store
+            .files_apply_scan(
+                root.id,
+                &[ScanRecord {
+                    rel_path: "old.doc".into(),
+                    size_bytes: 10,
+                    mtime: 1.0,
+                }],
+                &[],
+            )
+            .unwrap();
+        let (changed2, missing) = store
+            .files_apply_scan(root.id, &[], &["old.doc".to_string()])
+            .unwrap();
+        assert!(changed2.is_empty());
+        assert_eq!(missing, 0);
+        let file = store.file_get(changed[0]).unwrap().unwrap();
+        assert_eq!(file.state, FileState::Skipped);
+        assert_eq!(file.error.as_deref(), Some("unsupported file type"));
+    }
+
+    #[test]
     fn scan_marks_new_stale_and_missing() {
         let store = Store::open_in_memory().unwrap();
         let root = store.root_add("lib", Path::new("/lib")).unwrap();
@@ -483,6 +572,7 @@ mod scan_tests {
                         mtime: 2.0,
                     },
                 ],
+                &[],
             )
             .unwrap();
         assert_eq!(changed.len(), 2);
@@ -499,6 +589,7 @@ mod scan_tests {
                     size_bytes: 11,
                     mtime: 1.0,
                 }],
+                &[],
             )
             .unwrap();
         assert_eq!(changed2, vec![changed[0]]);

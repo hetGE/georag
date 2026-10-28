@@ -48,6 +48,14 @@ pub fn extract_file(
         engine_dir: home.engine_dir(),
         min_chars_per_page: MIN_CHARS_PER_PAGE,
     };
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
+    if !georag_extract::handles(&ext) {
+        store.file_set_state(file_id, FileState::Skipped, Some("unsupported file type"))?;
+        return Ok(StageOutcome::Skipped("unsupported file type".into()));
+    }
     let extracted = match georag_extract::extract(&path, &ctx) {
         Ok(e) => e,
         Err(ExtractError::NoText { chars_per_page, .. }) => {

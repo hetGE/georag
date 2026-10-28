@@ -65,20 +65,73 @@ impl Snapshot {
             },
             Err(e) => (None, Some(e.to_string())),
         };
-        Snapshot {
+        let mut snapshot = Snapshot {
             version: crate::VERSION,
             flavour: crate::FLAVOUR,
             home: home.root().to_path_buf(),
             home_initialised: home.is_initialised(),
             backend,
             backend_error,
-            // Library roots, file counts, models and jobs arrive with P1 and P2.
             roots: Vec::new(),
             files: FileCounts::default(),
             models: ModelsInUse::default(),
             daemon_running: false,
             jobs_queued: 0,
             jobs_running: 0,
+        };
+        if snapshot.home_initialised {
+            snapshot.fill_models(home);
+            snapshot.fill_library(home);
+        }
+        snapshot
+    }
+
+    /// Models in use per role, from the registry. A missing or unreadable
+    /// registry leaves every role empty.
+    fn fill_models(&mut self, home: &Home) {
+        use crate::models::registry::{ModelRole, Registry};
+        let Ok(registry) = Registry::load(home) else {
+            return;
+        };
+        let id = |role| registry.in_use(role).map(|m| m.id.clone());
+        self.models.chat = id(ModelRole::Chat);
+        self.models.embed = id(ModelRole::Embed);
+        self.models.vision = id(ModelRole::Vision);
+    }
+
+    /// Roots, file states and job counts from the store. A store that will
+    /// not open leaves the counts at zero; `status` must never fail.
+    fn fill_library(&mut self, home: &Home) {
+        let Ok(store) = crate::app::open_store(home) else {
+            return;
+        };
+        self.roots = store
+            .roots()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| RootSummary {
+                name: r.name,
+                path: PathBuf::from(r.path),
+            })
+            .collect();
+        for (state, n) in store.file_counts().unwrap_or_default() {
+            let n = u64::try_from(n).unwrap_or(0);
+            match state.as_str() {
+                "new" => self.files.new += n,
+                "indexed" => self.files.indexed += n,
+                "failed" => self.files.failed += n,
+                "stale" => self.files.stale += n,
+                "skipped" => self.files.skipped += n,
+                _ => {}
+            }
+        }
+        for (_, state, n) in store.job_counts().unwrap_or_default() {
+            let n = u64::try_from(n).unwrap_or(0);
+            match state.as_str() {
+                "queued" => self.jobs_queued += n,
+                "running" => self.jobs_running += n,
+                _ => {}
+            }
         }
     }
 

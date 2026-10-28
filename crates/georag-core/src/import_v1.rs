@@ -446,6 +446,11 @@ pub fn run(
                 }
             }
         }
+        if !georag_extract::handles(file.ext.as_deref().unwrap_or("")) {
+            // v1 recorded legacy Office files and media that v2 does not read.
+            store.file_set_state(id, FileState::Skipped, Some("unsupported file type"))?;
+            continue;
+        }
         if file.state == FileState::Imported || file.state == FileState::New {
             store.job_enqueue("extract", Some(id), None)?;
             report.jobs_queued += 1;

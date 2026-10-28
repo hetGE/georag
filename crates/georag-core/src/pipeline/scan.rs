@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use georag_store::{FileState, Root, ScanRecord, Store};
+use georag_store::{Root, ScanRecord, Store};
 use serde::Serialize;
 use walkdir::WalkDir;
 
@@ -49,7 +49,14 @@ fn wanted(entry: &walkdir::DirEntry) -> bool {
 
 /// List supported files under a root as scan records.
 pub fn walk(root_path: &Path) -> Result<Vec<ScanRecord>> {
+    Ok(walk_all(root_path)?.0)
+}
+
+/// Supported files as scan records, plus the relative paths of files that
+/// are present but of a type georag does not read.
+pub fn walk_all(root_path: &Path) -> Result<(Vec<ScanRecord>, Vec<String>)> {
     let mut out = Vec::new();
+    let mut unsupported = Vec::new();
     for entry in WalkDir::new(root_path)
         .follow_links(false)
         .into_iter()
@@ -74,19 +81,20 @@ pub fn walk(root_path: &Path) -> Result<Vec<ScanRecord>> {
             .extension()
             .map(|e| e.to_string_lossy().to_ascii_lowercase())
             .unwrap_or_default();
-        if !georag_extract::handles(&ext) {
-            continue;
-        }
-        let meta = match entry.metadata() {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
         let rel = entry
             .path()
             .strip_prefix(root_path)
             .unwrap_or(entry.path())
             .to_string_lossy()
             .replace('\\', "/");
+        if !georag_extract::handles(&ext) {
+            unsupported.push(rel);
+            continue;
+        }
+        let meta = match entry.metadata() {
+            Ok(m) => m,
+            Err(_) => continue,
+        };
         let mtime = meta
             .modified()
             .ok()
@@ -100,7 +108,7 @@ pub fn walk(root_path: &Path) -> Result<Vec<ScanRecord>> {
         });
     }
     out.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
-    Ok(out)
+    Ok((out, unsupported))
 }
 
 pub fn blake3_file(path: &Path) -> Result<String> {
@@ -116,6 +124,19 @@ pub fn blake3_file(path: &Path) -> Result<String> {
     Ok(hasher.finalize().to_hex().to_string())
 }
 
+/// Files hashed between two writes to the store.
+const HASH_BATCH: usize = 256;
+
+/// Hashing is disk bound: a few threads saturate an SSD without starving
+/// the rest of the machine.
+fn hash_pool() -> rayon::ThreadPool {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(4)
+        .thread_name(|i| format!("georag-hash-{i}"))
+        .build()
+        .expect("hash pool")
+}
+
 /// Scan one root: upsert, hash changed files, queue `extract` for files
 /// whose content changed or was never processed.
 pub fn scan_root(store: &Store, root: &Root) -> Result<ScanReport> {
@@ -126,38 +147,58 @@ pub fn scan_root(store: &Store, root: &Root) -> Result<ScanReport> {
             root.name, root.path
         )));
     }
-    let seen = walk(root_path)?;
-    let (changed, missing) = store.files_apply_scan(root.id, &seen)?;
+    let started = std::time::Instant::now();
+    let (seen, unsupported) = walk_all(root_path)?;
+    let (changed, missing) = store.files_apply_scan(root.id, &seen, &unsupported)?;
+    tracing::info!(
+        "scan {}: {} files seen, {} to hash, {} missing, walk took {:.1}s",
+        root.name,
+        seen.len(),
+        changed.len(),
+        missing,
+        started.elapsed().as_secs_f64()
+    );
     let mut queued = 0usize;
     let mut unchanged = 0usize;
-    for id in changed {
-        let Some(file) = store.file_get(id)? else {
-            continue;
-        };
-        let abs = root_path.join(&file.rel_path);
-        let hash = match blake3_file(&abs) {
-            Ok(h) => h,
-            Err(e) => {
-                tracing::warn!("hash {}: {e}", abs.display());
-                continue;
-            }
-        };
-        let previous = store.file_hash(id)?;
-        if previous.as_deref() == Some(hash.as_str()) && file.state == FileState::Stale {
-            // Same content, only metadata moved: back to indexed.
-            store.file_set_state(id, FileState::Indexed, None)?;
-            unchanged += 1;
-            continue;
+    let mut hashed = 0usize;
+    for ids in changed.chunks(HASH_BATCH) {
+        let hashes: Vec<(i64, String)> = hash_pool().install(|| {
+            use rayon::prelude::*;
+            ids.par_iter()
+                .filter_map(|&id| {
+                    let file = store.file_get(id).ok().flatten()?;
+                    let abs = root_path.join(&file.rel_path);
+                    match blake3_file(&abs) {
+                        Ok(h) => Some((id, h)),
+                        Err(e) => {
+                            tracing::warn!("hash {}: {e}", abs.display());
+                            None
+                        }
+                    }
+                })
+                .collect()
+        });
+        let (q, u) = store.files_finish_scan(&hashes)?;
+        queued += q;
+        unchanged += u;
+        hashed += hashes.len();
+        if changed.len() > HASH_BATCH {
+            tracing::info!(
+                "scan {}: hashed {} of {} files, {:.1}s so far",
+                root.name,
+                hashed,
+                changed.len(),
+                started.elapsed().as_secs_f64()
+            );
         }
-        store.file_set_hash(id, &hash)?;
-        let next = match file.state {
-            FileState::Imported => FileState::Imported,
-            _ => FileState::New,
-        };
-        store.file_set_state(id, next, None)?;
-        store.job_enqueue("extract", Some(id), None)?;
-        queued += 1;
     }
+    tracing::info!(
+        "scan {}: {} queued for extraction, {} unchanged, took {:.1}s",
+        root.name,
+        queued,
+        unchanged,
+        started.elapsed().as_secs_f64()
+    );
     Ok(ScanReport {
         root: root.name.clone(),
         seen: seen.len(),
